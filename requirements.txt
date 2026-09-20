@@ -1,0 +1,5 @@
+# 运行时依赖
+# 说明：websockets 为鹊桥连接必需；aio-mc-rcon 仅在启用「直连 RCON 兜底」时需要，
+# 缺失时插件其余功能不受影响（rcon_client.py 采用惰性 import）。
+websockets>=12.0
+aio-mc-rcon>=3.2.0

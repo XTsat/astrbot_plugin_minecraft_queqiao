@@ -1,0 +1,239 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "启用 Minecraft 鹊桥互通",
+    "default": true
+  },
+  "mc_servers": {
+    "type": "template_list",
+    "description": "MC服务器列表",
+    "templates": {
+      "server": {
+        "name": "MC服务器",
+        "hint": "通过鹊桥连接的 MC 服务器配置",
+        "items": {
+          "enabled": {
+            "type": "bool",
+            "description": "启用此服务器",
+            "default": true
+          },
+          "server": {
+            "description": "鹊桥连接信息",
+            "type": "object",
+            "items": {
+              "server_id": {
+                "type": "string",
+                "description": "服务器ID",
+                "hint": "用于区分不同服务器的唯一标识。正向模式下作为 x-self-name 发送，必须与鹊桥 config.yml 中的 server_name 一致",
+                "default": "Server"
+              },
+              "ws_mode": {
+                "type": "string",
+                "description": "连接方式",
+                "hint": "forward: 本插件主动连接鹊桥的 WebSocket Server；reverse: 本插件开启 WebSocket Server 等待鹊桥连入（租赁服推荐）",
+                "options": ["forward", "reverse"],
+                "default": "forward"
+              },
+              "ws_url": {
+                "type": "string",
+                "description": "鹊桥 WebSocket 地址",
+                "hint": "正向模式使用，需与鹊桥 config.yml 的 websocket_server 配置对应",
+                "default": "ws://127.0.0.1:8080/minecraft/ws"
+              },
+              "reverse_host": {
+                "type": "string",
+                "description": "反向监听地址",
+                "hint": "反向模式使用，留空或 0.0.0.0 表示监听所有网卡",
+                "default": "0.0.0.0"
+              },
+              "reverse_port": {
+                "type": "int",
+                "description": "反向监听端口",
+                "hint": "反向模式使用，需填入鹊桥 config.yml 的 websocket_client.url_list 中",
+                "default": 8080
+              },
+              "reverse_path": {
+                "type": "string",
+                "description": "反向监听路径",
+                "default": "/minecraft/ws"
+              },
+              "access_token": {
+                "type": "string",
+                "description": "认证 Token",
+                "hint": "对应鹊桥 config.yml 中的 access_token，留空则免鉴权",
+                "default": ""
+              },
+              "client_origin": {
+                "type": "string",
+                "description": "对接来源标识",
+                "hint": "作为 x-client-origin 发送，用于避免同来源重复连接，非必要请勿修改",
+                "default": "astrbot"
+              },
+              "reconnect_interval": {
+                "type": "int",
+                "description": "重连间隔（秒）",
+                "hint": "重连等待时间会随失败次数递增，上限 60 秒",
+                "default": 5
+              },
+              "max_reconnect": {
+                "type": "int",
+                "description": "最大重连次数",
+                "hint": "0 表示无限重连",
+                "default": 0
+              }
+            }
+          },
+          "enable_ai_chat": {
+            "type": "bool",
+            "description": "启用 AI 对话功能",
+            "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
+            "default": true
+          },
+          "ai_chat_prefix": {
+            "type": "string",
+            "description": "AI 对话触发前缀",
+            "hint": "游戏内聊天以此前缀开头时触发 AI（例如填写 ai 则发送『ai 你好』）。命中该前缀的消息只走 AI，不再转发到群。留空表示不启用 AI 触发，普通聊天不受影响",
+            "default": "ai"
+          },
+          "text2image": {
+            "type": "bool",
+            "description": "将服务器信息渲染为图片输出",
+            "hint": "渲染失败会自动回退为文本发送",
+            "default": true
+          },
+          "message": {
+            "description": "消息转发配置",
+            "type": "object",
+            "items": {
+              "forward_chat_to_astrbot": {
+                "type": "bool",
+                "description": "转发聊天消息到指定会话",
+                "hint": "将 Minecraft 玩家聊天消息转发到指定的外部会话",
+                "default": true
+              },
+              "forward_chat_format": {
+                "type": "string",
+                "description": "聊天消息格式",
+                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容",
+                "default": "<{player}> {message}"
+              },
+              "forward_join_leave_to_astrbot": {
+                "type": "bool",
+                "description": "转发玩家进出消息",
+                "hint": "将玩家加入/离开服务器的消息转发到指定会话",
+                "default": false
+              },
+              "forward_death_to_astrbot": {
+                "type": "bool",
+                "description": "转发玩家死亡消息",
+                "hint": "原版端与 Velocity 不支持该事件",
+                "default": false
+              },
+              "forward_achievement_to_astrbot": {
+                "type": "bool",
+                "description": "转发玩家成就消息",
+                "hint": "原版端与 Velocity 不支持该事件",
+                "default": false
+              },
+              "target_sessions": {
+                "type": "list",
+                "description": "目标会话",
+                "hint": "MC服务器消息互通的目标会话UMO列表。格式如 aiocqhttp:GroupMessage:123456789。用于MC消息转发到外部、外部消息转发到MC以及区分指令所属服务器",
+                "default": []
+              },
+              "auto_forward_prefix": {
+                "type": "string",
+                "description": "群消息转发到MC的前缀",
+                "hint": "外部会话中以此前缀开头的消息将被转发到MC服务器（例如: *）。留空则转发全部消息。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
+                "default": "*"
+              },
+              "broadcast_format": {
+                "type": "string",
+                "description": "外部消息转发到MC的格式",
+                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{server} 服务器ID",
+                "default": "[{platform}] {sender}: {message}"
+              },
+              "broadcast_color": {
+                "type": "string",
+                "description": "转发消息颜色",
+                "hint": "MC 颜色名（如 aqua、green、white）或 #RRGGBB 格式",
+                "default": "white"
+              },
+              "mark_option": {
+                "type": "string",
+                "description": "转发提醒方式",
+                "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
+                "options": ["text", "emoji", "none"],
+                "default": "emoji"
+              }
+            }
+          },
+          "cmd": {
+            "description": "远程指令配置",
+            "type": "object",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用远程执行指令",
+                "hint": "是否允许通过 /mc cmd 指令远程执行服务器命令，依赖鹊桥开启 RCON",
+                "default": true
+              },
+              "cmd_white_black_list": {
+                "type": "string",
+                "description": "指令名单类型",
+                "hint": "white: 仅允许名单内指令；black: 禁止名单内指令；none: 不启用黑白名单",
+                "options": ["white", "black", "none"],
+                "default": "white"
+              },
+              "cmd_list": {
+                "type": "list",
+                "description": "指令名单",
+                "hint": "指令白名单或黑名单，填写指令名（不带/）如 say, gamemode, tp",
+                "default": ["say", "list", "weather", "time"]
+              },
+              "bind_enable": {
+                "type": "bool",
+                "description": "启用绑定功能",
+                "hint": "允许用户将外部平台账号与MC游戏ID绑定",
+                "default": true
+              },
+              "custom_cmd_list": {
+                "type": "list",
+                "description": "自定义指令映射",
+                "hint": "自定义快捷指令。格式：触发词 <&参数&><<>>实际指令 {参数} {sender}。{sender}为用户绑定的游戏ID",
+                "default": []
+              },
+              "rcon_fallback": {
+                "description": "直连 RCON 兜底配置",
+                "type": "object",
+                "items": {
+                  "enabled": {
+                    "type": "bool",
+                    "description": "启用直连 RCON 兜底",
+                    "hint": "当鹊桥未开启 RCON 时，改为由本插件直连服务器 RCON 端口执行指令",
+                    "default": false
+                  },
+                  "host": {
+                    "type": "string",
+                    "description": "RCON 地址",
+                    "default": "localhost"
+                  },
+                  "port": {
+                    "type": "int",
+                    "description": "RCON 端口",
+                    "default": 25575
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "RCON 密码",
+                    "default": ""
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
