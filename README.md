@@ -80,8 +80,6 @@
 | `reverse_path` | string | `/minecraft/ws` | 反向监听路径 |
 | `access_token` | string | 空 | 对应鹊桥 `access_token`，留空则免鉴权 |
 | `client_origin` | string | `astrbot` | 作为 `x-client-origin` 发送，非必要勿改 |
-| `reconnect_interval` | int | `5` | 重连间隔（秒），随失败次数递增，上限 60 秒 |
-| `max_reconnect` | int | `0` | 最大重连次数，`0` 表示无限重连 |
 
 </details>
 
@@ -262,6 +260,22 @@
 |--------|------|--------|------|
 | `enabled` | bool | `true` | 启用插件 |
 | `text2image` | bool | `true` | 服务器信息渲染为图片，失败自动回退文本 |
+
+</details>
+
+### 重连配置
+
+> 与 WebUI 布局一致，重连相关配置在服务器列表项**最底部**单独成组。
+
+<details>
+<summary>展开配置表</summary>
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `reconnect_interval` | int | `5` | 重连间隔（秒），随失败次数递增，上限 60 秒 |
+| `max_reconnect` | int | `0` | 最大重连次数，`0` 表示无限重连 |
+| `low_frequency_threshold` | int | `30` | **进入低频重试的失败次数**：连续重连失败**超过**该次数后，间隔不再随失败次数递增，改为固定等待 `low_frequency_interval` 秒。默认 `30`（前 30 次正常退避，第 31 次起进入低频）；配 `0` 关闭低频，始终按退避重连 |
+| `low_frequency_interval` | int | `300` | **低频重试间隔（秒）**：进入低频后的固定等待时间，默认 `300`（5 分钟）；可配更大值实现更安静的重试（长期断线时不高频打扰） |
 
 </details>
 

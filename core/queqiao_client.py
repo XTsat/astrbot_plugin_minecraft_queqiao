@@ -369,14 +369,30 @@ class QueQiaoClient:
 
         return True
 
+    @staticmethod
+    def _reconnect_wait(retries: int, config: ServerConfig) -> tuple[int, str]:
+        """计算第 `retries` 次重连失败后的等待秒数与阶段名。
+
+        两段式退避：
+        - 退避段（前 `low_frequency_threshold` 次）：按
+          `reconnect_interval × 次数` 线性递增，上限 `MAX_RECONNECT_WAIT` 秒；
+        - 低频段（超过阈值后）：固定等待 `low_frequency_interval` 秒，
+          避免长期断线时仍高频打扰；
+        - `low_frequency_threshold` 配 0 表示关闭低频，始终按退避段计算。
+        """
+        threshold = config.low_frequency_threshold
+        if threshold > 0 and retries > threshold:
+            return config.low_frequency_interval, "低频"
+        return min(config.reconnect_interval * retries, MAX_RECONNECT_WAIT), "退避"
+
     async def _backoff(self) -> None:
         self._retries += 1
         if self.config.max_reconnect and self._retries > self.config.max_reconnect:
             self._running = False
             return
-        wait = min(self.config.reconnect_interval * self._retries, MAX_RECONNECT_WAIT)
+        wait, stage = self._reconnect_wait(self._retries, self.config)
         logger.warning(
-            f"[{PLUGIN_NAME}][{self.server_id}] {wait} 秒后重连 "
+            f"[{PLUGIN_NAME}][{self.server_id}] {stage}重试：{wait} 秒后重连 "
             f"(第 {self._retries} 次)"
         )
         with contextlib.suppress(asyncio.CancelledError):

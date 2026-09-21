@@ -984,4 +984,96 @@ assert "{platform}" in _mitems6["platform_names"]["hint"], \
     "platform_names 的 hint 必须说明作用于 {platform}"
 assert "=" in _mitems6["platform_names"]["hint"], "hint 必须说明 原始平台名=显示名 格式"
 print("OK  platform_names 解析/取名语义/默认示例 aiocqhttp=QQ/schema 同步 全部通过")
-print("\n全部离线逻辑校验通过 ✅（含平台名称映射）")
+
+print("\n=== 25. 重连低频退避（reconnect 分组 + 两段式重连等待） ===")
+from astrbot_plugin_minecraft_queqiao.core.queqiao_client import QueQiaoClient as _Q7
+from astrbot_plugin_minecraft_queqiao.core.constants import (
+    DEFAULT_LOW_FREQUENCY_INTERVAL as _LF_INT7,
+    DEFAULT_LOW_FREQUENCY_THRESHOLD as _LF_TH7,
+)
+
+# (a) 默认值：前 30 次正常退避，第 31 次起进入低频（间隔 300s = 5 分钟）
+_cfg7 = _S6.from_dict({})
+assert _cfg7.reconnect_interval == 5 and _cfg7.max_reconnect == 0
+assert _cfg7.low_frequency_threshold == 30, _cfg7.low_frequency_threshold
+assert _cfg7.low_frequency_interval == 300, _cfg7.low_frequency_interval
+assert _LF_TH7 == 30 and _LF_INT7 == 300, "常量默认必须与 schema/模型一致（30/300）"
+
+# (b) 新分组解析：reconnect.* 生效，字符串/非法值防御式兜底
+_cfg7b = _S6.from_dict({"reconnect": {
+    "reconnect_interval": "10", "max_reconnect": "5",
+    "low_frequency_threshold": "50", "low_frequency_interval": "300",
+}})
+assert _cfg7b.reconnect_interval == 10 and _cfg7b.max_reconnect == 5
+assert _cfg7b.low_frequency_threshold == 50
+assert _cfg7b.low_frequency_interval == 300
+_cfg7c = _S6.from_dict({"reconnect": {
+    "reconnect_interval": -3, "max_reconnect": -1,
+    "low_frequency_threshold": -7, "low_frequency_interval": 0,
+}})
+assert _cfg7c.reconnect_interval == 1, "重连间隔下限 1"
+assert _cfg7c.max_reconnect == 0, "最大重连次数下限 0"
+assert _cfg7c.low_frequency_threshold == 0, "阈值下限 0（0=关闭低频）"
+assert _cfg7c.low_frequency_interval == 1, "低频间隔下限 1"
+assert _S6.from_dict({"reconnect": {"low_frequency_threshold": "abc"}})\
+    .low_frequency_threshold == 30, "非法阈值回落默认"
+
+# (c) 旧配置兼容：重连项曾位于 server 子对象内，必须继续生效；新分组优先
+_cfg7d = _S6.from_dict({"server": {"reconnect_interval": 7, "max_reconnect": 9}})
+assert _cfg7d.reconnect_interval == 7 and _cfg7d.max_reconnect == 9, "旧位置必须生效"
+_cfg7e = _S6.from_dict({
+    "server": {"reconnect_interval": 7, "max_reconnect": 9},
+    "reconnect": {"reconnect_interval": 11, "max_reconnect": 13},
+})
+assert _cfg7e.reconnect_interval == 11 and _cfg7e.max_reconnect == 13, "新分组优先"
+
+# (d) 两段式退避：_reconnect_wait 纯函数
+_rw7 = _Q7._reconnect_wait
+# 默认配置：第 1 次 5s → 第 6 次 30s → 第 12 次 60s（封顶）→ 第 30 次仍退避段
+assert _rw7(1, _cfg7) == (5, "退避")
+assert _rw7(6, _cfg7) == (30, "退避")
+assert _rw7(12, _cfg7) == (60, "退避")
+assert _rw7(30, _cfg7) == (60, "退避"), "第 30 次仍未超阈值"
+assert _rw7(31, _cfg7) == (300, "低频"), "第 31 次起进入低频（默认 300s = 5 分钟）"
+assert _rw7(999, _cfg7) == (300, "低频"), "低频段固定间隔不再递增"
+# 自定义阈值与低频间隔：超过阈值即固定低频间隔
+_cfg7f = _S6.from_dict({"reconnect": {
+    "low_frequency_threshold": 2, "low_frequency_interval": 300,
+}})
+assert _rw7(2, _cfg7f) == (10, "退避"), "第 2 次仍在阈值内（线性退避）"
+assert _rw7(3, _cfg7f) == (300, "低频"), "超过阈值后固定 300s"
+# 阈值配 0 = 关闭低频：始终按退避段（封顶 60s）
+_cfg7g = _S6.from_dict({"reconnect": {"low_frequency_threshold": 0}})
+assert _rw7(1, _cfg7g) == (5, "退避")
+assert _rw7(100, _cfg7g) == (60, "退避"), "关闭低频后永不进入低频段"
+# 低频间隔可配小于退避峰值的值：超过阈值后立即换用低频间隔
+_cfg7h = _S6.from_dict({"reconnect": {
+    "low_frequency_threshold": 5, "low_frequency_interval": 20,
+}})
+assert _rw7(5, _cfg7h) == (25, "退避")
+assert _rw7(6, _cfg7h) == (20, "低频")
+
+# (e) schema 结构守卫：重连项必须从 server 子对象移出，
+#     在模板项最底部单独成组（reconnect），默认 30/60
+_sh7 = json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json")
+                  .read_text(encoding="utf-8"))
+_items7 = _sh7["mc_servers"]["templates"]["server"]["items"]
+_ikeys7 = list(_items7.keys())
+assert _ikeys7[-1] == "reconnect", \
+    f"reconnect 分组必须位于模板项最底部，实际顺序: {_ikeys7}"
+_sitems7 = _items7["server"]["items"]
+for _old7 in ("reconnect_interval", "max_reconnect",
+              "low_frequency_threshold", "low_frequency_interval"):
+    assert _old7 not in _sitems7, f"server 子对象不得再含 {_old7}"
+_ritems7 = _items7["reconnect"]["items"]
+assert _ritems7["low_frequency_threshold"]["default"] == 30, \
+    "schema 阈值默认必须为 30"
+assert _ritems7["low_frequency_interval"]["default"] == 300, \
+    "schema 低频间隔默认必须为 300（5 分钟）"
+assert _ritems7["reconnect_interval"]["default"] == 5
+assert _ritems7["max_reconnect"]["default"] == 0
+assert "30" in _ritems7["low_frequency_threshold"]["hint"], \
+    "阈值 hint 必须说明默认 30"
+print("OK  重连配置独立成组置底、默认 30 次后进入低频、低频间隔可自定义、旧配置兼容 全部通过")
+
+print("\n全部离线逻辑校验通过 ✅（含重连低频退避）")

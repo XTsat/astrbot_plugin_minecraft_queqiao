@@ -82,8 +82,6 @@ the server actually runs `tp Misaka 114 514 1919`.
 | `reverse_path` | string | `/minecraft/ws` | Reverse-mode listen path |
 | `access_token` | string | empty | Matches QueQiao `access_token`; empty disables auth |
 | `client_origin` | string | `astrbot` | Sent as `x-client-origin`; leave unchanged unless needed |
-| `reconnect_interval` | int | `5` | Reconnect delay in seconds, growing up to 60s |
-| `max_reconnect` | int | `0` | Max reconnect attempts; `0` means unlimited |
 
 </details>
 
@@ -277,6 +275,22 @@ With the defaults (bridging prefix empty = relay all, AI `ai`):
 |--------|------|--------|-------------|
 | `enabled` | bool | `true` | Enable the plugin |
 | `text2image` | bool | `true` | Render server info as an image, falling back to text |
+
+</details>
+
+### Reconnect
+
+> Matching the WebUI layout, reconnect options live in their own group at the very bottom of each server entry.
+
+<details>
+<summary>Show options</summary>
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `reconnect_interval` | int | `5` | Reconnect delay in seconds, growing with each failed attempt, capped at 60s |
+| `max_reconnect` | int | `0` | Max reconnect attempts; `0` means unlimited |
+| `low_frequency_threshold` | int | `30` | **Failures after which low-frequency retries kick in**: once consecutive reconnect failures **exceed** this count, the delay stops growing and stays fixed at `low_frequency_interval`. Default `30` (normal backoff for the first 30, low-frequency from attempt 31 on); set `0` to disable low-frequency mode and always use backoff |
+| `low_frequency_interval` | int | `300` | **Low-frequency retry delay (s)**: fixed wait once low-frequency mode is active. Default `300` (5 minutes); larger values give quieter retries (no busy polling during long outages) |
 
 </details>
 

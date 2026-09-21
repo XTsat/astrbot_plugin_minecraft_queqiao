@@ -1,7 +1,7 @@
 name: astrbot_plugin_minecraft_queqiao
 display_name: Minecraft 鹊桥跨平台消息互联
 desc: 通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天
-version: v0.2.1
+version: v0.2.2
 author: XTsat
 repo: https://github.com/XTsat/astrbot_plugin_minecraft_queqiao
 tags:

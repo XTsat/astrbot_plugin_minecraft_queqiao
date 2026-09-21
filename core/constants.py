@@ -51,6 +51,12 @@ DEFAULT_REVERSE_PATH = "/minecraft/ws"
 DEFAULT_RECONNECT_INTERVAL = 5
 MAX_RECONNECT_WAIT = 60
 
+# 低频重试：连续重连失败超过该次数后，重连间隔不再按退避递增，
+# 而是固定使用 low_frequency_interval（默认 300 秒 = 5 分钟，远大于
+# MAX_RECONNECT_WAIT，实现真正的低频静默重试）；阈值配 0 表示关闭低频，
+# 始终按退避重连
+DEFAULT_LOW_FREQUENCY_THRESHOLD = 30
+DEFAULT_LOW_FREQUENCY_INTERVAL = 300
 PING_INTERVAL = 30
 PING_TIMEOUT = 10
 

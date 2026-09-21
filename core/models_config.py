@@ -12,6 +12,8 @@ from .constants import (
     DEFAULT_CHAT_FORMAT,
     DEFAULT_CLIENT_ORIGIN,
     DEFAULT_DISPLAY_NAME,
+    DEFAULT_LOW_FREQUENCY_INTERVAL,
+    DEFAULT_LOW_FREQUENCY_THRESHOLD,
     DEFAULT_PLATFORM_NAMES,
     DEFAULT_RECONNECT_INTERVAL,
     DEFAULT_REVERSE_HOST,
@@ -159,8 +161,14 @@ class ServerConfig:
     reverse_path: str = DEFAULT_REVERSE_PATH
     access_token: str = ""
     client_origin: str = DEFAULT_CLIENT_ORIGIN
+
+    # ---- 重连（对应模板项底部的 reconnect 分组） ----
     reconnect_interval: int = DEFAULT_RECONNECT_INTERVAL
     max_reconnect: int = 0
+    # 连续重连失败超过该次数后进入低频重试：间隔固定为 low_frequency_interval，
+    # 不再随失败次数递增（避免长期断线时高频打扰）；配 0 关闭低频，始终按退避
+    low_frequency_threshold: int = DEFAULT_LOW_FREQUENCY_THRESHOLD
+    low_frequency_interval: int = DEFAULT_LOW_FREQUENCY_INTERVAL
 
     # ---- 功能开关 ----
     enable_ai_chat: bool = True
@@ -315,6 +323,9 @@ class ServerConfig:
         message = _as_object(data.get("message"))
         cmd = _as_object(data.get("cmd"))
         rcon = _as_object(cmd.get("rcon_fallback"))
+        # 重连项现位于模板项底部独立的 reconnect 分组；
+        # 兼容旧版写在 server 子对象内的配置，防止旧配置失效（新分组优先）
+        reconnect = _as_object(data.get("reconnect")) or server
 
         ws_mode = _to_str(server.get("ws_mode"), WS_MODE_FORWARD).strip().lower()
         if ws_mode not in VALID_WS_MODES:
@@ -361,9 +372,23 @@ class ServerConfig:
             client_origin=_to_str(server.get("client_origin"), DEFAULT_CLIENT_ORIGIN).strip()
             or DEFAULT_CLIENT_ORIGIN,
             reconnect_interval=max(
-                1, _to_int(server.get("reconnect_interval"), DEFAULT_RECONNECT_INTERVAL)
+                1, _to_int(reconnect.get("reconnect_interval"), DEFAULT_RECONNECT_INTERVAL)
             ),
-            max_reconnect=max(0, _to_int(server.get("max_reconnect"), 0)),
+            max_reconnect=max(0, _to_int(reconnect.get("max_reconnect"), 0)),
+            low_frequency_threshold=max(
+                0,
+                _to_int(
+                    reconnect.get("low_frequency_threshold"),
+                    DEFAULT_LOW_FREQUENCY_THRESHOLD,
+                ),
+            ),
+            low_frequency_interval=max(
+                1,
+                _to_int(
+                    reconnect.get("low_frequency_interval"),
+                    DEFAULT_LOW_FREQUENCY_INTERVAL,
+                ),
+            ),
             enable_ai_chat=_to_bool(data.get("enable_ai_chat"), True),
             ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "ai"),
             text2image=_to_bool(data.get("text2image"), True),

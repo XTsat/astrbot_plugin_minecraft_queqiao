@@ -86,18 +86,6 @@
                 "description": "对接来源标识",
                 "hint": "作为 x-client-origin 发送，用于避免同来源重复连接，非必要请勿修改",
                 "default": "astrbot"
-              },
-              "reconnect_interval": {
-                "type": "int",
-                "description": "重连间隔（秒）",
-                "hint": "重连等待时间会随失败次数递增，上限 60 秒",
-                "default": 5
-              },
-              "max_reconnect": {
-                "type": "int",
-                "description": "最大重连次数",
-                "hint": "0 表示无限重连",
-                "default": 0
               }
             }
           },
@@ -253,6 +241,36 @@
                     "default": ""
                   }
                 }
+              }
+            }
+          },
+          "reconnect": {
+            "description": "重连配置",
+            "type": "object",
+            "items": {
+              "reconnect_interval": {
+                "type": "int",
+                "description": "重连间隔（秒）",
+                "hint": "重连等待时间会随失败次数递增，上限 60 秒",
+                "default": 5
+              },
+              "max_reconnect": {
+                "type": "int",
+                "description": "最大重连次数",
+                "hint": "0 表示无限重连",
+                "default": 0
+              },
+              "low_frequency_threshold": {
+                "type": "int",
+                "description": "进入低频重试的失败次数",
+                "hint": "连续重连失败超过该次数后，重连间隔不再随失败次数递增，改为固定使用下方的低频重试间隔，避免长期断线时高频打扰。默认 30（即前 30 次正常退避，第 31 次起进入低频）；配 0 则关闭低频，始终按退避重连",
+                "default": 30
+              },
+              "low_frequency_interval": {
+                "type": "int",
+                "description": "低频重试间隔（秒）",
+                "hint": "进入低频重试后的固定等待时间，单位秒。默认 300（5 分钟）；可配更大值实现更安静的重试",
+                "default": 300
               }
             }
           }
