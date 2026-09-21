@@ -64,11 +64,17 @@
 
 ### 服务器连接信息
 
+<details>
+<summary>展开配置表</summary>
+
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
+| `target_sessions` | list | 空 | **目标会话**，位于列表项最上方「启用此服务器」下方。MC 消息转发到的会话 UMO 列表，**此项决定 MC 与群聊的绑定关系**，不填则插件能连上但群里收不到消息 |
 | `server_id` | string | `Server` | 服务器唯一标识，**必须与鹊桥 `config.yml` 的 `server_name` 一致** |
+| `server_name` | string | 空 | **服务器显示名称**，可写中文（如 `生存服`）。留空时用下方「显示名称默认值」；仅影响展示，不影响连接 |
+| `server_name_default` | string | `MC` | **显示名称默认值**：`server_name` 留空时 `{server}` 与状态查询显示的内容，什么都不填即显示 `[MC]<玩家名>`。改成留空则输出空串（无前缀效果） |
 | `ws_mode` | string | `forward` | `forward` 插件连鹊桥；`reverse` 插件开服务端等鹊桥连入 |
-| `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | 正向连接地址，对应鹊桥 `websocket_server` |
+| `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | 正向连接地址，对应鹊桥 `websocket_server`（IP 与端口按实际部署填写） |
 | `reverse_host` | string | `0.0.0.0` | 反向监听地址 |
 | `reverse_port` | int | `8080` | 反向监听端口 |
 | `reverse_path` | string | `/minecraft/ws` | 反向监听路径 |
@@ -77,25 +83,98 @@
 | `reconnect_interval` | int | `5` | 重连间隔（秒），随失败次数递增，上限 60 秒 |
 | `max_reconnect` | int | `0` | 最大重连次数，`0` 表示无限重连 |
 
+</details>
+
 ### 消息转发配置
+
+<details>
+<summary>展开配置表</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `forward_chat_to_astrbot` | bool | `true` | 转发玩家聊天到指定会话 |
-| `forward_chat_format` | string | `<{player}> {message}` | 聊天消息格式，`{player}` 玩家名，`{message}` 内容 |
+| `forward_chat_format` | string | `[{server}]{player}: {message}` | 聊天消息格式，`{player}` 玩家名，`{message}` 内容，`{server}` **服务器显示名称**（可中文，留空用默认值 `MC`） |
 | `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息 |
 | `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
-| `target_sessions` | list | 空 | 目标会话 UMO 列表，**此项决定 MC 与群聊的绑定关系** |
-| `auto_forward_prefix` | string | `*` | **群消息转发到 MC 的前缀**，留空则全部转发 |
-| `broadcast_format` | string | `[{platform}] {sender}: {message}` | 转发到游戏内的格式 |
+| `auto_forward_prefix` | string | 空 | **群消息转发到 MC 的前缀**，留空则全部转发（仅对已绑定目标会话的群生效） |
+| `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，`{server}` 显示名称（留空用默认值 `MC`）、`{server_id}` 服务器 ID（始终有值） |
 | `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
-| `mark_option` | string | `emoji` | 转发提醒方式：`text` / `emoji` / `none` |
+| `mark_option` | string | `emoji` | 转发成功后的提醒方式：`text` 回复 ✅ 文本 / `emoji` 给原消息贴表情 / `none` 不提醒 |
+| `mark_emoji_id` | int | `124` | **回执表情 ID**（仅 `mark_option=emoji` 时生效）。默认 `124` 为 👌，已核实的可用 ID 见下表 |
 
-> `target_sessions` 的 UMO 可通过 AstrBot 的 `sid` 指令获取，格式如
+> `target_sessions`（目标会话）位于服务器列表项**最上方**的「启用此服务器」下方，
+> 详见上一节的表格。其 UMO 可通过 AstrBot 的 `sid` 指令获取，格式如
 > `aiocqhttp:GroupMessage:123456789`。
 
+> **回执表情**：`mark_option: emoji` 会给触发转发的**原消息贴一个表情**（不额外发消息）。
+> **所有 aiocqhttp 协议端都支持**（如 NapCat、Lagrange、LLOneBot 等）；
+> 其他平台会静默跳过，不会报错。
+
+`mark_emoji_id` 填 **QQ 表情 ID**。以下为推荐的几个 Emoji 响应 ID：
+
+| 常量 | ID | 表情 |
+|------|----|------|
+| `EMOJI_OK_GESTURE` | `124` | 👌 |
+| `EMOJI_THUMBS_UP` | `76` | 👍 |
+| `EMOJI_LOVE` | `66` | ❤️ |
+| `EMOJI_ROSE` | `63` | 🌹 |
+
+</details>
+
+### 服务器显示名称与格式变量
+
+<details>
+<summary>展开配置表</summary>
+
+`server_id` 是给鹊桥用的**连接标识**（受 `x-self-name` 约束，不能用中文）；
+如果想让多台服务器在群里更好辨认，可以另外填写 **`server_name`（服务器显示名称）**，
+它只影响展示，可以随意写中文：
+
+```jsonc
+"server": {
+  "server_id": "survival",       // 必须与鹊桥 config.yml 的 server_name 一致，别改
+  "server_name": "生存服",        // 仅用于展示，可写中文
+  "server_name_default": "MC"    // server_name 留空时的默认展示内容，默认 MC
+}
+```
+
+两个格式串都支持 `{server}`，取值链为 **`server_name` → `server_name_default`（默认 `MC`）→ 空串**：
+
+| 占位符 | 可用位置 | 含义 |
+|--------|----------|------|
+| `{player}` | `forward_chat_format` | 玩家名称 |
+| `{message}` | 两个格式串 | 消息内容（MC → 外部时已剥离富文本与颜色代码） |
+| `{server}` | 两个格式串 | **服务器显示名称**；`server_name` 留空时用**显示名称默认值**（默认 `MC`），两者都留空才输出空串 |
+| `{platform}` | `broadcast_format` | 平台名（群消息来源平台） |
+| `{sender}` | `broadcast_format` | 发送者名 |
+| `{server_id}` | `broadcast_format` | 服务器原始 ID（**始终有值**，需要精确标识时用） |
+
+示例（多服同群时标明来源）：
+
+| 配置项 | 值 | 实际效果 |
+|--------|-----|--------------|
+| `server_name` = `生存服`、格式 `[{server}] <{player}> {message}` | — | `[生存服] <Steve> 大家好` |
+| 什么都不填、格式 `[{server}] <{player}> {message}` | — | `[MC] <Steve> 大家好`（默认值 `MC`） |
+| 默认值改成 `本服`、格式 `[{server}]{player}: {message}` | — | `[本服]Steve: 大家好` |
+
+> **留空行为**：`server_name` 留空时用「显示名称默认值」（默认 `MC`，即什么都不填
+> 就是 `[MC]<玩家名>` 效果）。想让 `{server}` 输出**空字符串**（无前缀），
+> 需要把 `server_name_default` 也显式清空——此时格式串里的字面量方括号仍在
+> （`[{server}]<{player}>` 会得到 `[]<Steve> 大家好`），干净效果就不要写方括号。
+> 想让前缀永远有值，请改用 `{server_id}`。
+
+> 不写 `{server}` 的旧格式串完全不受影响，无需迁移。
+
+`/mc status` 与 `/mc list` 的标题沿用同一条取值链（`server_name` → 默认值 → `server_id`），
+多服排障时不用再对着英文 ID 猜是哪台；连接握手与日志仍使用 `server_id`。
+
+</details>
+
 ### AI 聊天配置
+
+<details>
+<summary>展开配置表</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -116,7 +195,7 @@
 游戏内一条消息的处理顺序是：命中 `ai_chat_prefix` → 交给 AI（回复私聊给该玩家）；
 否则按普通聊天转发到群。
 
-以默认配置为例（互通 `*`、AI `ai`）：
+以默认配置为例（互通前缀留空 = 全部转发、AI `ai`）：
 
 | 游戏内发言 | 结果 |
 |------------|------|
@@ -137,7 +216,12 @@
 
 > 触发后内容为空（例如只发 `ai`）不会向 LLM 发请求，避免无意义消耗。
 
+</details>
+
 ### 指令配置
+
+<details>
+<summary>展开配置表</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -151,20 +235,78 @@
 | `rcon_fallback.port` | int | `25575` | RCON 端口 |
 | `rcon_fallback.password` | string | 空 | RCON 密码 |
 
-### 其它
+</details>
+
+### 插件配置
+
+<details>
+<summary>展开配置表</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enabled` | bool | `true` | 启用插件 |
 | `text2image` | bool | `true` | 服务器信息渲染为图片，失败自动回退文本 |
 
-## 其它
+</details>
+
+## 部署与常见问题
 
 ### 安装
 
 1. 将本插件放入 AstrBot 的 `data/plugins/` 目录，重启 AstrBot
-2. 在 WebUI 插件配置中点击「添加 MC服务器」，填写连接信息
+2. 在 WebUI 插件配置中点击「添加 MC服务器」，**填写「目标会话」（必填）**
 3. 确保 `server_id` 与鹊桥 `config.yml` 的 `server_name` 完全一致
+
+> **默认配置即可直连本机双端**：AstrBot 与 MC 装在同一台机器时，
+> 连接信息（`ws_url` → `ws://127.0.0.1:8080/minecraft/ws`）与鹊桥默认端口
+> 已经对齐，**通常无需改动**，只要填好「目标会话」就能用。
+> 跨机器、Docker 等场景见下一节。
+
+### 网络与地址（Docker / 同机部署）
+
+`host` 该填 `127.0.0.1` 还是 `0.0.0.0`，**取决于 AstrBot 与 MC 是否在同一网络栈**，
+与操作系统无关。判断依据只有一条：**鹊桥的监听地址能不能被 AstrBot 直接访问到**。
+
+| 场景 | 鹊桥 `websocket_server.host` | 插件 `ws_url` |
+|------|------------------------------|---------------|
+| Windows / Linux **同机直装**（两者同一网络栈） | `127.0.0.1`（默认，无需改） | `ws://127.0.0.1:8080/minecraft/ws` |
+| AstrBot 与 MC 在**不同机器** | 该机器的可达地址（内网 IP 或 `0.0.0.0`） | `ws://<MC 服务器 IP>:8080/minecraft/ws` |
+| AstrBot 在 Docker、MC 在宿主机，或反之 | **`0.0.0.0`** | 指向宿主机的可达地址 |
+| AstrBot 与 MC 各自独立容器 | **`0.0.0.0`** | 指向 MC 容器的映射端口或容器名 |
+
+> 上表中的 `127.0.0.1`、`8080`、`/minecraft/ws` 均为**默认值，都可修改**：
+> 地址按实际部署填写（见下表说明），端口对应鹊桥 `websocket_server.port`，
+> 反向模式下则对应插件的 `reverse_port`。**改了一侧，另一侧要同步改。**
+
+> **填 `ws_url` 的原则：填「从 AstrBot 所在机器能访问到 MC 服务器」的那个地址。**
+> 同机部署就填 `127.0.0.1`；AstrBot 与 MC 不在同一台机器时，**填 MC 服务器的
+> 实际 IP**（如 `ws://192.168.1.10:8080/minecraft/ws`），不能填 `127.0.0.1`
+> ——那在 AstrBot 上指的是 AstrBot 自己。
+
+> **`0.0.0.0` 是「监听地址」，表示监听本机所有网卡，只能填在服务端一侧**
+> （鹊桥的 `websocket_server.host`、插件的 `reverse_host`）。
+
+**Docker 场景示例**（AstrBot 使用 host 网络、MC 在 bridge 容器内）：
+
+```yaml
+# MC 容器内 鹊桥 config.yml —— 必须监听所有网卡，否则容器外连不进来
+websocket_server:
+  host: "0.0.0.0"            # 可按需改为具体网卡地址
+  port: 8080                 # 默认端口，可修改（需与下方 ws_url 一致）
+```
+
+```
+# AstrBot 插件配置 —— AstrBot 在 host 网络即宿主机自身，连本机用 127.0.0.1
+ws_url: "ws://127.0.0.1:8080/minecraft/ws"   # 端口需与上方 port 一致
+```
+
+排查要点：
+
+- 插件日志出现 `已连接鹊桥 (ws://...)` 才算成功，仅 TCP 可连通不代表握手通过
+- 若日志**持续重连**且无明确报错，多为 `host` 仍为 `127.0.0.1`——
+  此时端口映射虽在宿主机监听，但容器内的鹊桥只绑在容器自己的 loopback，
+  收不到 docker-proxy 转发的流量，连接会被立即重置
+- 启动日志中的 `WebSocket Server 在 <地址>:<端口> 启动...` 可直接确认实际监听地址
 
 ### 配置鹊桥
 
@@ -176,7 +318,7 @@ server_name: "Server"        # 必须与插件配置的 server_id 一致
 access_token: ""             # 对应插件配置的 access_token
 websocket_server:
   enable: true               # 正向连接（插件连鹊桥）需开启
-  host: "127.0.0.1"
+  host: "127.0.0.1"          # Docker 等跨网络栈部署见上方「网络与地址」
   port: 8080
 websocket_client:
   enable: false              # 反向连接（鹊桥连插件）需开启并填写 url_list
@@ -202,6 +344,11 @@ subscribe_event:             # 按需开启事件订阅
 | 死亡与成就文本国际化（Translate） | v0.4.1 |
 | 服务器状态查询 `mc status` | v0.5.0 |
 
+> 成就名的可用性还取决于服务端：`Spigot` 的成就事件**仅包含 `key`**，
+> `Forge 1.7.10` 缺 `display.description`。插件按
+> `translation.text → text → display.title → key` 降级取值，
+> 因此成就名或标识总能显示出来；要显示中文需在鹊桥侧开启翻译，见「常见问题」。
+
 ### 依赖
 
 - Python 3.10+
@@ -215,12 +362,32 @@ subscribe_event:             # 按需开启事件订阅
 检查 `server_id` 是否与鹊桥 `server_name` 完全一致（含大小写），
 以及 `access_token` 是否与鹊桥配置相同。
 
+**Q：日志一直重连、连不上鹊桥，是不是该把地址改成 `0.0.0.0`？**
+`0.0.0.0` 是监听地址，填鹊桥的 `websocket_server.host`。Docker 下若 AstrBot 与 MC
+不在同一网络栈，需改为 `0.0.0.0`；Windows / Linux 同机直装则通常无需修改。
+详见「网络与地址」一节。
+
 **Q：`mc cmd` 和 `mc list` 没有输出？**
 这两项依赖 RCON。请在鹊桥 `config.yml` 中设置 `rcon.enable: true` 并填写密码；
 若无法开启鹊桥 RCON，可在插件配置中启用「直连 RCON 兜底」并填写服务器 RCON 信息。
 
 **Q：死亡 / 成就 / 命令事件收不到？**
 **原版端与 Velocity 不支持**这些事件，这是上游限制。
+
+**Q：成就消息只显示「🏆 达成成就」，或干脆不显示？**
+成就文本在鹊桥侧的字段名与可用性都随版本、服务端而异。**注意实测推送的字段是
+`translation`，与鹊桥文档所写的 `translate` 不一致**，插件两者都接受。
+
+插件按四级降级取值：
+`translation.text` → `text` → `display.title` → `key`。
+通常至少能显示 `Hot Stuff` 这类成就名或成就标识；全部缺失时才退化为
+`🏆 <玩家> 达成了成就`，不会再出现整条消息丢失。
+
+若连成就名也想显示为中文，需在鹊桥侧开启翻译（**与插件无关**）：
+`config.yml` 设 `enable_translation: true`，并在鹊桥目录下建 `translate/`
+文件夹、放入 `zh_cn.json`（可从客户端 jar 提取）。详见
+[鹊桥翻译文档](https://github.com/17TheWord/queqiao-docs/blob/main/docs/config/translate.md)。
+未开启翻译时 `translation.text` 可能是空壳，届时由 `display.title` 兜住。
 
 **Q：群里出现的消息带花括号，如 `{"text":"Hello"}？**
 非原版服务端的 `raw_message` 是文本组件格式，插件已做剥离；

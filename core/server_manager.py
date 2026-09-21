@@ -6,7 +6,7 @@ from astrbot.api import logger
 
 from .constants import PLUGIN_NAME
 from .models_config import ServerConfig
-from .queqiao_client import QueQiaoClient
+from .queqiao_client import QueQiaoClient, QueQiaoTimeout
 from .rcon_client import RconClient
 
 
@@ -71,9 +71,20 @@ class ServerInstance:
     # ---- 指令执行：鹊桥优先，RCON 兜底 ----
 
     async def execute_command(self, command: str) -> str | None:
-        """执行服务器指令，返回输出；两条通道都失败返回 None。"""
+        """执行服务器指令，返回输出；两条通道都失败返回 None。
+
+        鹊桥超时 = 结果未知（指令可能已执行），此时**不走** RCON 兜底，
+        避免同一条指令被执行两遍；仅确定失败（未连接 / 明确报错）才兜底。
+        """
         if self.client.connected:
-            output = await self.client.send_rcon_command(command)
+            try:
+                output = await self.client.send_rcon_command(command)
+            except QueQiaoTimeout:
+                logger.warning(
+                    f"[{PLUGIN_NAME}][{self.server_id}] 鹊桥执行指令响应超时"
+                    "（指令可能已执行，不再走 RCON 兜底，避免重复执行）"
+                )
+                return None
             if output is not None:
                 return output
 

@@ -233,12 +233,14 @@ class CommandHandler:
         if instance is None:
             return f"❌ 未找到服务器 {server_id}"
 
+        # 展示用名称（server_name，可中文）；server_id 仍用于连接与排障
+        label = instance.config.display_name
         if not instance.connected:
-            return f"❌ 服务器 {server_id} 未连接鹊桥"
+            return f"❌ 服务器 {label} 未连接鹊桥"
 
         raw = await instance.client.get_status()
         status = ServerStatus.from_dict(raw) if raw else None
-        return await self.renderer.render_status(server_id, status)
+        return await self.renderer.render_status(server_id, status, label)
 
     async def handle_list(self, event: AstrMessageEvent, server_id: str) -> str:
         instance = self.server_manager.get(server_id)
@@ -246,7 +248,9 @@ class CommandHandler:
             return f"❌ 未找到服务器 {server_id}"
 
         players = await instance.fetch_player_list()
-        return self.renderer.format_player_list(server_id, players)
+        return self.renderer.format_player_list(
+            server_id, players, instance.config.display_name
+        )
 
     async def handle_player(self, event: AstrMessageEvent, server_id: str, player_id: str) -> str:
         instance = self.server_manager.get(server_id)

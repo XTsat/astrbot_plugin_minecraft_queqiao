@@ -148,7 +148,17 @@ class QueQiaoTranslate:
 
 @dataclass
 class QueQiaoAchievement:
-    """成就详情。0.4.1+ 文本在 translate.text，0.4.0 及以前在 text。"""
+    """成就详情。
+
+    文本来源随鹊桥版本与服务端而异，**任何单一字段都可能为空**：
+    - `0.4.1+`：`text` 已移除，文本只在 `translate.text`
+    - `translate.text` 是「回退文本或原始消息」：未开启 `enable_translation`
+      时鹊桥可能给出空壳 `{key, args, text: ""}`，此时连英文原文也取不到
+    - `0.4.0` 及以前：文本在 `text`
+    - 服务端差异：`Spigot` 仅含 `key`，部分 Forge 缺 `display.description`
+
+    因此取出成就名必须走完整降级链，不能只认其中一两个字段。
+    """
 
     key: str = ""
     frame: str = ""
@@ -168,21 +178,66 @@ class QueQiaoAchievement:
         return cls(
             key=_as_str(data.get("key")),
             frame=_as_str(display.get("frame")),
-            # title/description 在 0.4.1+ 可能是 Translate 对象
-            title=title.get("text", "") if isinstance(title, dict) else _as_str(title),
-            description=(
-                description.get("text", "")
-                if isinstance(description, dict)
-                else _as_str(description)
-            ),
+            # title/description 在 0.4.1+ 可能是 Translate 对象；
+            # 该形态下 text 同样是「回退文本」，缺失时回落到 key（即翻译键本身）
+            title=cls._translate_text(title),
+            description=cls._translate_text(description),
             text=_as_str(data.get("text")),
-            translate=QueQiaoTranslate.from_dict(data.get("translate")),
+            # 字段名以实测为准：鹊桥实际推送的是 `translation`（见原始 payload），
+            # 文档中的 `translate` 作为兼容一并接受，两者取先有值者。
+            translate=QueQiaoTranslate.from_dict(
+                data.get("translation") or data.get("translate")
+            ),
         )
+
+    @staticmethod
+    def _translate_text(value: object) -> str:
+        """把 Display 的 title/description 取值，兼容纯字符串与 Translate 对象。
+
+        Translate 对象的 `text` 缺失时回落到 `key`（翻译键），
+        这样至少能显示 `advancements.husbandry.sweet_dreams.title`
+        而不是空字符串 —— 有信息量好过没有。
+        """
+        if isinstance(value, dict):
+            return _as_str(value.get("text")) or _as_str(value.get("key"))
+        return _as_str(value)
 
     @property
     def display_text(self) -> str:
-        """优先取 0.4.1+ 的 translate.text，回退旧版 text。"""
-        return self.translate.text or self.text
+        """按可用性依次降级取出成就文本。
+
+        顺序：`translate.text`（0.4.1+）→ `text`（0.4.0-）
+        → `display.title`（部分服务端只填了显示名）→ 由 `key` 拼出的可读占位。
+
+        前两条是协议正规定义；后两条是防御性兜底：`display.title` 在
+        鹊桥未开启翻译、或服务端不填 `translate` 时仍可能有值，
+        而 `key`（如 `minecraft:husbandry/sweet_dreams`）几乎总是存在，
+        据此退化出成就标识远好于丢弃整条消息。
+
+        返回空串表示三者皆无，由调用方决定最终文案。
+        """
+        if self.translate.text:
+            return self.translate.text
+        if self.text:
+            return self.text
+        if self.title:
+            return self.title
+        return ""
+
+    @property
+    def display_name(self) -> str:
+        """成就的可读名称（不含玩家），用于兜底文案。
+
+        与 `display_text` 的区别：这里只关心「成就叫什么」，
+        因此取 `display.title` 优先于整句事件文本。
+        """
+        if self.title:
+            return self.title
+        if self.translate.text:
+            return self.translate.text
+        if self.text:
+            return self.text
+        return self.key
 
 
 @dataclass

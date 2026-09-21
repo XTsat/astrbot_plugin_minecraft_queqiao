@@ -11,11 +11,13 @@ from .constants import (
     DEFAULT_BROADCAST_FORMAT,
     DEFAULT_CHAT_FORMAT,
     DEFAULT_CLIENT_ORIGIN,
+    DEFAULT_DISPLAY_NAME,
     DEFAULT_RECONNECT_INTERVAL,
     DEFAULT_REVERSE_HOST,
     DEFAULT_REVERSE_PORT,
     DEFAULT_REVERSE_PATH,
     DEFAULT_WS_URL,
+    EMOJI_OK_GESTURE,
 )
 
 WS_MODE_FORWARD = "forward"
@@ -114,7 +116,12 @@ class ServerConfig:
 
     # ---- 基础 ----
     enabled: bool = True
-    server_id: str = ""
+    # 与 conf 模板默认值一致；显式填空串仍会被 main 层跳过并告警
+    server_id: str = "Server"
+    server_name: str = ""
+    # server_name 留空时 {server} 与状态查询展示的默认内容；
+    # 显式清空（WebUI 里删成空串）才输出空串，用于配置无前缀展示
+    server_name_default: str = DEFAULT_DISPLAY_NAME
 
     # ---- 鹊桥连接 ----
     ws_mode: str = WS_MODE_FORWARD
@@ -139,10 +146,12 @@ class ServerConfig:
     forward_death_to_astrbot: bool = False
     forward_achievement_to_astrbot: bool = False
     target_sessions: list[str] = field(default_factory=list)
-    auto_forward_prefix: str = "*"
+    # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
+    auto_forward_prefix: str = ""
     broadcast_format: str = DEFAULT_BROADCAST_FORMAT
     broadcast_color: str = "white"
     mark_option: str = "emoji"
+    mark_emoji_id: int = EMOJI_OK_GESTURE
 
     # ---- 远程指令 ----
     cmd_enabled: bool = True
@@ -156,6 +165,30 @@ class ServerConfig:
     rcon_host: str = "localhost"
     rcon_port: int = 25575
     rcon_password: str = ""
+
+    @property
+    def server_label(self) -> str:
+        """消息格式 `{server}` 的取值：**显示名称 → 显示名称默认值**。
+
+        - 填了 `server_name`：原样使用（可中文，如 `生存服`）
+        - `server_name` 留空：使用 `server_name_default`（默认 `MC`，
+          即什么都不填时 `{server}` 显示 `MC`）
+        - 两者**都**显式留空：才输出空串——唯一的无前缀途径，
+          供 `[{server}]<{player}> {message}` 这类格式在未命名时隐藏前缀
+
+        注意：这是**展示**语义，与连接握手用的 `server_id` 无关。
+        """
+        return self.server_name or self.server_name_default
+
+    @property
+    def display_name(self) -> str:
+        """带兜底的展示名称，用于状态/列表等孤立文案。
+
+        与 `server_label` 共用同一条取值链，额外兜底 `server_id` /「未知」：
+        孤立文案（如「服务器状态：」）必须给出一个非空标识，
+        否则会变成没有主语的半句话。
+        """
+        return self.server_label or self.server_id or "未知"
 
     @property
     def is_reverse(self) -> bool:
@@ -239,15 +272,32 @@ class ServerConfig:
         if mark_option not in VALID_MARK_OPTIONS:
             mark_option = "emoji"
 
+        # 自定义回执表情 ID（默认 👌 = EMOJI_OK_GESTURE）；
+        # 留空或非法时回落默认值，避免把非表情 ID 发给协议端
+        mark_emoji_id = _to_int(message.get("mark_emoji_id"), EMOJI_OK_GESTURE)
+
         list_mode = _to_str(cmd.get("cmd_white_black_list"), "white").strip().lower()
         if list_mode not in VALID_LIST_MODES:
             list_mode = "white"
 
-        server_id = _to_str(server.get("server_id"), "").strip()
+        # server_id 缺省回落 conf 模板默认值 Server；显式留空仍触发 main 层跳过告警
+        server_id = _to_str(server.get("server_id"), "Server").strip()
+
+        # 目标会话现位于模板项顶层（紧随「启用此服务器」，避免被折叠的消息转发分组
+        # 藏住）；同时兼容早期写在 message 子对象内的配置，防止旧配置失效。
+        target_sessions = _to_list(data.get("target_sessions"), [])
+        if not target_sessions:
+            target_sessions = _to_list(message.get("target_sessions"), [])
 
         return cls(
             enabled=_to_bool(data.get("enabled"), True),
             server_id=server_id,
+            server_name=_to_str(server.get("server_name"), "").strip(),
+            # 键缺失（旧配置/WebUI 默认注入）→ 默认 MC；显式清空 → 空串（无前缀）。
+            # _to_str(None, 默认) 得默认值，_to_str("", 默认) 保持空串，二者可区分
+            server_name_default=_to_str(
+                server.get("server_name_default"), DEFAULT_DISPLAY_NAME
+            ).strip(),
             ws_mode=ws_mode,
             ws_url=_to_str(server.get("ws_url"), DEFAULT_WS_URL).strip() or DEFAULT_WS_URL,
             reverse_host=_to_str(server.get("reverse_host"), DEFAULT_REVERSE_HOST).strip()
@@ -279,14 +329,15 @@ class ServerConfig:
             forward_achievement_to_astrbot=_to_bool(
                 message.get("forward_achievement_to_astrbot"), False
             ),
-            target_sessions=_to_list(message.get("target_sessions"), []),
-            auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), "*"),
+            target_sessions=target_sessions,
+            auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
             broadcast_format=_to_str(
                 message.get("broadcast_format"), DEFAULT_BROADCAST_FORMAT
             )
             or DEFAULT_BROADCAST_FORMAT,
             broadcast_color=_to_str(message.get("broadcast_color"), "white") or "white",
             mark_option=mark_option,
+            mark_emoji_id=mark_emoji_id,
             cmd_enabled=_to_bool(cmd.get("enabled"), True),
             cmd_white_black_list=list_mode,
             cmd_list=_to_list(

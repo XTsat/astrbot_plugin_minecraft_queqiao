@@ -16,6 +16,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from .core.constants import PLUGIN_DATA_DIR, PLUGIN_NAME, prefix_matches, strip_prefix
 from .core.models import QueQiaoEvent
 from .core.models_config import ServerConfig
+from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
 from .handlers.commands import CommandHandler
 from .services.binding import BindingService
@@ -29,7 +30,7 @@ DEFAULT_TIMEOUT = 30
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.1.0",
+    "v0.2.0",
     "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
 )
 class MinecraftQueQiaoPlugin(Star):
@@ -226,10 +227,20 @@ class MinecraftQueQiaoPlugin(Star):
             return
 
         # 私聊回复：多人同时提问不会互相串台；uuid 缺失时退化为昵称
-        sent = await instance.client.send_private_message(
-            reply, uuid_str=player.uuid, nickname=player.nickname
-        )
+        try:
+            sent = await instance.client.send_private_message(
+                reply, uuid_str=player.uuid, nickname=player.nickname
+            )
+        except QueQiaoTimeout:
+            # 超时 = 结果未知：WS 发送已成功，私聊大概率已送达游戏内。
+            # 此时若再广播一遍，玩家会收到两份回复（实测发生过），因此不重发
+            logger.warning(
+                f"[{PLUGIN_NAME}][{server_id}] 私聊回复响应超时"
+                "（消息可能已送达游戏内，不重复发送）"
+            )
+            return
         if not sent:
+            # 仅「确定失败」（未连接 / 鹊桥明确报错）才改用广播
             logger.warning(
                 f"[{PLUGIN_NAME}][{server_id}] 私聊回复失败，改用广播"
             )
@@ -405,11 +416,18 @@ class MinecraftQueQiaoPlugin(Star):
                 continue
 
             formatted = config.broadcast_format.format(
-                platform=platform, sender=sender, message=content, server=server_id
+                platform=platform,
+                sender=sender,
+                message=content,
+                # {server} 取显示名称（留空用默认值，默认 MC）；{server_id} 始终为原始 ID
+                server=config.server_label,
+                server_id=server_id,
             )
             if await instance.client.broadcast(formatted, config.broadcast_color):
                 # 记录以防止该消息从游戏回传时形成回声
                 self.message_bridge.mark_forwarded(server_id, content)
                 relayed = True
+                # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
+                await self.message_bridge.mark_relayed(event, config)
 
         return relayed

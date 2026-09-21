@@ -66,9 +66,15 @@ the server actually runs `tp Misaka 114 514 1919`.
 
 ### Connection
 
+<details>
+<summary>Show options</summary>
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `target_sessions` | list | empty | **Target sessions**, shown at the very top of the list entry, right below "Enable this server". Session UMO list for MC messages; **defines the MC ↔ chat binding** — when empty the plugin connects but the group receives nothing |
 | `server_id` | string | `Server` | Unique server ID, **must match QueQiao's `server_name`** |
+| `server_name` | string | empty | **Display name** of the server, may be Chinese (e.g. `生存服`). When empty, the **display-name default** below is used. Display only, does not affect the connection |
+| `server_name_default` | string | `MC` | **Display-name default**: what `{server}` and status output show when `server_name` is blank — with nothing filled in you get `[MC]<player>`. Clear it to render an empty string (no prefix) |
 | `ws_mode` | string | `forward` | `forward`: plugin dials QueQiao; `reverse`: plugin listens for QueQiao |
 | `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | Forward-mode URL, matches QueQiao `websocket_server` |
 | `reverse_host` | string | `0.0.0.0` | Reverse-mode listen address |
@@ -79,25 +85,103 @@ the server actually runs `tp Misaka 114 514 1919`.
 | `reconnect_interval` | int | `5` | Reconnect delay in seconds, growing up to 60s |
 | `max_reconnect` | int | `0` | Max reconnect attempts; `0` means unlimited |
 
+</details>
+
 ### Message forwarding
+
+<details>
+<summary>Show options</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `forward_chat_to_astrbot` | bool | `true` | Forward player chat to target sessions |
-| `forward_chat_format` | string | `<{player}> {message}` | Chat format; `{player}` name, `{message}` content |
+| `forward_chat_format` | string | `[{server}]{player}: {message}` | Chat format; `{player}` name, `{message}` content, `{server}` **server display name** (falls back to the default `MC` when unset) |
 | `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
-| `target_sessions` | list | empty | Target session UMO list; **defines the MC ↔ chat binding** |
-| `auto_forward_prefix` | string | `*` | **Prefix for relaying group messages into MC**; empty relays all |
-| `broadcast_format` | string | `[{platform}] {sender}: {message}` | Format used when relaying into the game |
+| `auto_forward_prefix` | string | empty | **Prefix for relaying group messages into MC**; empty relays all (only takes effect for bound target sessions) |
+| `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; `{server}` display name (falls back to the default `MC` when unset), `{server_id}` raw server ID (always populated) |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
-| `mark_option` | string | `emoji` | Relay acknowledgement: `text` / `emoji` / `none` |
+| `mark_option` | string | `emoji` | Acknowledgement after a successful relay: `text` replies ✅ / `emoji` reacts to the original message / `none` silent |
+| `mark_emoji_id` | int | `124` | **Reaction emoji ID** (only when `mark_option=emoji`). Default `124` is 👌; see the table below for verified IDs |
 
 > Obtain a session UMO with AstrBot's `sid` command; the form is
 > `aiocqhttp:GroupMessage:123456789`.
 
+> **Reaction emoji**: `mark_option: emoji` adds a reaction to the **original message**
+> that triggered the relay (no extra message is sent). **Every aiocqhttp protocol
+> implementation supports it** (such as NapCat, Lagrange or LLOneBot); other platforms
+> are skipped silently instead of failing.
+
+`mark_emoji_id` takes a **QQ emoji ID** — note that this is neither a Unicode code point
+nor an OneBot standard index (e.g. ✅ has no QQ emoji ID). The built-in Emoji response
+constants of this plugin, all verified by testing:
+
+| Constant | ID | Emoji |
+|----------|----|-------|
+| `EMOJI_OK_GESTURE` | `124` | 👌 |
+| `EMOJI_THUMBS_UP` | `76` | 👍 |
+| `EMOJI_LOVE` | `66` | ❤️ |
+| `EMOJI_ROSE` | `63` | 🌹 |
+
+</details>
+
+### Server display name and format placeholders
+
+<details>
+<summary>Show options</summary>
+
+`server_id` is the **connection identity** used by QueQiao (bound to `x-self-name`, so it
+cannot be Chinese). To make multiple servers easier to tell apart in a group, set
+**`server_name` (display name)** as well — it only affects presentation and may be Chinese:
+
+```jsonc
+"server": {
+  "server_id": "survival",       // must match QueQiao's config.yml server_name; don't change
+  "server_name": "生存服",        // display only, may be Chinese
+  "server_name_default": "MC"    // shown when server_name is blank; defaults to MC
+}
+```
+
+Both format strings accept `{server}`, which resolves through the chain
+**`server_name` → `server_name_default` (default `MC`) → empty string**:
+
+| Placeholder | Available in | Meaning |
+|-------------|--------------|---------|
+| `{player}` | `forward_chat_format` | Player name |
+| `{message}` | both formats | Message content (rich text and color codes already stripped for MC → external) |
+| `{server}` | both formats | **Server display name**; falls back to the **display-name default** (`MC`) when `server_name` is blank; renders empty only when both are cleared |
+| `{platform}` | `broadcast_format` | Platform name |
+| `{sender}` | `broadcast_format` | Sender name |
+| `{server_id}` | `broadcast_format` | Raw server ID (**always populated**, when you need the exact identifier) |
+
+Example (labelling the source when several servers share a group):
+
+| Setting | Format | Result |
+|---------|--------|--------|
+| `server_name` = `生存服` | `[{server}] <{player}> {message}` | `[生存服] <Steve> 大家好` |
+| nothing filled in | `[{server}] <{player}> {message}` | `[MC] <Steve> 大家好` (default `MC`) |
+| default changed to `本服` | `[{server}]{player}: {message}` | `[本服]Steve: 大家好` |
+
+> **Empty behaviour**: when `server_name` is blank, the **display-name default**
+> (`MC`) is used — leaving everything untouched yields `[MC]<player>`. To make `{server}`
+> render an **empty string** (no prefix), clear `server_name_default` as well; literal
+> brackets in the format string remain (`[{server}]<{player}> {message}` then yields
+> `[]<Steve> 大家好`; drop the brackets for a clean look). Use `{server_id}` if you
+> always want a value.
+
+> Existing format strings without `{server}` keep working unchanged.
+
+`/mc status` and `/mc list` label the server through the same chain
+(`server_name` → default → `server_id`), so multi-server setups are easier to read;
+the handshake and logs keep using `server_id`.
+
+</details>
+
 ### AI chat
+
+<details>
+<summary>Show options</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -121,7 +205,7 @@ An in-game message is handled in this order: if it matches `ai_chat_prefix` it g
 AI (the reply is sent privately to that player); otherwise it is relayed to the group as a
 normal chat message.
 
-With the defaults (bridging `*`, AI `ai`):
+With the defaults (bridging prefix empty = relay all, AI `ai`):
 
 | In-game message | Result |
 |-----------------|--------|
@@ -146,7 +230,12 @@ With the defaults (bridging `*`, AI `ai`):
 > A trigger with no content (e.g. just `ai`) sends no request to the LLM, avoiding pointless
 > usage.
 
+</details>
+
 ### Commands
+
+<details>
+<summary>Show options</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -160,20 +249,87 @@ With the defaults (bridging `*`, AI `ai`):
 | `rcon_fallback.port` | int | `25575` | RCON port |
 | `rcon_fallback.password` | string | empty | RCON password |
 
-### Miscellaneous
+</details>
+
+### Plugin options
+
+<details>
+<summary>Show options</summary>
 
 | Option | Type | Default | Description |
-|--------|------|---------|-------------|
+|--------|------|--------|-------------|
 | `enabled` | bool | `true` | Enable the plugin |
 | `text2image` | bool | `true` | Render server info as an image, falling back to text |
 
-## Other
+</details>
+
+## Deployment and FAQ
 
 ### Installation
 
 1. Place this plugin under AstrBot's `data/plugins/` directory and restart AstrBot
-2. In the WebUI plugin config, click "Add MC server" and fill in the connection details
+2. In the WebUI plugin config, click "Add MC server" and **fill in "Target sessions" (required)**
 3. Make sure `server_id` exactly matches QueQiao's `server_name`
+
+> **The defaults work out of the box for a same-machine setup**: when AstrBot and MC run
+> on one machine, the connection settings (`ws_url` →
+> `ws://127.0.0.1:8080/minecraft/ws`) already line up with QueQiao's default port, so
+> **nothing needs changing** — just set "Target sessions" and you are done. For
+> cross-machine or Docker setups, see the next section.
+
+### Networking and addresses (Docker / same-machine setups)
+
+Whether `host` should be `127.0.0.1` or `0.0.0.0` **depends on whether AstrBot and MC
+share a network stack** — not on the operating system. There is exactly one criterion:
+**can AstrBot reach the address QueQiao is listening on?**
+
+| Scenario | QueQiao `websocket_server.host` | Plugin `ws_url` |
+|----------|--------------------------------|-----------------|
+| Windows / Linux, **both installed directly on one machine** (same network stack) | `127.0.0.1` (default, no change needed) | `ws://127.0.0.1:8080/minecraft/ws` |
+| AstrBot and MC on **different machines** | that machine's reachable address (LAN IP or `0.0.0.0`) | `ws://<MC server IP>:8080/minecraft/ws` |
+| AstrBot in Docker, MC on the host (or vice versa) | **`0.0.0.0`** | the host's reachable address |
+| AstrBot and MC in separate containers | **`0.0.0.0`** | the MC container's published port or container name |
+
+> In the table above, `127.0.0.1`, `8080` and `/minecraft/ws` are all **defaults and can be
+> changed**: use whatever address fits your deployment (see the notes below), and set the
+> port to match QueQiao's `websocket_server.port` — or the plugin's `reverse_port` in
+> reverse mode. **Change one side and you must change the other to match.**
+
+> **How to fill in `ws_url`: use the address at which the MC server is reachable
+> *from the machine running AstrBot*.** On the same machine, use `127.0.0.1`. When
+> AstrBot and MC are on different machines, **use the MC server's actual IP** (e.g.
+> `ws://192.168.1.10:8080/minecraft/ws`) — `127.0.0.1` will not work there, because on
+> AstrBot it means AstrBot itself.
+
+> **`0.0.0.0` is a *listen* address meaning "all interfaces", and belongs only on the
+> server side** (QueQiao's `websocket_server.host`, the plugin's `reverse_host`).
+
+**Docker example** (AstrBot on the host network, MC inside a bridge container):
+
+```yaml
+# QueQiao config.yml inside the MC container — must listen on all interfaces,
+# otherwise traffic from outside the container never arrives
+websocket_server:
+  host: "0.0.0.0"            # can be narrowed to a specific interface if needed
+  port: 8080                 # default port, changeable (must match the ws_url below)
+```
+
+```
+# AstrBot plugin config — AstrBot is on the host network, i.e. the host itself,
+# so connect to the local machine via 127.0.0.1
+ws_url: "ws://127.0.0.1:8080/minecraft/ws"   # port must match the port above
+```
+
+Troubleshooting notes:
+
+- Success is logged as `已连接鹊桥 (ws://...)` ("connected to QueQiao"); a reachable TCP
+  port alone does not mean the handshake succeeded
+- If the log shows **continuous reconnects** with no explicit error, `host` is usually
+  still `127.0.0.1`: the published port listens on the host, but QueQiao inside the
+  container is bound only to the container's own loopback, so it never receives the
+  docker-proxy traffic and the connection is reset immediately
+- The startup line `WebSocket Server 在 <address>:<port> 启动...` tells you the actual
+  address QueQiao bound to
 
 ### Configuring QueQiao
 
@@ -186,7 +342,7 @@ server_name: "Server"        # must match the plugin's server_id
 access_token: ""             # matches the plugin's access_token
 websocket_server:
   enable: true               # required for forward mode
-  host: "127.0.0.1"
+  host: "127.0.0.1"          # for Docker and cross-network setups see "Networking and addresses" above
   port: 8080
 websocket_client:
   enable: false              # required for reverse mode; fill in url_list
@@ -212,6 +368,12 @@ subscribe_event:             # enable the events you need
 | Translate model for death and achievement text | v0.4.1 |
 | Server status via `mc status` | v0.5.0 |
 
+> Achievement name availability also depends on the server: on `Spigot` the achievement
+> event contains **only `key`**, and `Forge 1.7.10` lacks `display.description`.
+> The plugin falls back through `translation.text → text → display.title → key`,
+> so a name or identifier always shows; enable translation on the QueQiao side for
+> localized names — see the FAQ.
+
 ### Dependencies
 
 - Python 3.10+
@@ -225,6 +387,12 @@ subscribe_event:             # enable the events you need
 Verify that `server_id` matches QueQiao's `server_name` exactly, including case, and that
 `access_token` is identical on both sides.
 
+**Q: The plugin keeps reconnecting. Should I change the address to `0.0.0.0`?**
+`0.0.0.0` is a listen address, set on QueQiao's `websocket_server.host`. Under Docker, if
+AstrBot and MC are not on the same network stack, change it to `0.0.0.0`; for a
+Windows / Linux same-machine install no change is normally needed. See "Networking and
+addresses" above, and the MC server IP note there when the two are on different machines.
+
 **Q: `mc cmd` and `mc list` return nothing?**
 Both depend on RCON. Set `rcon.enable: true` with a password in QueQiao's `config.yml`, or
 enable the plugin's "direct RCON fallback" and fill in the server's RCON details.
@@ -232,6 +400,31 @@ enable the plugin's "direct RCON fallback" and fill in the server's RCON details
 **Q: Why am I not receiving death, achievement or command events?**
 These events are **unsupported on Vanilla and Velocity** servers; this is an
 upstream limitation.
+
+**Q: Achievement messages only show "🏆 达成成就", or do not appear at all?**
+The achievement field name and its availability vary by QueQiao version and server type.
+**Note that the field actually pushed is `translation`, contradicting the `translate` name
+used in QueQiao's docs**; the plugin accepts both.
+
+The plugin falls back in four steps:
+`translation.text` → `text` → `display.title` → `key`.
+It normally shows at least the achievement name (e.g. `Hot Stuff`) or an identifier, and
+only degrades to `🏆 <player> 达成了成就` when everything is missing — a message is no
+longer dropped entirely.
+
+Why the player name can be absent: with translation enabled, `translation.text` is a full
+sentence that already embeds the player name (`X has made the advancement [Y]`). With
+translation disabled it falls back to `display.title`, which contains **only the
+achievement name** — so the plugin now prepends the player name itself, de-duplicating
+when the sentence already contains it.
+
+To get localized achievement names you must enable translation **on the QueQiao side**
+(this is not a plugin setting): set `enable_translation: true` in `config.yml`, create a
+`translate/` folder next to it, and drop in `zh_cn.json` / `en_us.json` (extractable from
+the client jar). See the
+[QueQiao translation docs](https://github.com/17TheWord/queqiao-docs/blob/main/docs/config/translate.md).
+With translation disabled, `translation.text` may be an empty shell, in which case
+`display.title` covers it.
 
 **Q: Messages in chat contain braces like `{"text":"Hello"}`?**
 On non-Vanilla servers `raw_message` is a text-component string. The plugin strips it; if

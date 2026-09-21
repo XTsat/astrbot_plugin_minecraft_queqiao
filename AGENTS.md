@@ -155,6 +155,14 @@ astrbot_plugin_minecraft_queqiao/
 `ServerInstance.execute_command()` 的优先级：**鹊桥 `send_rcon_command` → 直连 RCON 兜底**。
 两条通道都不可用时返回 `None`（调用方据此给出可操作的提示，而非静默失败）。
 
+**超时 ≠ 失败**（改回执/兜底逻辑前必读）：鹊桥 WS 发送成功但 `API_TIMEOUT`
+内无响应时抛 `QueQiaoTimeout`——请求大概率已投递执行，只是响应慢/丢失。
+此时**禁止**换通道重发（消息/指令会重复两遍，实测发生过 AI 回复发两遍）：
+- 私聊回复（`send_private_message`）与 RCON（`send_rcon_command`）超时向上抛，
+  由调用方放弃本次发送，不得自动兜底重发
+- 展示类（broadcast / title / actionbar）超时在封装层按已投递处理返回 True
+- 仅「确定失败」（未连接 / 鹊桥明确报错）才允许走兜底通道
+
 ### 4.6 AI 触发方式与两个前缀（不可混淆）
 
 游戏内 AI **仅由聊天前缀触发**（`PlayerChatEvent` + `ai_chat_prefix`，默认 `ai`），全端可用。
@@ -171,7 +179,7 @@ astrbot_plugin_minecraft_queqiao/
 
 | 配置项 | 方向 | 默认值 | 语义 |
 |---|---|---|---|
-| `auto_forward_prefix` | 群 → MC | `*` | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| `auto_forward_prefix` | 群 → MC | 留空 | 群消息以此开头才转发到游戏；留空 = 全部转发（仅对已绑定 `target_sessions` 的群生效） |
 | `ai_chat_prefix` | 游戏内 → AI | `ai` | 游戏内聊天以此开头才触发 AI；留空 = 不触发 |
 
 不变式（改事件编排时必须保持）：
@@ -186,9 +194,10 @@ astrbot_plugin_minecraft_queqiao/
 
 ### 4.7 自检
 
-改动纯逻辑后运行 `python3 tests_offline.py`（16 组断言，覆盖配置解析、事件模型、
+改动纯逻辑后运行 `python3 tests_offline.py`（23 组断言，覆盖配置解析、事件模型、
 转发/回声抑制、自定义指令、绑定持久化、AI 触发方式与前缀互斥语义、
-端到端事件流、main 导入、AstrBot 导入路径校验）。
+端到端事件流、main 导入、AstrBot 导入路径校验、显示名称与格式默认值、
+conf 模板↔代码默认值一致性守卫、API 超时语义「未知 ≠ 失败，禁止重发」）。
 
 ---
 

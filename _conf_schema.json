@@ -17,6 +17,12 @@
             "description": "启用此服务器",
             "default": true
           },
+          "target_sessions": {
+            "type": "list",
+            "description": "目标会话",
+            "hint": "MC服务器消息互通的目标会话UMO列表。格式如 aiocqhttp:GroupMessage:123456789。用于MC消息转发到外部、外部消息转发到MC以及区分指令所属服务器",
+            "default": []
+          },
           "server": {
             "description": "鹊桥连接信息",
             "type": "object",
@@ -26,6 +32,18 @@
                 "description": "服务器ID",
                 "hint": "用于区分不同服务器的唯一标识。正向模式下作为 x-self-name 发送，必须与鹊桥 config.yml 中的 server_name 一致",
                 "default": "Server"
+              },
+              "server_name": {
+                "type": "string",
+                "description": "服务器显示名称",
+                "hint": "展示在消息格式与状态查询中的服务器名称，可写中文（例如『生存服』）。留空则使用下方「显示名称默认值」。仅用于展示，不影响连接",
+                "default": ""
+              },
+              "server_name_default": {
+                "type": "string",
+                "description": "显示名称默认值",
+                "hint": "服务器显示名称留空时，{server} 占位符与状态查询展示的内容，默认 MC（什么都不填即显示 [MC]）。改成留空则 {server} 输出空字符串（无前缀效果）",
+                "default": "MC"
               },
               "ws_mode": {
                 "type": "string",
@@ -114,8 +132,8 @@
               "forward_chat_format": {
                 "type": "string",
                 "description": "聊天消息格式",
-                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容",
-                "default": "<{player}> {message}"
+                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容，{server} 替换为服务器显示名称（可中文，如 生存服；未填则用显示名称默认值，默认 MC）。示例：<{player}> {message}",
+                "default": "[{server}]{player}: {message}"
               },
               "forward_join_leave_to_astrbot": {
                 "type": "bool",
@@ -135,23 +153,17 @@
                 "hint": "原版端与 Velocity 不支持该事件",
                 "default": false
               },
-              "target_sessions": {
-                "type": "list",
-                "description": "目标会话",
-                "hint": "MC服务器消息互通的目标会话UMO列表。格式如 aiocqhttp:GroupMessage:123456789。用于MC消息转发到外部、外部消息转发到MC以及区分指令所属服务器",
-                "default": []
-              },
               "auto_forward_prefix": {
                 "type": "string",
                 "description": "群消息转发到MC的前缀",
-                "hint": "外部会话中以此前缀开头的消息将被转发到MC服务器（例如: *）。留空则转发全部消息。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
-                "default": "*"
+                "hint": "外部会话中以此前缀开头的消息才被转发到MC服务器（例如: *）；默认留空 = 全部转发（仅对已绑定目标会话的群生效）。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
+                "default": ""
               },
               "broadcast_format": {
                 "type": "string",
                 "description": "外部消息转发到MC的格式",
-                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{server} 服务器ID",
-                "default": "[{platform}] {sender}: {message}"
+                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{server} 服务器显示名称（可中文；未填则用显示名称默认值，默认 MC），{server_id} 服务器ID（始终有值）",
+                "default": "[{platform}]{sender}: {message}"
               },
               "broadcast_color": {
                 "type": "string",
@@ -165,6 +177,12 @@
                 "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
                 "options": ["text", "emoji", "none"],
                 "default": "emoji"
+              },
+              "mark_emoji_id": {
+                "type": "int",
+                "description": "回执表情 ID",
+                "hint": "转发成功后所贴的表情（仅 mark_option=emoji 且平台为 aiocqhttp 时生效）。填 QQ 表情 ID，默认 124 为 👌、76 为 👍、66 为 ❤️、63 为 🌹",
+                "default": 124
               }
             }
           },

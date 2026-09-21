@@ -49,6 +49,25 @@ _SHARED_SERVERS: dict[tuple[str, int], "SharedReverseServer"] = {}
 _SHARED_LOCK = asyncio.Lock()
 
 
+class QueQiaoTimeout(Exception):
+    """API 请求已发出但超时未收到鹊桥响应（投递结果未知）。
+
+    与「确定失败」不同：WebSocket 发送已成功，鹊桥大概率已收到并执行了请求，
+    只是响应慢或响应丢失。因此调用方**不得**据此断定失败并原样重发——
+    否则消息/指令会在游戏内重复执行（实测出现过 AI 回复发两遍）。
+
+    - 展示类调用（broadcast / title / actionbar）：在封装层按「已投递」处理，
+      吞掉本异常并返回 True
+    - 需要精确决策的调用（私聊回复 / RCON 指令）：向上抛出，由调用方
+      决定是否换通道（通常不换，避免重复）
+    """
+
+    def __init__(self, api: str, timeout: float) -> None:
+        self.api = api
+        self.timeout = timeout
+        super().__init__(f"API {api} 响应超时(>{timeout:g}s)，投递结果未知")
+
+
 def _get_header(headers: Any, name: str) -> str | None:
     """兼容不同 websockets 版本的 Header 读取（大小写不敏感）。"""
     if headers is None:
@@ -509,8 +528,11 @@ class QueQiaoClient:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending.pop(echo, None)
-            logger.warning(f"[{PLUGIN_NAME}][{self.server_id}] API {api} 响应超时")
-            return None
+            logger.warning(
+                f"[{PLUGIN_NAME}][{self.server_id}] API {api} 响应超时"
+                "（请求可能已投递，勿据此重发）"
+            )
+            raise QueQiaoTimeout(api, timeout) from None
         except ConnectionError as exc:
             logger.warning(f"[{PLUGIN_NAME}][{self.server_id}] API {api} 失败: {exc}")
             return None
@@ -518,17 +540,28 @@ class QueQiaoClient:
     # ---- 业务接口封装 ----
 
     async def broadcast(self, text: str, color: str = "white") -> bool:
-        """广播文本到服务器内所有玩家。"""
+        """广播文本到服务器内所有玩家。
+
+        响应超时按「已投递」处理返回 True：广播属展示类消息，WS 发送成功后
+        鹊桥大概率已执行；若按失败返回 False，上层重发/重试会让玩家看到两遍。
+        """
         component: dict[str, Any] = {"text": text}
         if color:
             component["color"] = color
-        result = await self.call_api(API_BROADCAST, {"message": [component]})
+        try:
+            result = await self.call_api(API_BROADCAST, {"message": [component]})
+        except QueQiaoTimeout:
+            return True
         return self._is_success(result)
 
     async def send_private_message(
         self, text: str, uuid_str: str = "", nickname: str = "", color: str = "white"
     ) -> bool:
-        """私聊指定玩家（uuid 优先，缺失时用 nickname）。"""
+        """私聊指定玩家（uuid 优先，缺失时用 nickname）。
+
+        响应超时向上抛 `QueQiaoTimeout`：私聊可能已送达游戏内，调用方
+        不得在超时后改用广播重发（玩家会收到两份回复），应直接放弃本次发送。
+        """
         if not uuid_str and not nickname:
             return False
         component: dict[str, Any] = {"text": text}
@@ -547,7 +580,7 @@ class QueQiaoClient:
     async def send_title(
         self, title: str, subtitle: str = "", fade_in: int = 20, stay: int = 70, fade_out: int = 20
     ) -> bool:
-        """推送标题。"""
+        """推送标题。响应超时按「已投递」处理（展示类消息，禁止重发）。"""
         if not title and not subtitle:
             return False
         data: dict[str, Any] = {
@@ -559,16 +592,26 @@ class QueQiaoClient:
             data["title"] = {"text": title}
         if subtitle:
             data["subtitle"] = {"text": subtitle}
-        result = await self.call_api(API_TITLE, data)
+        try:
+            result = await self.call_api(API_TITLE, data)
+        except QueQiaoTimeout:
+            return True
         return self._is_success(result)
 
     async def send_actionbar(self, text: str) -> bool:
-        """推送状态栏消息。"""
-        result = await self.call_api(API_ACTIONBAR, {"message": [{"text": text}]})
+        """推送状态栏消息。响应超时按「已投递」处理（展示类消息，禁止重发）。"""
+        try:
+            result = await self.call_api(API_ACTIONBAR, {"message": [{"text": text}]})
+        except QueQiaoTimeout:
+            return True
         return self._is_success(result)
 
     async def send_rcon_command(self, command: str, timeout: float = API_TIMEOUT) -> str | None:
-        """通过鹊桥执行 RCON 指令，返回命令输出；失败返回 None。"""
+        """通过鹊桥执行 RCON 指令，返回命令输出；失败返回 None。
+
+        响应超时向上抛 `QueQiaoTimeout`：指令可能已在服务器执行，
+        调用方不得换直连 RCON 重发（同一条指令会执行两遍）。
+        """
         result = await self.call_api(API_RCON, {"command": command}, timeout=timeout)
         if not self._is_success(result):
             return None
@@ -578,8 +621,11 @@ class QueQiaoClient:
         return payload if isinstance(payload, str) else str(payload)
 
     async def get_status(self) -> dict | None:
-        """获取服务器状态（需要鹊桥 >= v0.5.0）。"""
-        result = await self.call_api(API_GET_STATUS, None)
+        """获取服务器状态（需要鹊桥 >= v0.5.0）；超时/失败返回 None。"""
+        try:
+            result = await self.call_api(API_GET_STATUS, None)
+        except QueQiaoTimeout:
+            return None
         if not self._is_success(result):
             return None
         payload = result.get("data")

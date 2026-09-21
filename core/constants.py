@@ -57,7 +57,9 @@ PING_TIMEOUT = 10
 FATAL_CLOSE_CODES = {1003, 1008, 1010}
 FATAL_HTTP_STATUS = {401, 403, 404}
 
-# API 请求响应超时（秒）
+# API 请求响应超时（秒）。
+# 注意：超时 ≠ 失败 —— WS 发送成功后鹊桥大概率已投递，只是响应慢/丢失；
+# 调用方不得在超时后原样重发（会重复投递），语义见 queqiao_client.QueQiaoTimeout
 API_TIMEOUT = 10
 
 # ---- 转发与回环抑制 ----
@@ -65,8 +67,26 @@ API_TIMEOUT = 10
 # 外部消息转发到 MC 后，该内容在此窗口内再次出现（回声）时不再回传外部
 ECHO_SUPPRESS_WINDOW = 5.0
 
-DEFAULT_CHAT_FORMAT = "<{player}> {message}"
-DEFAULT_BROADCAST_FORMAT = "[{platform}] {sender}: {message}"
+DEFAULT_CHAT_FORMAT = "[{server}]{player}: {message}"
+DEFAULT_BROADCAST_FORMAT = "[{platform}]{sender}: {message}"
+
+# 服务器显示名称（server_name）留空时，{server} 占位符的默认展示内容。
+# 对应配置项 server_name_default 的默认值；用户可改，显式清空则输出空串
+DEFAULT_DISPLAY_NAME = "MC"
+
+# ---- 转发回执 ----
+
+# 转发到 MC 成功后给原消息的回执文案（mark_option: text）
+MARK_TEXT_OK = "✅ 已转发到游戏内"
+
+# 消息转发反馈的 Emoji 响应常量（QQ 表情 ID，mark_option: emoji 时使用）
+EMOJI_OK_GESTURE = 124  # 👌
+EMOJI_THUMBS_UP = 76  # 👍
+EMOJI_LOVE = 66  # ❤️
+EMOJI_ROSE = 63  # 🌹
+
+# 给消息贴表情走的 OneBot 扩展接口（aiocqhttp `call_action` 动作名）
+API_SET_MSG_EMOJI_LIKE = "set_msg_emoji_like"
 
 # ---- 多服务器选择 ----
 

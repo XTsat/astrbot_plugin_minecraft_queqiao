@@ -17,13 +17,19 @@ class InfoRenderer:
         self.enabled = text2image_enabled
 
     @staticmethod
-    def format_status(server_id: str, status: ServerStatus | None) -> str:
-        """状态文本（渲染失败或未启用渲染时的输出）。"""
+    def format_status(
+        server_id: str, status: ServerStatus | None, label: str | None = None
+    ) -> str:
+        """状态文本（渲染失败或未启用渲染时的输出）。
+
+        `label` 为展示用名称（`server_name`，可中文），缺省时回退 `server_id`。
+        """
+        name = label or server_id
         if status is None:
-            return f"❌ 服务器 {server_id} 状态获取失败（需鹊桥 v0.5.0+ 且已连接）"
+            return f"❌ 服务器 {name} 状态获取失败（需鹊桥 v0.5.0+ 且已连接）"
 
         lines = [
-            f"📊 服务器状态：{server_id}",
+            f"📊 服务器状态：{name}",
             f"类型：{status.server_type or '未知'}",
             f"版本：{status.server_version or '未知'}",
             f"在线：{status.players_text}",
@@ -36,29 +42,34 @@ class InfoRenderer:
             lines.append(f"CPU 核心：{status.cpu_cores}（负载 {status.system_load:.2f}）")
         return "\n".join(lines)
 
-    async def render_status(self, server_id: str, status: ServerStatus | None) -> str:
+    async def render_status(
+        self, server_id: str, status: ServerStatus | None, label: str | None = None
+    ) -> str:
         """渲染状态图。
 
         当前实现返回文本（图片渲染为后续增强项），保持调用方接口稳定，
         使「渲染失败自动回退文本」的配置语义始终成立。
         """
         if not self.enabled:
-            return self.format_status(server_id, status)
+            return self.format_status(server_id, status, label)
 
         try:
-            return self.format_status(server_id, status)
+            return self.format_status(server_id, status, label)
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}][{server_id}] 状态渲染失败，回退文本: {exc}")
-            return self.format_status(server_id, None)
+            return self.format_status(server_id, None, label)
 
     @staticmethod
-    def format_player_list(server_id: str, players: list[str] | None) -> str:
+    def format_player_list(
+        server_id: str, players: list[str] | None, label: str | None = None
+    ) -> str:
         """在线玩家列表文本。"""
+        name = label or server_id
         if players is None:
             return (
-                f"❌ 无法获取服务器 {server_id} 的玩家列表\n"
+                f"❌ 无法获取服务器 {name} 的玩家列表\n"
                 f"请确认：鹊桥已开启 RCON，或在配置中启用直连 RCON 兜底"
             )
         if not players:
-            return f"👥 服务器 {server_id} 当前没有玩家在线"
-        return f"👥 服务器 {server_id} 在线 {len(players)} 人：\n" + "、".join(players)
+            return f"👥 服务器 {name} 当前没有玩家在线"
+        return f"👥 服务器 {name} 在线 {len(players)} 人：\n" + "、".join(players)
