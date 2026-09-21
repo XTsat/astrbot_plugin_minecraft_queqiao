@@ -2,7 +2,7 @@
 # 说明：websockets 为鹊桥连接必需；aio-mc-rcon 仅在启用「直连 RCON 兜底」时需要，
 # 缺失时插件其余功能不受影响（rcon_client.py 采用惰性 import）。
 # aiohttp 为「内置图片 HTTP 服务」使用（AstrBot 运行时自带该库），同样惰性 import，
-# 仅在开启 enable_image_http 时才真正加载。
+# 仅在根级开启 enable_image_upload 并于 image_upload_services 添加 builtin_http 条目时才真正加载。
 websockets>=12.0
 aio-mc-rcon>=3.2.0
 aiohttp>=3.11.18

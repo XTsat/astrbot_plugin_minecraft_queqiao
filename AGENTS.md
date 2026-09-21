@@ -48,6 +48,8 @@ astrbot_plugin_minecraft_queqiao/
 ├── services/               # 服务层
 │   ├── binding.py          #   账号↔游戏ID 绑定（原子写）
 │   ├── message_bridge.py   #   双向转发 + 回环抑制 + 富文本剥离
+│   ├── image_host.py       #   内置图片 HTTP 服务（无公开 URL 图片转玩家可访问链接）
+│   ├── image_bed.py        #   图片转存条目（内置 HTTP + 第三方图床统一接口）
 │   └── renderer.py         #   状态/玩家列表文本渲染
 ├── handlers/
 │   └── commands.py         #   命令业务逻辑 + 自定义指令 + 多服务器选择
@@ -203,8 +205,8 @@ conf 模板↔代码默认值一致性守卫、API 超时语义「未知 ≠ 失
 
 ## 5. 文档维护（强制）
 
-- `README.md` + `README_en.md` 必须同步；头部格式与四大板块结构遵循模板 §7.2
-- `CHANGELOG.md` 顶部固定 `[Unreleased]`，扁平前缀式（新增/修复/变更/移除/性能）
+- `README.md` + `README_en.md` 必须同步；头部格式与四大板块结构遵循模板 §7.2（中文为主、单向同步：先落中文版再同步英文版；中文 `h1` 取 `metadata.yaml` 的 `display_name`）
+- `CHANGELOG.md` 顶部固定 `[Unreleased]`，**分组式**（与模板 §7.1 一致）：每个版本段下用 `### 新增` / `### 修复` / `### 变更` / `### 移除` / `### 性能` 子标题分组，只保留有内容的分类；条目采用「**加粗主题**：说明」形式
 - 版本号三处联动：`metadata.yaml` ↔ `CHANGELOG.md` 最新版本 ↔ README 徽章
 - 未同步文档 = 任务未完成
 
