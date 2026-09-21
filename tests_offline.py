@@ -173,6 +173,15 @@ c = ServerConfig.from_dict({"server":{"server_id":"T","ws_mode":"reverse","rever
 assert c.is_reverse and c.reverse_port==9090 and c.target_sessions==["a:b:1"]
 assert c.cmd_list==["say","list"] and c.rcon_fallback_enabled and c.rcon_port==25575
 assert c.is_command_allowed("say hi") and not c.is_command_allowed("op x")
+# 扁平字段（新 schema，WebUI 可渲染）优先，旧 rcon_fallback 对象兼容
+c2 = ServerConfig.from_dict({"cmd":{"rcon_enabled":True,"rcon_host":"192.168.1.10",
+     "rcon_port":"25580","rcon_password":"pwd"}})
+assert c2.rcon_fallback_enabled and c2.rcon_host=="192.168.1.10"
+assert c2.rcon_port==25580 and c2.rcon_password=="pwd"
+c3 = ServerConfig.from_dict({"cmd":{"rcon_enabled":False,"rcon_host":"1.1.1.1",
+     "rcon_fallback":{"enabled":True,"host":"2.2.2.2","port":25575,"password":"old"}}})
+assert c3.rcon_fallback_enabled is False and c3.rcon_host=="1.1.1.1"
+assert c3.rcon_port==25575 and c3.rcon_password=="old"
 print("OK")
 
 print("\n全部离线逻辑校验通过 ✅")
@@ -791,10 +800,10 @@ def _flat_defaults4(items, prefix=()):
 # schema 键与 ServerConfig 字段名不一致的少数映射
 _alias4 = {
     ("cmd", "enabled"): "cmd_enabled",
-    ("cmd", "rcon_fallback", "enabled"): "rcon_fallback_enabled",
-    ("cmd", "rcon_fallback", "host"): "rcon_host",
-    ("cmd", "rcon_fallback", "port"): "rcon_port",
-    ("cmd", "rcon_fallback", "password"): "rcon_password",
+    ("cmd", "rcon_enabled"): "rcon_fallback_enabled",
+    ("cmd", "rcon_host"): "rcon_host",
+    ("cmd", "rcon_port"): "rcon_port",
+    ("cmd", "rcon_password"): "rcon_password",
 }
 _code_defaults4 = _S2.from_dict({})  # 代码侧默认（含防御式兜底）
 for _path4, _sd4 in _flat_defaults4(_tpl4):

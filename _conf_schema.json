@@ -233,32 +233,27 @@
                 "hint": "自定义快捷指令。格式：触发词 <&参数&><<>>实际指令 {参数} {sender}。{sender}为用户绑定的游戏ID",
                 "default": []
               },
-              "rcon_fallback": {
-                "description": "直连 RCON 兜底配置",
-                "type": "object",
-                "items": {
-                  "enabled": {
-                    "type": "bool",
-                    "description": "启用直连 RCON 兜底",
-                    "hint": "当鹊桥未开启 RCON 时，改为由本插件直连服务器 RCON 端口执行指令",
-                    "default": false
-                  },
-                  "host": {
-                    "type": "string",
-                    "description": "RCON 地址",
-                    "default": "localhost"
-                  },
-                  "port": {
-                    "type": "int",
-                    "description": "RCON 端口",
-                    "default": 25575
-                  },
-                  "password": {
-                    "type": "string",
-                    "description": "RCON 密码",
-                    "default": ""
-                  }
-                }
+              "rcon_enabled": {
+                "type": "bool",
+                "description": "启用直连 RCON 兜底",
+                "hint": "当鹊桥未开启 RCON 时，改为由本插件直连服务器 RCON 端口执行指令",
+                "default": false
+              },
+              "rcon_host": {
+                "type": "string",
+                "description": "RCON 地址",
+                "hint": "直连 RCON 时服务器 RCON 监听的地址（需在服务端开启 RCON 并填密码）",
+                "default": "localhost"
+              },
+              "rcon_port": {
+                "type": "int",
+                "description": "RCON 端口",
+                "default": 25575
+              },
+              "rcon_password": {
+                "type": "string",
+                "description": "RCON 密码",
+                "default": ""
               }
             }
           },

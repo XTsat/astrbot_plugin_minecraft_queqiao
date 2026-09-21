@@ -50,7 +50,7 @@ TEMPLATE_KEY_BUILTIN_HTTP = "builtin_http"
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.3.0",
+    "v0.3.1",
     "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
 )
 class MinecraftQueQiaoPlugin(Star):

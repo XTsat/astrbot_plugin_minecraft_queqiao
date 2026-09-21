@@ -442,8 +442,20 @@ class ServerConfig:
             ),
             bind_enable=_to_bool(cmd.get("bind_enable"), True),
             custom_cmd_list=_to_list(cmd.get("custom_cmd_list"), []),
-            rcon_fallback_enabled=_to_bool(rcon.get("enabled"), False),
-            rcon_host=_to_str(rcon.get("host"), "localhost").strip() or "localhost",
-            rcon_port=max(1, _to_int(rcon.get("port"), 25575)),
-            rcon_password=_to_str(rcon.get("password"), ""),
+            # 直连 RCON 兜底：扁平字段优先（cmd.rcon_enabled 等，AstrBot WebUI
+            # 只渲染一层 object 嵌套，二级 object 无法显示）；兼容旧版
+            # cmd.rcon_fallback 对象结构，防止旧配置失效
+            rcon_fallback_enabled=_to_bool(
+                cmd.get("rcon_enabled", rcon.get("enabled")), False
+            ),
+            rcon_host=(
+                _to_str(cmd.get("rcon_host", rcon.get("host")), "localhost").strip()
+                or "localhost"
+            ),
+            rcon_port=max(
+                1, _to_int(cmd.get("rcon_port", rcon.get("port")), 25575)
+            ),
+            rcon_password=_to_str(
+                cmd.get("rcon_password", rcon.get("password")), ""
+            ),
         )

@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.0-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.1-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -301,10 +301,12 @@ With the defaults (bridging prefix empty = relay all, AI `ai`):
 | `cmd_list` | list | `["say","list","weather","time"]` | Command names without the leading `/` |
 | `bind_enable` | bool | `true` | Enable account ↔ game ID binding |
 | `custom_cmd_list` | list | empty | Custom command mappings, see above |
-| `rcon_fallback.enabled` | bool | `false` | Connect to RCON directly when QueQiao's RCON is unavailable |
-| `rcon_fallback.host` | string | `localhost` | RCON host |
-| `rcon_fallback.port` | int | `25575` | RCON port |
-| `rcon_fallback.password` | string | empty | RCON password |
+| `rcon_enabled` | bool | `false` | Connect to RCON directly when QueQiao's RCON is unavailable |
+| `rcon_host` | string | `localhost` | RCON host |
+| `rcon_port` | int | `25575` | RCON port |
+| `rcon_password` | string | empty | RCON password |
+
+> ⚠️ Upgrading from an older version: RCON settings used to live in a nested `rcon_fallback` object (not editable in the WebUI). In the new version fill in the four fields above instead; the old `rcon_fallback` values remain effective until the config is first saved.
 
 </details>
 

@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.0-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.1-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -301,10 +301,12 @@
 | `cmd_list` | list | `["say","list","weather","time"]` | 指令名单（填指令名，不带 `/`） |
 | `bind_enable` | bool | `true` | 启用账号与游戏 ID 绑定 |
 | `custom_cmd_list` | list | 空 | 自定义指令映射，语法见上文 |
-| `rcon_fallback.enabled` | bool | `false` | 鹊桥未开 RCON 时，改由插件直连 RCON |
-| `rcon_fallback.host` | string | `localhost` | RCON 地址 |
-| `rcon_fallback.port` | int | `25575` | RCON 端口 |
-| `rcon_fallback.password` | string | 空 | RCON 密码 |
+| `rcon_enabled` | bool | `false` | 鹊桥未开 RCON 时，改由插件直连 RCON |
+| `rcon_host` | string | `localhost` | RCON 地址 |
+| `rcon_port` | int | `25575` | RCON 端口 |
+| `rcon_password` | string | 空 | RCON 密码 |
+
+> ⚠️ 从旧版升级：此前 RCON 配置在 `rcon_fallback` 对象内（WebUI 无法编辑）。新版本中请直接在上方四个字段填写；旧 `rcon_fallback` 值在配置保存前仍生效，首次保存后以新字段为准。
 
 </details>
 
