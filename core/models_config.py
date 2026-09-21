@@ -12,6 +12,7 @@ from .constants import (
     DEFAULT_CHAT_FORMAT,
     DEFAULT_CLIENT_ORIGIN,
     DEFAULT_DISPLAY_NAME,
+    DEFAULT_PLATFORM_NAMES,
     DEFAULT_RECONNECT_INTERVAL,
     DEFAULT_REVERSE_HOST,
     DEFAULT_REVERSE_PORT,
@@ -110,6 +111,33 @@ def _as_object(value: object) -> dict:
     return {}
 
 
+def _to_platform_map(value: object) -> dict[str, str]:
+    """把「平台名称映射」配置收敛为 {原始平台名: 显示名}。
+
+    条目格式 `原始平台名=显示名`（如 `aiocqhttp=QQ`），兼容列表、
+    JSON 对象字符串、逗号分隔字符串三种形态（复用 _to_list），
+    另兼容 dict 形态（WebUI 误存对象时）。无分隔符或键/值为空的条目
+    一律忽略，避免个别写错把整个映射弄坏；重复键取最后一条。
+    """
+    if isinstance(value, dict):
+        raw = list(value.items())
+    elif isinstance(value, str) and _as_object(value):
+        raw = list(_as_object(value).items())
+    else:
+        raw = []
+        for entry in _to_list(value, []):
+            key, _, val = entry.partition("=")
+            raw.append((key, val))
+
+    mapping: dict[str, str] = {}
+    for key, val in raw:
+        k = _to_str(key).strip()
+        v = _to_str(val).strip()
+        if k and v:
+            mapping[k] = v
+    return mapping
+
+
 @dataclass
 class ServerConfig:
     """单台 MC 服务器的完整配置（对应 conf 中一个模板项）。"""
@@ -149,6 +177,11 @@ class ServerConfig:
     # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
     auto_forward_prefix: str = ""
     broadcast_format: str = DEFAULT_BROADCAST_FORMAT
+    # 平台名称映射：{platform} 占位符按此把原始平台名替换为自定义展示名。
+    # 默认自带 aiocqhttp=QQ 示例（开箱即用）；配置里删空该项则不改写
+    platform_names: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_PLATFORM_NAMES)
+    )
     broadcast_color: str = "white"
     mark_option: str = "emoji"
     mark_emoji_id: int = EMOJI_OK_GESTURE
@@ -189,6 +222,25 @@ class ServerConfig:
         否则会变成没有主语的半句话。
         """
         return self.server_label or self.server_id or "未知"
+
+    def platform_display_name(self, platform: str) -> str:
+        """把原始平台名按用户映射转换为游戏内展示名；未命中时原样返回。
+
+        `{platform}` 占位符专用：平台 ID（如 `aiocqhttp`）又长又不好看，
+        用户可配置 `aiocqhttp=QQ` 之类的映射让转发到游戏的内容更友好。
+        精确匹配优先，其次忽略大小写匹配（平台 ID 均为小写，
+        用户条目大小写手误时仍生效）。未配置映射或未命中时不做任何改写。
+        """
+        if not platform or not self.platform_names:
+            return platform
+        name = self.platform_names.get(platform)
+        if name is not None:
+            return name
+        lowered = platform.lower()
+        for key, value in self.platform_names.items():
+            if key.lower() == lowered:
+                return value
+        return platform
 
     @property
     def is_reverse(self) -> bool:
@@ -335,6 +387,13 @@ class ServerConfig:
                 message.get("broadcast_format"), DEFAULT_BROADCAST_FORMAT
             )
             or DEFAULT_BROADCAST_FORMAT,
+            platform_names=(
+                # 配置里没有该键（旧配置/未动过）→ 默认自带 aiocqhttp=QQ 示例；
+                # 显式给了（包括删空的空列表）→ 按解析结果，删空即不改写
+                _to_platform_map(message["platform_names"])
+                if "platform_names" in message
+                else dict(DEFAULT_PLATFORM_NAMES)
+            ),
             broadcast_color=_to_str(message.get("broadcast_color"), "white") or "white",
             mark_option=mark_option,
             mark_emoji_id=mark_emoji_id,

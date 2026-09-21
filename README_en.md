@@ -101,6 +101,7 @@ the server actually runs `tp Misaka 114 514 1919`.
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
 | `auto_forward_prefix` | string | empty | **Prefix for relaying group messages into MC**; empty relays all (only takes effect for bound target sessions) |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; `{server}` display name (falls back to the default `MC` when unset), `{server_id}` raw server ID (always populated) |
+| `platform_names` | list | `["aiocqhttp=QQ"]` | **Platform name mapping**: replace the raw platform name behind `{platform}` with a custom display name, one entry per line in the form `raw=display`. Ships with a default `aiocqhttp=QQ` entry (works out of the box); unmapped platforms keep their original name, clearing the list disables the rewrite |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
 | `mark_option` | string | `emoji` | Acknowledgement after a successful relay: `text` replies ✅ / `emoji` reacts to the original message / `none` silent |
 | `mark_emoji_id` | int | `124` | **Reaction emoji ID** (only when `mark_option=emoji`). Default `124` is 👌; see the table below for verified IDs |
@@ -151,7 +152,7 @@ Both format strings accept `{server}`, which resolves through the chain
 | `{player}` | `forward_chat_format` | Player name |
 | `{message}` | both formats | Message content (rich text and color codes already stripped for MC → external) |
 | `{server}` | both formats | **Server display name**; falls back to the **display-name default** (`MC`) when `server_name` is blank; renders empty only when both are cleared |
-| `{platform}` | `broadcast_format` | Platform name |
+| `{platform}` | `broadcast_format` | Platform name; may be rewritten via **`platform_names`** to a custom display name (e.g. `aiocqhttp` → `QQ`); unmapped names are kept as-is |
 | `{sender}` | `broadcast_format` | Sender name |
 | `{server_id}` | `broadcast_format` | Raw server ID (**always populated**, when you need the exact identifier) |
 
@@ -162,6 +163,22 @@ Example (labelling the source when several servers share a group):
 | `server_name` = `生存服` | `[{server}] <{player}> {message}` | `[生存服] <Steve> 大家好` |
 | nothing filled in | `[{server}] <{player}> {message}` | `[MC] <Steve> 大家好` (default `MC`) |
 | default changed to `本服` | `[{server}]{player}: {message}` | `[本服]Steve: 大家好` |
+
+`{platform}` can also be rewritten into something nicer via **`platform_names`** — raw
+platform IDs (such as `aiocqhttp`, `qq_official`) are often long and ugly inside the game.
+This option **ships with a default `aiocqhttp=QQ` entry**: with no configuration at all,
+`aiocqhttp` already renders as `QQ` in-game. Delete the entry if you do not want the rewrite:
+
+| Setting | Result |
+|---------|--------|
+| `platform_names` = `aiocqhttp=QQ`, format `[{platform}]{sender}: {message}` | `[QQ]群友A: 你好` |
+| same mapping plus `telegram=电报`, `discord=DC` | those platforms also show the mapped name; unmapped platforms keep their original name |
+
+> The mapping is configured **per server** (in the "Message forwarding" section), so
+> different servers may use different names. Matching is case-insensitive (platform IDs are
+> lowercase, so a case typo still hits). Entries take the form `raw=display`; malformed
+> entries (no `=`, empty key, empty value) are silently ignored; clearing the whole list
+> disables the rewrite and restores the original platform name.
 
 > **Empty behaviour**: when `server_name` is blank, the **display-name default**
 > (`MC`) is used — leaving everything untouched yields `[MC]<player>`. To make `{server}`

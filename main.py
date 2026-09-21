@@ -30,7 +30,7 @@ DEFAULT_TIMEOUT = 30
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.2.0",
+    "v0.2.1",
     "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
 )
 class MinecraftQueQiaoPlugin(Star):
@@ -416,7 +416,9 @@ class MinecraftQueQiaoPlugin(Star):
                 continue
 
             formatted = config.broadcast_format.format(
-                platform=platform,
+                # {platform} 先经平台名称映射（platform_names，如 aiocqhttp→QQ）；
+                # 未配置或未命中时原样保留
+                platform=config.platform_display_name(platform),
                 sender=sender,
                 message=content,
                 # {server} 取显示名称（留空用默认值，默认 MC）；{server_id} 始终为原始 ID

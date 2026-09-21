@@ -796,6 +796,14 @@ for _path4, _sd4 in _flat_defaults4(_tpl4):
         assert _sd4 is not None and int(_sd4) == _cv4, (_path4, _sd4, _cv4)
     elif isinstance(_cv4, list):
         assert [str(_x) for _x in (_sd4 or [])] == _cv4, (_path4, _sd4, _cv4)
+    elif isinstance(_cv4, dict):
+        # dict 字段（平台名称映射）：schema 侧是 `键=值` 条目列表，逐条解析后比对
+        _parsed4: dict[str, str] = {}
+        for _entry4 in _sd4 or []:
+            _k4, _, _v4 = str(_entry4).partition("=")
+            if _k4.strip() and _v4.strip():
+                _parsed4[_k4.strip()] = _v4.strip()
+        assert _parsed4 == _cv4, (_path4, _sd4, _cv4)
     else:
         assert str(_sd4) == str(_cv4), \
             f"conf 与代码默认值不一致: {'/'.join(_path4)}: schema={_sd4!r} code={_cv4!r}"
@@ -911,4 +919,69 @@ assert _rcon5b.calls == ["list"], _rcon5b.calls
 print("OK  超时=未知（不重发）：私聊超时不再广播兜底、RCON 超时不再直连兜底；"
       "确定失败时兜底不受影响")
 
-print("\n全部离线逻辑校验通过 ✅（含超时语义）")
+print("\n=== 24. 平台名称映射（platform_names → {platform}） ===")
+from astrbot_plugin_minecraft_queqiao.core.models_config import (
+    ServerConfig as _S6,
+)
+
+# (a) 解析：列表条目 `原始平台名=显示名`，空白容忍、坏条目忽略、重复键取最后一条
+_cfg6 = _S6.from_dict({"message": {"platform_names": [
+    "aiocqhttp=QQ", "  telegram = 电报 ", "bad-entry", "=空键", "空值=",
+    "discord=DC", "discord=Discord",
+]}})
+assert _cfg6.platform_names == {
+    "aiocqhttp": "QQ", "telegram": "电报", "discord": "Discord"
+}, _cfg6.platform_names
+
+# (b) 兼容形态：JSON 对象字符串 / 逗号分隔字符串 / dict / 非法值
+assert _S6.from_dict({"message": {"platform_names": '{"aiocqhttp":"QQ","qq_official":"官方QQ"}'}})\
+    .platform_names == {"aiocqhttp": "QQ", "qq_official": "官方QQ"}
+assert _S6.from_dict({"message": {"platform_names": "aiocqhttp=QQ,telegram=电报"}})\
+    .platform_names == {"aiocqhttp": "QQ", "telegram": "电报"}
+assert _S6.from_dict({"message": {"platform_names": {"aiocqhttp": "QQ", "x": ""}}})\
+    .platform_names == {"aiocqhttp": "QQ"}
+assert _S6.from_dict({"message": {"platform_names": 123}}).platform_names == {}
+# 默认自带 aiocqhttp=QQ 示例（开箱即用）；显式删空列表 = 不改写
+assert _S6.from_dict({}).platform_names == {"aiocqhttp": "QQ"}, \
+    "默认必须自带 aiocqhttp=QQ 示例"
+assert _S6.from_dict({"message": {"platform_names": []}}).platform_names == {}, \
+    "显式删空列表必须关闭改写"
+
+# (c) 取名语义：精确匹配 → 忽略大小写兜底 → 未命中原样返回
+_cfg6b = _S6.from_dict({"message": {"platform_names": ["aiocqhttp=QQ", "Telegram=电报"]}})
+assert _cfg6b.platform_display_name("aiocqhttp") == "QQ"
+assert _cfg6b.platform_display_name("AIOCQHTTP") == "QQ", "忽略大小写兜底"
+assert _cfg6b.platform_display_name("telegram") == "电报"
+assert _cfg6b.platform_display_name("discord") == "discord", "未命中原样返回"
+assert _cfg6b.platform_display_name("") == "", "空平台名不炸"
+# 默认配置开箱即用：aiocqhttp 显示为 QQ，其它平台保持原名
+assert _S6.from_dict({}).platform_display_name("aiocqhttp") == "QQ", \
+    "默认示例 aiocqhttp=QQ 必须生效"
+assert _S6.from_dict({}).platform_display_name("discord") == "discord"
+# 显式删空列表后恢复不改写
+assert _S6.from_dict({"message": {"platform_names": []}})\
+    .platform_display_name("aiocqhttp") == "aiocqhttp", "删空后必须恢复原名"
+
+# (d) 端到端：{platform} 经映射后进 broadcast_format（aiocqhttp → QQ）
+_out6 = "[{platform}]{sender}: {message}".format(
+    platform=_cfg6b.platform_display_name("aiocqhttp"),
+    sender="群友A", message="你好",
+    server=_cfg6b.server_label, server_id="S",
+)
+assert _out6 == "[QQ]群友A: 你好", _out6
+
+# (e) schema 守卫：platform_names 在 message 分组内紧随 broadcast_format，
+#     hint 必须说明条目格式与 {platform}，默认自带 aiocqhttp=QQ（删空 = 不改写）
+_sh6 = json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8"))
+_mitems6 = _sh6["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+assert "platform_names" in _mitems6, "message 分组缺少 platform_names"
+_mk6 = list(_mitems6.keys())
+assert _mk6.index("platform_names") == _mk6.index("broadcast_format") + 1, \
+    f"platform_names 必须紧跟 broadcast_format，实际顺序: {_mk6}"
+assert _mitems6["platform_names"]["default"] == ["aiocqhttp=QQ"], \
+    "schema 默认必须自带 aiocqhttp=QQ 示例"
+assert "{platform}" in _mitems6["platform_names"]["hint"], \
+    "platform_names 的 hint 必须说明作用于 {platform}"
+assert "=" in _mitems6["platform_names"]["hint"], "hint 必须说明 原始平台名=显示名 格式"
+print("OK  platform_names 解析/取名语义/默认示例 aiocqhttp=QQ/schema 同步 全部通过")
+print("\n全部离线逻辑校验通过 ✅（含平台名称映射）")

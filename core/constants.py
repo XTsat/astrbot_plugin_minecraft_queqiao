@@ -50,6 +50,7 @@ DEFAULT_REVERSE_PATH = "/minecraft/ws"
 
 DEFAULT_RECONNECT_INTERVAL = 5
 MAX_RECONNECT_WAIT = 60
+
 PING_INTERVAL = 30
 PING_TIMEOUT = 10
 
@@ -69,6 +70,10 @@ ECHO_SUPPRESS_WINDOW = 5.0
 
 DEFAULT_CHAT_FORMAT = "[{server}]{player}: {message}"
 DEFAULT_BROADCAST_FORMAT = "[{platform}]{sender}: {message}"
+
+# 平台名称映射的默认值：自带 aiocqhttp=QQ 示例，开箱即用。
+# 用户在配置里删空该列表项即关闭改写（保留原始平台名）
+DEFAULT_PLATFORM_NAMES: dict[str, str] = {"aiocqhttp": "QQ"}
 
 # 服务器显示名称（server_name）留空时，{server} 占位符的默认展示内容。
 # 对应配置项 server_name_default 的默认值；用户可改，显式清空则输出空串

@@ -99,6 +99,7 @@
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
 | `auto_forward_prefix` | string | 空 | **群消息转发到 MC 的前缀**，留空则全部转发（仅对已绑定目标会话的群生效） |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，`{server}` 显示名称（留空用默认值 `MC`）、`{server_id}` 服务器 ID（始终有值） |
+| `platform_names` | list | `["aiocqhttp=QQ"]` | **平台名称映射**：把 `{platform}` 的原始平台名替换为自定义展示名，每项格式 `原始平台名=显示名`。默认自带示例 `aiocqhttp=QQ`（开箱即用）；未命中的平台保持原名，删空则不改写 |
 | `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
 | `mark_option` | string | `emoji` | 转发成功后的提醒方式：`text` 回复 ✅ 文本 / `emoji` 给原消息贴表情 / `none` 不提醒 |
 | `mark_emoji_id` | int | `124` | **回执表情 ID**（仅 `mark_option=emoji` 时生效）。默认 `124` 为 👌，已核实的可用 ID 见下表 |
@@ -146,7 +147,7 @@
 | `{player}` | `forward_chat_format` | 玩家名称 |
 | `{message}` | 两个格式串 | 消息内容（MC → 外部时已剥离富文本与颜色代码） |
 | `{server}` | 两个格式串 | **服务器显示名称**；`server_name` 留空时用**显示名称默认值**（默认 `MC`），两者都留空才输出空串 |
-| `{platform}` | `broadcast_format` | 平台名（群消息来源平台） |
+| `{platform}` | `broadcast_format` | 平台名（群消息来源平台）；可经 **`platform_names`** 映射为自定义名称（如 `aiocqhttp` → `QQ`），未命中原样保留 |
 | `{sender}` | `broadcast_format` | 发送者名 |
 | `{server_id}` | `broadcast_format` | 服务器原始 ID（**始终有值**，需要精确标识时用） |
 
@@ -157,6 +158,21 @@
 | `server_name` = `生存服`、格式 `[{server}] <{player}> {message}` | — | `[生存服] <Steve> 大家好` |
 | 什么都不填、格式 `[{server}] <{player}> {message}` | — | `[MC] <Steve> 大家好`（默认值 `MC`） |
 | 默认值改成 `本服`、格式 `[{server}]{player}: {message}` | — | `[本服]Steve: 大家好` |
+
+`{platform}` 还可以通过 **`platform_names`** 映射成顺眼的名字——原始平台 ID
+（如 `aiocqhttp`、`qq_official`）往往又长又不好看，放进游戏里占地方。
+该项**默认自带示例 `aiocqhttp=QQ`**：什么都不配，aiocqhttp 在游戏内也会显示为 `QQ`；
+不需要改写的平台可以删掉示例项：
+
+| 配置项 | 实际效果 |
+|--------|-----------|
+| `platform_names` = `aiocqhttp=QQ`、格式 `[{platform}]{sender}: {message}` | `[QQ]群友A: 你好` |
+| 同一份映射再添 `telegram=电报`、`discord=DC` | 这些平台的消息也显示为映射名；未命中的平台保持原名 |
+
+> 映射是**每台服务器独立**配置的（在「消息转发配置」分组里），不同服可以有不同的叫法；
+> 匹配忽略大小写（平台 ID 均为小写，手误大小写也能命中）；条目写法
+> `原始平台名=显示名`，写错的条目（无 `=`、空键、空值）会被自动忽略；
+> 把整个列表删空则关闭改写，恢复显示原始平台名。
 
 > **留空行为**：`server_name` 留空时用「显示名称默认值」（默认 `MC`，即什么都不填
 > 就是 `[MC]<玩家名>` 效果）。想让 `{server}` 输出**空字符串**（无前缀），
