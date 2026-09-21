@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from .constants import (
     DEFAULT_BROADCAST_FORMAT,
     DEFAULT_CHAT_FORMAT,
+    DEFAULT_CHATIMAGE_NAME,
     DEFAULT_CLIENT_ORIGIN,
     DEFAULT_DISPLAY_NAME,
     DEFAULT_LOW_FREQUENCY_INTERVAL,
@@ -193,6 +194,12 @@ class ServerConfig:
     broadcast_color: str = "white"
     mark_option: str = "emoji"
     mark_emoji_id: int = EMOJI_OK_GESTURE
+    # 外部会话消息中的图片转发到游戏内（依赖游戏端 ChatImage 模组渲染）
+    forward_image_to_mc: bool = False
+    # ChatImage 代码中 name 参数的取值（图片在聊天栏的显示名）
+    chatimage_name: str = DEFAULT_CHATIMAGE_NAME
+    # 游戏内聊天消息中的图片（ChatImage CICode 代码 / 图片链接）下载后作为图片转发到外部
+    forward_image_from_mc: bool = False
 
     # ---- 远程指令 ----
     cmd_enabled: bool = True
@@ -422,6 +429,12 @@ class ServerConfig:
             broadcast_color=_to_str(message.get("broadcast_color"), "white") or "white",
             mark_option=mark_option,
             mark_emoji_id=mark_emoji_id,
+            forward_image_to_mc=_to_bool(message.get("forward_image_to_mc"), False),
+            chatimage_name=_to_str(
+                message.get("chatimage_name"), DEFAULT_CHATIMAGE_NAME
+            ).strip()
+            or DEFAULT_CHATIMAGE_NAME,
+            forward_image_from_mc=_to_bool(message.get("forward_image_from_mc"), False),
             cmd_enabled=_to_bool(cmd.get("enabled"), True),
             cmd_white_black_list=list_mode,
             cmd_list=_to_list(

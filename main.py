@@ -13,24 +13,44 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.filter.command import GreedyStr
 
-from .core.constants import PLUGIN_DATA_DIR, PLUGIN_NAME, prefix_matches, strip_prefix
+from .core.constants import (
+    DEFAULT_IMAGE_HTTP_HOST,
+    DEFAULT_IMAGE_HTTP_PORT,
+    DEFAULT_IMAGE_UPLOAD_TIMEOUT,
+    PLUGIN_DATA_DIR,
+    PLUGIN_NAME,
+    prefix_matches,
+    strip_prefix,
+)
 from .core.models import QueQiaoEvent
-from .core.models_config import ServerConfig
+from .core.models_config import ServerConfig, _to_bool, _to_int, _to_str
 from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
 from .handlers.commands import CommandHandler
 from .services.binding import BindingService
-from .services.message_bridge import MessageBridge
+from .services.image_bed import (
+    BuiltinHttpUploader,
+    ImageBedUploader,
+    ImageBedUploaderGroup,
+)
+from .services.message_bridge import (
+    MessageBridge,
+    build_chatimage_code,
+    resolve_image_url,
+)
 from .services.renderer import InfoRenderer
 
 DEFAULT_TIMEOUT = 30
+
+# 图床条目模板 key（AstrBot 会在每个条目上写入 __template_key 持久化）
+TEMPLATE_KEY_BUILTIN_HTTP = "builtin_http"
 
 
 @register(
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.2.2",
+    "v0.3.0",
     "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
 )
 class MinecraftQueQiaoPlugin(Star):
@@ -47,6 +67,7 @@ class MinecraftQueQiaoPlugin(Star):
         self.binding_service = BindingService(data_dir)
         self.message_bridge = MessageBridge(context)
         self.renderer = InfoRenderer()
+        self.image_bed = ImageBedUploaderGroup()
         self.command_handler = CommandHandler(
             self.server_manager, self.binding_service, self.renderer
         )
@@ -112,6 +133,7 @@ class MinecraftQueQiaoPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 没有可用的服务器配置")
             return
 
+        await self._setup_image_services()
         await self.server_manager.start_all()
         logger.info(
             f"[{PLUGIN_NAME}] 插件已初始化，共 {len(self._configs)} 台服务器"
@@ -126,8 +148,97 @@ class MinecraftQueQiaoPlugin(Star):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._init_task
 
+        await self.image_bed.stop_builtin()
         await self.server_manager.stop_all()
         logger.info(f"[{PLUGIN_NAME}] 已关闭")
+
+    async def _setup_image_services(self) -> None:
+        """按根级配置构建图片转存条目并启动内置 HTTP 监听。
+
+        `enable_image_upload` 是总开关；`image_upload_services` 是与
+        mc_servers 同款的条目列表，内置图片 HTTP 服务与其它第三方图床
+        混排在同一列表里，按列表顺序逐个尝试（内置条目通常放前面）。
+        内置条目需要占用本机端口，构建后统一调用 `start_builtin()` 启动。
+        """
+        self.image_bed.uploaders = []
+        if not _to_bool(self.config.get("enable_image_upload"), False):
+            return
+
+        entries = self.config.get("image_upload_services") or []
+        if isinstance(entries, dict):  # 防御：误存成单项对象
+            entries = [entries]
+        # 上传超时是全局根级配置，逐个注入第三方图床条目；非正数回落默认值
+        upload_timeout = max(
+            1,
+            _to_int(
+                self.config.get("image_upload_timeout"),
+                DEFAULT_IMAGE_UPLOAD_TIMEOUT,
+            ),
+        )
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if not _to_bool(entry.get("enabled"), True):
+                continue
+
+            if self._is_builtin_entry(entry):
+                uploader = BuiltinHttpUploader(
+                    host=_to_str(entry.get("host"), DEFAULT_IMAGE_HTTP_HOST),
+                    port=_to_int(entry.get("port"), DEFAULT_IMAGE_HTTP_PORT),
+                    base_url=_to_str(entry.get("base_url"), ""),
+                    name=_to_str(entry.get("name"), ""),
+                )
+                if not uploader.enabled:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}] 内置图片 HTTP 服务条目 "
+                        f"{uploader.display_name}: base_url 为空或不是 "
+                        "http(s) 地址，服务不会启动。请填写玩家客户端可访问的"
+                        "地址前缀，如 http://公网IP:8765（不能用 127.0.0.1，"
+                        "除非玩家与服务同机）"
+                    )
+                    continue
+                self.image_bed.uploaders.append(uploader)
+                continue
+
+            uploader = ImageBedUploader(
+                upload_url=_to_str(entry.get("upload_url"), ""),
+                token=_to_str(entry.get("token"), ""),
+                response=_to_str(entry.get("response"), "text"),
+                name=_to_str(entry.get("name"), ""),
+                file_field=_to_str(entry.get("file_field"), "file"),
+                headers=_to_str(entry.get("headers"), ""),
+                form_fields=_to_str(entry.get("form_fields"), ""),
+                timeout=upload_timeout,
+            )
+            if not uploader.enabled:
+                logger.warning(
+                    f"[{PLUGIN_NAME}] 图床条目 {uploader.display_name or '未命名'}: "
+                    f"upload_url 需为 http(s):// 开头且 response 为 text/json，"
+                    "已忽略"
+                )
+                continue
+            self.image_bed.uploaders.append(uploader)
+
+        await self.image_bed.start_builtin()
+        if self.image_bed.enabled:
+            logger.info(
+                f"[{PLUGIN_NAME}] 图片转存服务已启用: {self.image_bed.service_names}"
+            )
+
+    @staticmethod
+    def _is_builtin_entry(entry: dict) -> bool:
+        """判断条目是否为内置图片 HTTP 服务（builtin_http 模板）。
+
+        以 `__template_key` 为准（AstrBot 保存 template_list 时会写入）；
+        缺失时按字段特征兜底：带 `base_url` 且无 `upload_url` 视为内置条目。
+        """
+        key = _to_str(entry.get("__template_key"), "").strip().lower()
+        if key:
+            return key == TEMPLATE_KEY_BUILTIN_HTTP
+        return (
+            bool(_to_str(entry.get("base_url"), "").strip())
+            and not _to_str(entry.get("upload_url"), "").strip()
+        )
 
     @staticmethod
     def _warn_prefix_conflict(config: ServerConfig) -> None:
@@ -349,7 +460,7 @@ class MinecraftQueQiaoPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """处理外部消息：自定义指令匹配与转发到 MC。"""
+        """处理外部消息：自定义指令匹配与转发到 MC（含图片）。"""
         if event.is_at_or_wake_command:
             return
 
@@ -367,36 +478,75 @@ class MinecraftQueQiaoPlugin(Star):
             event.stop_event()
             return
 
-        if not text:
+        # 图片不参与文本匹配，但可随消息一起转发到 MC
+        images = self._extract_images(event)
+        if not text and not images:
             return
 
-        # 自定义指令：仅在会话绑定的服务器上匹配
-        for server_id, config in self.message_bridge.servers_for_session(umo):
-            actual = self.command_handler.match_custom_command(server_id, text)
-            if actual:
-                instance = self.server_manager.get(server_id)
-                if instance is None:
-                    continue
-                output = await instance.execute_command(actual)
-                reply = (
-                    f"✅ 已执行：{actual}\n{output}".rstrip()
-                    if output is not None
-                    else f"❌ 执行失败：{actual}"
-                )
-                yield event.plain_result(reply)
-                event.stop_event()
-                return
+        # 自定义指令：仅在会话绑定的服务器上匹配（按文本匹配，图片不参与）
+        if text:
+            for server_id, config in self.message_bridge.servers_for_session(umo):
+                actual = self.command_handler.match_custom_command(server_id, text)
+                if actual:
+                    instance = self.server_manager.get(server_id)
+                    if instance is None:
+                        continue
+                    output = await instance.execute_command(actual)
+                    reply = (
+                        f"✅ 已执行：{actual}\n{output}".rstrip()
+                        if output is not None
+                        else f"❌ 执行失败：{actual}"
+                    )
+                    yield event.plain_result(reply)
+                    event.stop_event()
+                    return
 
         # 转发到 MC
-        if await self._relay_to_minecraft(event, umo, text):
+        if await self._relay_to_minecraft(event, umo, text, images):
             event.stop_event()
 
+    @staticmethod
+    def _extract_images(event: AstrMessageEvent) -> list:
+        """取出消息链中的图片组件（供转发到 MC 使用）。
+
+        只关心消息内容里实际携带的图片段；纯文本消息返回空列表。
+        """
+        try:
+            from astrbot.api.message_components import Image
+        except Exception:
+            return []
+        components = event.get_messages() or []
+        return [comp for comp in components if isinstance(comp, Image)]
+
+    @staticmethod
+    def _describe_image(comp: object | None) -> str:
+        """概要描述图片组件字段，用于「拿不到 URL」时的排障日志。"""
+
+        def brief(value: object) -> str:
+            if not value:
+                return ""
+            text = str(value)
+            if text.startswith("base64://"):
+                return "base64://<...>"
+            return text if len(text) <= 48 else text[:48] + "..."
+
+        url = brief(getattr(comp, "url", ""))
+        file_ = brief(getattr(comp, "file", ""))
+        path = brief(getattr(comp, "path", ""))
+        return f"url={url!r} file={file_!r} path={path!r}"
+
     async def _relay_to_minecraft(
-        self, event: AstrMessageEvent, umo: str, text: str
+        self, event: AstrMessageEvent, umo: str, text: str, images: list | None = None
     ) -> bool:
-        """把外部会话消息按前缀规则转发到绑定的 MC 服务器。"""
+        """把外部会话消息按前缀规则转发到绑定的 MC 服务器。
+
+        `images` 为消息链中的图片组件列表；仅当服务器开启了
+        `forward_image_to_mc` 且能解析出玩家客户端可访问的 URL 时，
+        才以 ChatImage 代码形式追加到广播内容。
+        """
         targets = self.message_bridge.servers_for_session(umo)
         if not targets:
+            logger.debug(f"[{PLUGIN_NAME}] 会话 {umo} 未绑定任何服务器，跳过转发")
             return False
 
         relayed = False
@@ -409,26 +559,82 @@ class MinecraftQueQiaoPlugin(Star):
 
             instance = self.server_manager.get(server_id)
             if instance is None or not instance.connected:
+                logger.debug(
+                    f"[{PLUGIN_NAME}][{server_id}] 服务器未连接，跳过该消息的转发"
+                )
                 continue
 
+            # 文本部分（供回声抑制与格式占位符使用）
             content = self.message_bridge.strip_relay_prefix(config, text)
-            if not content:
+
+            # 图片 → ChatImage 代码（[[CICode,url=...,name=...]]）
+            image_codes = []
+            skipped_images = 0
+            skipped_sample: object | None = None
+            skip_reason: str | None = None
+            if images and config.forward_image_to_mc:
+                for comp in images:
+                    url, reason = await resolve_image_url(
+                        comp, self.image_bed
+                    )
+                    if url:
+                        image_codes.append(
+                            build_chatimage_code(url, config.chatimage_name)
+                        )
+                    else:
+                        skipped_images += 1
+                        if skipped_sample is None:
+                            skipped_sample = comp
+                            skip_reason = reason
+            elif images:
+                # 默认关闭：多数服务器未装 ChatImage，开箱不应外溢；
+                # 但用户排查时这里必须有可见日志，否则图片静默丢失无从查起
+                logger.info(
+                    f"[{PLUGIN_NAME}][{server_id}] 消息含 {len(images)} 张图片，"
+                    "但未开启 forward_image_to_mc，图片未转发"
+                )
+
+            if not content and not image_codes:
+                if skipped_images:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{server_id}] 消息中的图片均无可访问"
+                        f"的公开 URL（{skipped_images} 张），已跳过。"
+                        f"图片组件: {self._describe_image(skipped_sample)}；"
+                        f"兜底状态: {self.image_bed.status_text}；"
+                        f"原因: {skip_reason or '未知'}"
+                    )
                 continue
+
+            message = content
+            if image_codes:
+                message = (message + " " if message else "") + " ".join(image_codes)
 
             formatted = config.broadcast_format.format(
                 # {platform} 先经平台名称映射（platform_names，如 aiocqhttp→QQ）；
                 # 未配置或未命中时原样保留
                 platform=config.platform_display_name(platform),
                 sender=sender,
-                message=content,
+                message=message,
                 # {server} 取显示名称（留空用默认值，默认 MC）；{server_id} 始终为原始 ID
                 server=config.server_label,
                 server_id=server_id,
             )
             if await instance.client.broadcast(formatted, config.broadcast_color):
-                # 记录以防止该消息从游戏回传时形成回声
+                # 记录以防止该消息从游戏回传时形成回声。
+                # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
+                # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
                 self.message_bridge.mark_forwarded(server_id, content)
                 relayed = True
+                if image_codes:
+                    extra = (
+                        f"，另 {skipped_images} 张无公开 URL 已跳过"
+                        if skipped_images
+                        else ""
+                    )
+                    logger.info(
+                        f"[{PLUGIN_NAME}][{server_id}] 已转发 {len(image_codes)} "
+                        f"张图片到游戏内{extra}"
+                    )
                 # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
                 await self.message_bridge.mark_relayed(event, config)
 

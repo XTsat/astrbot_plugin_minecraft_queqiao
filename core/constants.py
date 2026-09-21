@@ -99,6 +99,32 @@ EMOJI_ROSE = 63  # 🌹
 # 给消息贴表情走的 OneBot 扩展接口（aiocqhttp `call_action` 动作名）
 API_SET_MSG_EMOJI_LIKE = "set_msg_emoji_like"
 
+# ---- ChatImage 图片转发 ----
+
+# 游戏端渲染图片依赖 ChatImage 模组（https://github.com/kitUIN/ChatImage）：
+# 图片以 [[CICode,url=...,name=...]] 代码广播进聊天栏，name 缺省用此名称
+DEFAULT_CHATIMAGE_NAME = "图片"
+
+# 第三方图床上传超时（秒，对应根级配置 image_upload_timeout）
+DEFAULT_IMAGE_UPLOAD_TIMEOUT = 30
+
+# 内置图片 HTTP 服务的监听参数（对应 builtin_http 模板的 host/port 默认值）
+DEFAULT_IMAGE_HTTP_HOST = "0.0.0.0"
+DEFAULT_IMAGE_HTTP_PORT = 8765
+
+# 内置图片 HTTP 服务的缓存参数：图片字节保留时长与最大条数。
+# 协议端不给公开 URL 的图片经此服务转存后，玩家客户端从
+# `{base_url}/img/<token>` 拉取；超时/超量条目在访问或登记时清理
+IMAGE_HOST_TTL = 1800  # 30 分钟
+IMAGE_HOST_MAX_IMAGES = 500
+
+# ---- MC → 外部：游戏内图片转发 ----
+
+# 游戏内聊天消息里的图片（ChatImage [[CICode,url=...]] 代码或直接贴出的图片链接）
+# 下载/读取后作为图片消息转发到外部会话。以下为下载上限与超时
+MAX_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+IMAGE_DOWNLOAD_TIMEOUT = 15  # 秒
+
 # ---- 多服务器选择 ----
 
 # 待选操作（多服务器时需要用户回编号）的有效期
