@@ -50,7 +50,7 @@ TEMPLATE_KEY_BUILTIN_HTTP = "builtin_http"
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.3.1",
+    "v0.3.4",
     "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
 )
 class MinecraftQueQiaoPlugin(Star):
@@ -389,56 +389,86 @@ class MinecraftQueQiaoPlugin(Star):
         yield event.plain_result(self.command_handler.help_text())
 
     @mc_group.command("status")
-    async def cmd_status(self, event: AstrMessageEvent):
+    async def cmd_status(self, event: AstrMessageEvent, target: str = ""):
         """查看服务器状态"""
-        server, hint = self.command_handler._select_target(event)
+        server, hint = self.command_handler._resolve_target(event, target)
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(await self.command_handler.handle_status(event, server.server_id))
 
     @mc_group.command("list")
-    async def cmd_list(self, event: AstrMessageEvent):
+    async def cmd_list(self, event: AstrMessageEvent, target: str = ""):
         """查看在线玩家列表"""
-        server, hint = self.command_handler._select_target(event)
+        server, hint = self.command_handler._resolve_target(event, target)
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(await self.command_handler.handle_list(event, server.server_id))
 
     @mc_group.command("player")
-    async def cmd_player(self, event: AstrMessageEvent, player_id: str):
-        """查看玩家信息"""
-        server, hint = self.command_handler._select_target(event)
+    async def cmd_player(self, event: AstrMessageEvent, player_id=GreedyStr):
+        """查看玩家信息
+
+        可在最前面加数字编号指定目标服务器（多服），仅一台时可省略。
+        """
+        target, rest = self.command_handler._split_optional_target(str(player_id))
+        if target is not None:
+            server, hint = self.command_handler._resolve_target(event, target)
+        else:
+            server, hint = self.command_handler._select_target(event)
+        if not rest:
+            yield event.plain_result("❌ 请提供玩家ID")
+            return
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_player(event, server.server_id, player_id)
+            await self.command_handler.handle_player(event, server.server_id, rest)
         )
 
     @mc_group.command("cmd")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_execute(self, event: AstrMessageEvent, command=GreedyStr):
-        """远程执行服务器指令"""
-        server, hint = self.command_handler._select_target(event)
+        """远程执行服务器指令
+
+        可在最前面加数字编号指定目标服务器（多服），仅一台时可省略。
+        """
+        target, rest = self.command_handler._split_optional_target(str(command))
+        if target is not None:
+            server, hint = self.command_handler._resolve_target(event, target)
+        else:
+            server, hint = self.command_handler._select_target(event)
+        if not rest:
+            yield event.plain_result("❌ 请提供要执行的指令")
+            return
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_cmd(event, server.server_id, str(command))
+            await self.command_handler.handle_cmd(event, server.server_id, rest)
         )
 
     @mc_group.command("say")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_say(self, event: AstrMessageEvent, content=GreedyStr):
-        """向游戏内广播消息"""
-        server, hint = self.command_handler._select_target(event)
+        """向游戏内广播消息
+
+        可在最前面加数字编号指定目标服务器（多服），仅一台时可省略。
+        """
+        target, rest = self.command_handler._split_optional_target(str(content))
+        if target is not None:
+            server, hint = self.command_handler._resolve_target(event, target)
+        else:
+            server, hint = self.command_handler._select_target(event)
+        if not rest:
+            yield event.plain_result("❌ 请提供要广播的内容")
+            return
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_say(event, server.server_id, str(content))
+            await self.command_handler.handle_say(event, server.server_id, rest)
         )
 
     @mc_group.command("bind")
@@ -466,17 +496,6 @@ class MinecraftQueQiaoPlugin(Star):
 
         umo = event.unified_msg_origin
         text = event.get_message_str().strip()
-
-        # 待选服务器：用户回复编号
-        if text.isdigit() and self.command_handler.has_pending_action(umo):
-            resolved = self.command_handler.resolve_selection(umo, int(text))
-            if resolved:
-                action, server_id, payload = resolved
-                if action == "select":
-                    result = await self.command_handler.handle_status(event, server_id)
-                    yield event.plain_result(result)
-            event.stop_event()
-            return
 
         # 图片不参与文本匹配，但可随消息一起转发到 MC
         images = self._extract_images(event)

@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.3-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.4-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -25,16 +25,16 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 | Command | Permission | Description |
 |---------|------------|-------------|
 | `/mc help` | Everyone | Show help and custom command list |
-| `/mc status` | Everyone | Show server status (incl. online count; player names too when the server exposes them) |
-| `/mc list` | Everyone | Show online players (RCON first; falls back to online query when RCON is off; output labels the source used) |
-| `/mc player <id>` | Everyone | Show player info (requires RCON) |
-| `/mc cmd <command>` | Admin | Execute a server command, filtered by the allow/deny list |
-| `/mc say <text>` | Admin | Broadcast a message in-game |
+| `/mc status [number]` | Everyone | Show server status (incl. online count; player names too when the server exposes them) |
+| `/mc list [number]` | Everyone | Show online players (RCON first; falls back to online query when RCON is off; output labels the source used) |
+| `/mc player [number] <id>` | Everyone | Show player info (requires RCON) |
+| `/mc cmd [number] <command>` | Admin | Execute a server command, filtered by the allow/deny list |
+| `/mc say [number] <text>` | Admin | Broadcast a message in-game |
 | `/mc bind <game_id>` | Everyone | Bind your game ID |
 | `/mc unbind` | Everyone | Remove the binding |
 | `/mc servers` | Everyone | List configured servers and connection state |
 
-When a session is bound to several servers, a numbered list is shown; reply with a number to pick the target server.
+When several servers are configured, prefix the command with a number to pick the target (e.g. `mc cmd 1 time set day` targets the first server); with only one server it can be omitted. Run `mc servers` to see each server's number.
 
 ### Custom commands
 
@@ -62,7 +62,7 @@ If user A has bound the game ID `Misaka` and sends `tp 114 514 1919` in the grou
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `target_sessions` | list | empty | **Target sessions**, shown at the very top of the list entry, right below "Enable this server". Session UMO list for MC messages; **defines the MC ↔ chat binding** — when empty the plugin connects but the group receives nothing |
-| `server_id` | string | `Server` | Unique server ID, **must match QueQiao's `server_name`** |
+| `server_id` | string | `Server` | Unique server ID, **must match QueQiao's `server_name`**; must differ across servers when configuring multiple |
 | `server_name` | string | empty | **Display name** of the server, may be Chinese (e.g. `生存服`). When empty, the **display-name default** below is used. Display only, does not affect the connection |
 | `server_name_default` | string | `MC` | **Display-name default**: what `{server}` and status output show when `server_name` is blank — with nothing filled in you get `[MC]<player>`. Clear it to render an empty string (no prefix) |
 | `ws_mode` | string | `forward` | `forward`: plugin dials QueQiao; `reverse`: plugin listens for QueQiao |

@@ -7,32 +7,16 @@
 - `<&xxx&>` 为自定义参数占位符，左右同名即按位置替换
 """
 
-import time
-
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
-from ..core.constants import PENDING_ACTION_TTL, PLUGIN_NAME
+from ..core.constants import PLUGIN_NAME
 from ..core.models_config import ServerConfig
 from ..core.server_manager import ServerInstance, ServerManager
 from ..services.binding import BindingService
 from ..services.renderer import InfoRenderer
 
 CUSTOM_CMD_SEPARATOR = "<<>>"
-
-
-class PendingAction:
-    """等待用户以数字选择服务器的待决操作。"""
-
-    def __init__(self, action: str, candidates: list[str], payload: str = "") -> None:
-        self.action = action
-        self.candidates = candidates
-        self.payload = payload
-        self.created_at = time.time()
-
-    @property
-    def expired(self) -> bool:
-        return (time.time() - self.created_at) > PENDING_ACTION_TTL
 
 
 class CommandHandler:
@@ -47,9 +31,7 @@ class CommandHandler:
         self.server_manager = server_manager
         self.binding = binding_service
         self.renderer = renderer
-        # umo -> PendingAction
-        self._pending: dict[str, PendingAction] = {}
-        # server_id -> [(trigger_tokens, param_names, template, raw)]
+        # server_id -> [(trigger_tokens, param_names, template)]
         self._custom: dict[str, list[tuple[list[str], list[str], str]]] = {}
 
     # ---- 自定义指令注册与匹配 ----
@@ -115,35 +97,6 @@ class CommandHandler:
                 lines.append(f"- {server_id}: {' '.join(trigger_tokens)}")
         return lines
 
-    # ---- 待决选择 ----
-
-    def has_pending_action(self, umo: str) -> bool:
-        action = self._pending.get(umo)
-        if action is None:
-            return False
-        if action.expired:
-            del self._pending[umo]
-            return False
-        return True
-
-    def set_pending(self, umo: str, action: PendingAction) -> None:
-        self._pending[umo] = action
-
-    def clear_pending(self, umo: str) -> None:
-        self._pending.pop(umo, None)
-
-    def resolve_selection(self, umo: str, index: int) -> tuple[str, str, str] | None:
-        """把用户输入的数字解析为 (action, server_id, payload)。"""
-        action = self._pending.get(umo)
-        if action is None or action.expired:
-            self._pending.pop(umo, None)
-            return None
-        if not (1 <= index <= len(action.candidates)):
-            return None
-        server_id = action.candidates[index - 1]
-        self._pending.pop(umo, None)
-        return action.action, server_id, action.payload
-
     # ---- 目标服务器选择 ----
 
     def _bound_servers(self, umo: str) -> list[ServerInstance]:
@@ -173,9 +126,10 @@ class CommandHandler:
     def _select_target(
         self, event: AstrMessageEvent
     ) -> tuple[ServerInstance | None, str | None]:
-        """为命令选择目标服务器。
+        """为命令自动选择目标服务器（无显式编号时使用）。
 
         返回 (实例, 提示文本)：实例为 None 时，提示文本需回给用户。
+        多台服务器时提示用户在指令前加数字编号选择目标。
         """
         umo = event.unified_msg_origin
         all_servers = self.server_manager.all()
@@ -186,23 +140,64 @@ class CommandHandler:
         if len(bound) == 1:
             return bound[0], None
         if len(bound) > 1:
-            return None, self._make_selection_hint("bound", bound)
+            return None, self._ambiguous_hint(bound)
 
         if len(all_servers) == 1:
             return all_servers[0], None
 
-        return None, self._make_selection_hint("all", all_servers)
+        return None, self._ambiguous_hint(all_servers)
 
-    def _make_selection_hint(self, scope: str, servers: list[ServerInstance]) -> str:
-        """构造服务器选择提示（配合数字回复使用）。"""
-        lines = ["当前有多个服务器，请回复编号选择："]
+    def _resolve_target(
+        self, event: AstrMessageEvent, target: str
+    ) -> tuple[ServerInstance | None, str | None]:
+        """按「显式数字编号优先，否则自动定位」解析目标服务器。
+
+        target 非空时按数字编号取实例（1 = 配置第一台，与 `mc servers`
+        列表顺序一致）；为空时回退 _select_target（单服自动命中、多服
+        提示加编号）。供带可选编号形参的子命令统一调用，实现
+        「单服省略、多服加编号」。
+        """
+        if target:
+            all_servers = self.server_manager.all()
+            if not all_servers:
+                return None, "❌ 尚未配置任何 MC 服务器，请先在插件配置中添加"
+            if not target.isdigit():
+                return None, f"❌ 目标编号需为数字，可用 1-{len(all_servers)}"
+            idx = int(target)
+            if not (1 <= idx <= len(all_servers)):
+                return None, f"❌ 编号 {idx} 超出范围，可用 1-{len(all_servers)}"
+            return all_servers[idx - 1], None
+        return self._select_target(event)
+
+    def _ambiguous_hint(self, servers: list[ServerInstance]) -> str:
+        """多服务器时提示用户在指令前加数字编号选择目标。"""
+        lines = ["⚠️ 当前有多台服务器，请在指令前加数字编号选择目标："]
         for index, instance in enumerate(servers, start=1):
             status = "🟢" if instance.connected else "🔴"
-            lines.append(f"{index}. {status} {instance.server_id}")
+            lines.append(f"{index}. {status} {instance.config.display_name}")
+        lines.append("示例：mc cmd 1 <指令>  /  mc status 2")
         return "\n".join(lines)
 
-    def build_selection_action(self, scope: str, servers: list[ServerInstance], payload: str) -> PendingAction:
-        return PendingAction("select", [s.server_id for s in servers], payload)
+    def _split_optional_target(self, text: str) -> tuple[str | None, str]:
+        """从文本首 token 拆出可选的数字目标编号（仅多服时生效）。
+
+        单服时不拆——首 token 视为指令/内容的一部分，避免 `mc say 123`
+        这类纯数字内容被误当编号。多服时若首 token 是 1..N 的数字，
+        视为显式指定，返回 (编号字符串, 剩余文本)；否则返回 (None, 原文)，
+        交给调用方走自动定位。
+        """
+        stripped = text.strip()
+        if not stripped:
+            return None, ""
+        all_servers = self.server_manager.all()
+        if len(all_servers) <= 1:
+            return None, stripped
+        head, _, rest = stripped.partition(" ")
+        if head.isdigit():
+            idx = int(head)
+            if 1 <= idx <= len(all_servers):
+                return head, rest.strip()
+        return None, stripped
 
     # ---- 子命令实现 ----
 
@@ -211,14 +206,16 @@ class CommandHandler:
             "📖 Minecraft 鹊桥互通 帮助",
             "",
             "mc help — 显示本帮助",
-            "mc status — 查看服务器状态",
-            "mc list — 查看在线玩家列表",
-            "mc player <玩家ID> — 查看玩家信息",
-            "mc cmd <指令> — 远程执行服务器指令（管理员）",
-            "mc say <内容> — 向游戏内广播消息（管理员）",
+            "mc status [编号] — 查看服务器状态",
+            "mc list [编号] — 查看在线玩家列表",
+            "mc player [编号] <玩家ID> — 查看玩家信息",
+            "mc cmd [编号] <指令> — 远程执行服务器指令（管理员）",
+            "mc say [编号] <内容> — 向游戏内广播消息（管理员）",
             "mc bind <游戏ID> — 绑定你的游戏ID",
             "mc unbind — 解除绑定",
             "mc servers — 查看服务器与连接状态",
+            "",
+            "多台服务器时在指令前加数字编号选择目标（mc servers 可查看编号）；仅一台时可直接省略",
         ]
         custom = self.custom_command_help()
         if custom:

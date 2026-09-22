@@ -2383,3 +2383,107 @@ assert _r6.source == "rcon" and _r6.rcon_channel == "direct" \
 print("OK  sample 解析(剥离§/跳畸形) / 渲染含RCON通道细分 / 三层兜底顺序 / 超时不重发降级 SLP")
 
 print("\n全部离线逻辑校验通过 ✅（含在线玩家三层兜底）")
+
+print("\n=== 31. 多服务器：数字编号指定目标与单服省略 ===")
+from astrbot_plugin_minecraft_queqiao.handlers.commands import CommandHandler as _CH31
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC31
+import astrbot_plugin_minecraft_queqiao.handlers.commands as _cmd_mod31
+import astrbot_plugin_minecraft_queqiao.core.constants as _c31
+
+
+class _Inst31:
+    """服务器实例桩：含 _resolve_target/_ambiguous_hint 关心的字段。"""
+    def __init__(self, sid, name=None, connected=True):
+        self.server_id = sid
+        self.connected = connected
+        cfg = {"server": {"server_id": sid}}
+        if name:
+            cfg["server"]["server_name"] = name
+        self.config = _SC31.from_dict(cfg)
+
+
+class _SM31:
+    """ServerManager 桩：all 返回配置顺序（与 mc servers 一致）。"""
+    def __init__(self, insts):
+        self._insts = list(insts)
+    def get(self, sid):
+        for i in self._insts:
+            if i.server_id == sid:
+                return i
+        return None
+    def all(self):
+        return list(self._insts)
+
+
+class _Ev31:
+    """事件桩：仅含 unified_msg_origin。"""
+    def __init__(self, umo="umo:GroupMessage:1"):
+        self.unified_msg_origin = umo
+
+
+# (a) 死代码已彻底移除：旧的「回复编号选择」pending 机制从未真正接线
+assert not hasattr(_cmd_mod31, "PendingAction"), "PendingAction 死代码应移除"
+assert not hasattr(_c31, "PENDING_ACTION_TTL"), "常量 PENDING_ACTION_TTL 应移除"
+for _dead in ("has_pending_action", "set_pending", "resolve_selection",
+              "build_selection_action", "_make_selection_hint", "PendingAction"):
+    assert not hasattr(_CH31, _dead), f"死方法/类 {_dead} 应移除"
+
+# (b) _split_optional_target：仅多服时拆首 token 数字编号，单服一律不拆
+_h1 = _CH31(_SM31([_Inst31("s1")]), None, None)            # 单服
+_h2 = _CH31(_SM31([_Inst31("survival", "生存服"),
+                   _Inst31("creative", "创造服")]), None, None)  # 多服
+# 单服不拆：首 token 是数字也当内容（避免 mc say 123 被误当编号）
+assert _h1._split_optional_target("1 say hi") == (None, "1 say hi")
+assert _h1._split_optional_target("say hi") == (None, "say hi")
+# 多服首 token 有效数字 → 拆出编号字符串 + 剩余
+assert _h2._split_optional_target("1 time set day") == ("1", "time set day")
+assert _h2._split_optional_target("2") == ("2", ""), "仅编号无后续 → rest 空"
+# 多服首 token 非数字 → 不拆
+assert _h2._split_optional_target("time set day") == (None, "time set day")
+# 多服首 token 数字超出范围 → 不拆（交给自动定位，由提示告知可用范围）
+assert _h2._split_optional_target("3 time set day") == (None, "3 time set day")
+# 空文本
+assert _h2._split_optional_target("") == (None, "")
+assert _h2._split_optional_target("   ") == (None, "")
+
+# (c) 单服：省略编号自动命中那台（核心需求：只有一个服务器时能省略）
+_srv, _hint = _h1._resolve_target(_Ev31(), "")
+assert _srv is not None and _srv.server_id == "s1" and _hint is None, (_srv, _hint)
+# 单服写编号 1 也行（1 = 那台）
+_srv, _hint = _h1._resolve_target(_Ev31(), "1")
+assert _srv.server_id == "s1" and _hint is None
+# 单服写超出范围的编号（2）→ 提示超出范围
+_srv, _hint = _h1._resolve_target(_Ev31(), "2")
+assert _srv is None and "2" in _hint and "1-1" in _hint, _hint
+
+# (d) 多服：省略编号 → 提示加编号，hint 含 1./2. 编号与显示名
+_srv, _hint = _h2._resolve_target(_Ev31(), "")
+assert _srv is None
+assert "1." in _hint and "生存服" in _hint, _hint
+assert "2." in _hint and "创造服" in _hint, _hint
+assert "mc cmd 1" in _hint, _hint
+# 多服编号 1/2 命中对应那台（核心需求：两台 MC 接一个群能分开下指令）
+_srv, _ = _h2._resolve_target(_Ev31(), "1"); assert _srv.server_id == "survival"
+_srv, _ = _h2._resolve_target(_Ev31(), "2"); assert _srv.server_id == "creative"
+# 多服编号超出范围 → 提示可用范围
+_srv, _hint = _h2._resolve_target(_Ev31(), "3")
+assert _srv is None and "3" in _hint and "1-2" in _hint, _hint
+# 多服非数字 → 提示需为数字
+_srv, _hint = _h2._resolve_target(_Ev31(), "x")
+assert _srv is None and "数字" in _hint, _hint
+
+# (e) 无服务器：任何情况都提示先配置
+_h0 = _CH31(_SM31([]), None, None)
+_srv, _hint = _h0._resolve_target(_Ev31(), "")
+assert _srv is None and "尚未配置" in _hint, _hint
+_srv, _hint = _h0._resolve_target(_Ev31(), "1")
+assert _srv is None and "尚未配置" in _hint, "无服时给编号也应提示未配置"
+
+# (f) help 文案已带编号说明
+_help = _h2.help_text()
+assert "mc status [编号]" in _help
+assert "mc cmd [编号] <指令>" in _help
+assert "mc player [编号] <玩家ID>" in _help
+assert "数字编号" in _help, "help 应说明多服加编号/单服省略规则"
+print("OK  数字编号拆分(仅多服) / 单服省略自动命中 / 多服提示含编号列表 / "
+      "死代码已移除 / help 已同步")

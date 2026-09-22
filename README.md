@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.3-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.4-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -25,16 +25,16 @@
 | 命令 | 权限 | 说明 |
 |------|------|------|
 | `/mc help` | 全部 | 显示帮助信息与自定义指令列表 |
-| `/mc status` | 全部 | 查看服务器状态（含在线人数；服务器返回名单时也显示玩家名） |
-| `/mc list` | 全部 | 查看在线玩家列表（优先 RCON，未开 RCON 时用在线查询兜底；回报标注取数方式） |
-| `/mc player <玩家ID>` | 全部 | 查看玩家信息（依赖 RCON） |
-| `/mc cmd <指令>` | 管理员 | 远程执行服务器指令，受黑白名单约束 |
-| `/mc say <内容>` | 管理员 | 向游戏内广播消息 |
+| `/mc status [编号]` | 全部 | 查看服务器状态（含在线人数；服务器返回名单时也显示玩家名） |
+| `/mc list [编号]` | 全部 | 查看在线玩家列表（优先 RCON，未开 RCON 时用在线查询兜底；回报标注取数方式） |
+| `/mc player [编号] <玩家ID>` | 全部 | 查看玩家信息（依赖 RCON） |
+| `/mc cmd [编号] <指令>` | 管理员 | 远程执行服务器指令，受黑白名单约束 |
+| `/mc say [编号] <内容>` | 管理员 | 向游戏内广播消息 |
 | `/mc bind <游戏ID>` | 全部 | 绑定你的游戏ID |
 | `/mc unbind` | 全部 | 解除绑定 |
 | `/mc servers` | 全部 | 查看已配置服务器与连接状态 |
 
-当前会话关联多台服务器时，会显示服务器列表，回复编号选择目标服务器。
+多台服务器时，在指令前加数字编号选择目标（如 `mc cmd 1 time set day` 定向第 1 台）；仅一台服务器时可直接省略。`mc servers` 可查看各服务器对应的编号。
 
 ### 自定义指令
 
@@ -62,7 +62,7 @@
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `target_sessions` | list | 空 | **目标会话**，位于列表项最上方「启用此服务器」下方。MC 消息转发到的会话 UMO 列表，**此项决定 MC 与群聊的绑定关系**，不填则插件能连上但群里收不到消息 |
-| `server_id` | string | `Server` | 服务器唯一标识，**必须与鹊桥 `config.yml` 的 `server_name` 一致** |
+| `server_id` | string | `Server` | 服务器唯一标识，**必须与鹊桥 `config.yml` 的 `server_name` 一致**；多台服务器时每台的 `server_id` 必须互不相同 |
 | `server_name` | string | 空 | **服务器显示名称**，可写中文（如 `生存服`）。留空时用下方「显示名称默认值」；仅影响展示，不影响连接 |
 | `server_name_default` | string | `MC` | **显示名称默认值**：`server_name` 留空时 `{server}` 与状态查询显示的内容，什么都不填即显示 `[MC]<玩家名>`。改成留空则输出空串（无前缀效果） |
 | `ws_mode` | string | `forward` | `forward` 插件连鹊桥；`reverse` 插件开服务端等鹊桥连入 |

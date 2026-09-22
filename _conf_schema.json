@@ -10,6 +10,8 @@
     "templates": {
       "server": {
         "name": "MC服务器",
+        "display_item": "server.server_name",
+        "hide_hint_in_list": true,
         "hint": "通过鹊桥连接的 MC 服务器配置",
         "items": {
           "enabled": {
@@ -30,7 +32,7 @@
               "server_id": {
                 "type": "string",
                 "description": "服务器ID",
-                "hint": "用于区分不同服务器的唯一标识。正向模式下作为 x-self-name 发送，必须与鹊桥 config.yml 中的 server_name 一致",
+                "hint": "用于区分不同服务器的唯一标识。正向模式下作为 x-self-name 发送，必须与鹊桥 config.yml 中的 server_name 一致。配置多台服务器时，每台的 server_id 必须互不相同，否则会导致连接冲突",
                 "default": "Server"
               },
               "server_name": {

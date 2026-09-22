@@ -125,11 +125,6 @@ IMAGE_HOST_MAX_IMAGES = 500
 MAX_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
 IMAGE_DOWNLOAD_TIMEOUT = 15  # 秒
 
-# ---- 多服务器选择 ----
-
-# 待选操作（多服务器时需要用户回编号）的有效期
-PENDING_ACTION_TTL = 60
-
 
 def prefix_matches(prefix: str, text: str) -> bool:
     """判断文本是否以指定前缀触发（词边界感知，字母部分不区分大小写）。
