@@ -120,6 +120,13 @@ class CommandHandler:
     def attach_bridge(self, bridge) -> None:
         self._bridge = bridge
 
+    # 性能监控（TPS/延迟）采集器：注入后 /mc status 附带最近采样值
+    def attach_monitor(self, monitor) -> None:
+        self._monitor = monitor
+
+    # 声明为类属性，便于 attach_monitor 之前安全访问
+    _monitor = None
+
     # 声明为类属性，便于 attach_bridge 之前安全访问
     _bridge = None
 
@@ -235,7 +242,18 @@ class CommandHandler:
             return f"❌ 服务器 {label} 未连接鹊桥"
 
         status = await instance.get_status_model()
-        return await self.renderer.render_status(server_name, status, label)
+        # 性能监控的最近采样（TPS 三档 / API 延迟），与实时状态查询相互独立；
+        # 未启用监控或尚无采样时为 None，渲染层自动省略
+        latest = self._monitor.store.latest(server_name) if self._monitor else None
+        tps = None
+        latency_ms = None
+        if latest is not None:
+            if latest.tps1 is not None or latest.tps5 is not None or latest.tps15 is not None:
+                tps = (latest.tps1, latest.tps5, latest.tps15)
+            latency_ms = latest.latency_ms
+        return await self.renderer.render_status(
+            server_name, status, label, tps=tps, latency_ms=latency_ms
+        )
 
     async def handle_list(self, event: AstrMessageEvent, server_name: str) -> str:
         instance = self.server_manager.get(server_name)

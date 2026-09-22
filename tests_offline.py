@@ -819,6 +819,7 @@ _alias4 = {
     ("cmd", "rcon_host"): "rcon_host",
     ("cmd", "rcon_port"): "rcon_port",
     ("cmd", "rcon_password"): "rcon_password",
+    # 注：性能监控设置不在 conf schema 中（只在仪表盘内维护），故此处无对应别名
 }
 _code_defaults4 = _S2.from_dict({})  # 代码侧默认（含防御式兜底）
 for _path4, _sd4 in _flat_defaults4(_tpl4):
@@ -2349,10 +2350,10 @@ def _mk_inst30(client, rcon=None):
     _i.client = client; _i.rcon = rcon or _Rcon30()
     return _i
 
-# c1) RCON list 成功 → source=rcon，不再查 SLP
+# c1) RCON list 成功 → source=rcon，不再查 SLP（进入面板/手动刷新 force 探测场景）
 _i1 = _mk_inst30(_Cli30(connected=True,
     rcon_out="There are 2 of a max of 20 players online: A, B"))
-_r1 = asyncio.run(_i1.fetch_player_list())
+_r1 = asyncio.run(_i1.fetch_player_list(force_rcon=True))
 assert _r1.source == "rcon" and _r1.rcon_channel == "queqiao" \
     and _r1.names == ["A", "B"], (_r1.source, _r1.rcon_channel, _r1.names)
 assert _i1.client.rcon_calls == 1
@@ -2395,7 +2396,47 @@ _i6 = _mk_inst30(_Cli30(connected=False),
 _r6 = asyncio.run(_i6.fetch_player_list())
 assert _r6.source == "rcon" and _r6.rcon_channel == "direct" \
     and _r6.names == ["Steve"], (_r6.source, _r6.rcon_channel, _r6.names)
-print("OK  sample 解析(剥离§/跳畸形) / 渲染含RCON通道细分 / 三层兜底顺序 / 超时不重发降级 SLP")
+# c7) 鹊桥 RCON 已确认不可用（False）后不再重复探测：
+#     进入面板/手动刷新（force）探测确认不可用后，普通请求降级走 SLP
+#     sample，不再向未开启 RCON 的鹊桥端发 send_rcon_command
+_i7 = _mk_inst30(_Cli30(connected=True, rcon_out=None,
+    status={"server_list_ping": {"players": {"online": 1, "max": 20, "sample": [
+        {"name": "Steve", "id": "u"}]}}}))
+_r7a = asyncio.run(_i7.fetch_player_list(force_rcon=True))
+assert _i7.queqiao_rcon_ok is False and _i7.client.rcon_calls == 1
+_r7b = asyncio.run(_i7.fetch_player_list())
+assert _i7.client.rcon_calls == 1, "已确认鹊桥 RCON 不可用后不得重复探测"
+assert _r7b.source == "slp" and _r7b.names == ["Steve"]
+# 未确认（None，如重连后）状态下，普通请求不主动探测（探测只由 force 触发）
+_i7d = _mk_inst30(_Cli30(connected=True, rcon_out=None,
+    status={"server_list_ping": {"players": {"online": 1, "max": 20, "sample": [
+        {"name": "Steve", "id": "u"}]}}}))
+_r7d = asyncio.run(_i7d.fetch_player_list())
+assert _i7d.client.rcon_calls == 0, "未确认状态下的普通请求不主动探测 RCON"
+assert _i7d.queqiao_rcon_ok is None and _r7d.source == "slp"
+# 重连（None）后再次进入面板/手动刷新（force）→ 恢复探测
+_i7.queqiao_rcon_ok = None
+_i7.client._rcon_out = "There are 1 of a max of 20 players online: Steve"
+_r7c = asyncio.run(_i7.fetch_player_list(force_rcon=True))
+assert _i7.client.rcon_calls == 2 and _r7c.source == "rcon" \
+    and _r7c.rcon_channel == "queqiao", (_i7.client.rcon_calls, _r7c.source)
+# c8) 手动刷新（force_rcon=True）：每次都会重置「不可用」结论重新探测一次，
+#     确认不可用后普通取数保持静默，直到下一次 force（再次进入面板/手动刷新）
+_i8 = _mk_inst30(_Cli30(connected=True, rcon_out=None,
+    status={"server_list_ping": {"players": {"online": 0, "max": 20}}}))
+asyncio.run(_i8.fetch_player_list(force_rcon=True))
+assert _i8.queqiao_rcon_ok is False and _i8.client.rcon_calls == 1
+asyncio.run(_i8.fetch_player_list(force_rcon=True))
+assert _i8.client.rcon_calls == 2, "再次进入面板/手动刷新应重新探测一次鹊桥 RCON"
+assert _i8.queqiao_rcon_ok is False
+asyncio.run(_i8.fetch_player_list())
+assert _i8.client.rcon_calls == 2, "确认不可用后普通取数不得再探测"
+# force 但鹊桥未连接：不重置（无意义），直接走其它通道
+_i8b = _mk_inst30(_Cli30(connected=False))
+_i8b.queqiao_rcon_ok = False
+asyncio.run(_i8b.fetch_player_list(force_rcon=True))
+assert _i8b.queqiao_rcon_ok is False
+print("OK  sample 解析(剥离§/跳畸形) / 渲染含RCON通道细分 / 三层兜底顺序 / 超时不重发降级 SLP / 鹊桥RCON不可用不重复探测 / 每次force重新探测且普通取数静默")
 
 print("\n全部离线逻辑校验通过 ✅（含在线玩家三层兜底）")
 
@@ -2718,10 +2759,15 @@ _server_srv1 = next(
 assert "queqiao" not in _server_srv1["rcon_channels"]
 
 # ② 鹊桥 send_rcon_command 真实成功 → queqiao_rcon_ok=True，rcon_channels 含 queqiao
+# ① 的探测失败已把 queqiao_rcon_ok 置 False（本连接内不再重复探测），
+# 重置为 None 模拟重连后，以 force=1（进入面板/手动刷新）触发重新探测
+_mock_instance.queqiao_rcon_ok = None
 async def _fake_queqiao_rcon(cmd: str) -> str:
     return "There are 1 of a max of 20 players online: XTxiaotong"
 
 _mock_instance.client.send_rcon_command = _fake_queqiao_rcon  # type: ignore[method-assign]
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wam34b
+_wam34b.request.query = {"force": "1"}  # 模拟进入面板/手动刷新：触发 RCON 探测
 _res_servers3 = _asyncio34.run(_wac34.get_servers())
 _server_srv1 = next(
     s for s in _res_servers3["data"]["servers"] if s["server_name"] == "Server"
@@ -2730,9 +2776,30 @@ assert "queqiao" in _server_srv1["rcon_channels"]
 assert _server_srv1["players"]["source"] == "rcon"
 assert _server_srv1["players"]["names"] == ["XTxiaotong"]
 del _mock_instance.client.send_rcon_command  # 还原真实方法
+_wam34b.request.query = {}  # 复位，避免影响后续 (c) 段 force 传递断言
 _mock_instance.client._connected = False  # 复位
 _mock_instance.queqiao_rcon_ok = None
 _mock_instance.online_players.clear()  # 清空 (e) 期间被 list 探测填充的在线玩家缓存
+
+# ③ /servers?force=1（仪表盘手动刷新）→ fetch_player_list 收到 force_rcon=True；
+#    普通请求 / 非法值 → False（自动轮询不重复探测）
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wam34
+_force_calls34 = []
+_orig_fetch34 = _mock_instance.fetch_player_list
+async def _spy_fetch34(force_rcon=False, status_model=None):
+    _force_calls34.append(force_rcon)
+    return _PLR34(names=[], source="count")
+_mock_instance.fetch_player_list = _spy_fetch34  # type: ignore[method-assign]
+_mock_instance.client._connected = True
+_wam34.request.query = {"force": "1"}
+_asyncio34.run(_wac34.get_servers())
+_wam34.request.query = {"force": "yes"}
+_asyncio34.run(_wac34.get_servers())
+_wam34.request.query = {}
+_asyncio34.run(_wac34.get_servers())
+assert _force_calls34 == [True, False, False], _force_calls34
+_mock_instance.fetch_player_list = _orig_fetch34  # type: ignore[method-assign]
+_mock_instance.client._connected = False
 
 # (f) MOTD description 文本组件解析：{"text": "..."} 应提取为纯文本而非花括号字典
 _ss_motd = _SS34.from_dict({
@@ -2975,3 +3042,533 @@ assert _res_clear_bad34["status_code"] == 400
 
 print("OK  ServerStatus/PlayerListResult to_dict / Metrics 收集发布 / WebApiController 路由注册与逻辑 / 在线玩家事件追踪 / 单服务器标签页指标 / 按天分片持久化终端日志")
 
+
+print("\n=== 35. 性能监控：TPS 解析 / 配置 / 时序存储 / 采集器 / Web API ===")
+import asyncio as _asyncio35
+import shutil as _shutil35
+import time as _time35
+from datetime import date as _date35, timedelta as _td35, datetime as _dt35
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC35
+from astrbot_plugin_minecraft_queqiao.services.monitor import (
+    MonitorCollector as _MC35,
+    MonitorSample as _MS35,
+    MonitorSettings as _MSettings35,
+    MonitorStore as _MStore35,
+    parse_tps as _parse_tps35,
+    safe_server_name as _safe_name35,
+)
+from astrbot_plugin_minecraft_queqiao.services.slp_ping import (
+    brand_from_slp as _brand35,
+    mc_ping as _mc_ping35,
+)
+
+# (a) TPS 输出解析：Paper/Spigot、spark 装饰前缀、带 TPS 字样的裸三数、失败与空
+assert _parse_tps35("TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0") == (20.0, 20.0, 20.0)
+assert _parse_tps35("TPS from last 1m, 5m, 15m: 12.5, 15.2, 17.8") == (12.5, 15.2, 17.8)
+assert _parse_tps35("⏱  TPS from last 1m, 5m, 15m: 20.0, 18.2, 19.5") == (20.0, 18.2, 19.5)
+assert _parse_tps35("§aTPS from last 1m, 5m, 15m: 19.5, 20.0, 20.0") == (19.5, 20.0, 20.0)
+# 无标准前缀但有 TPS 字样的裸三数（防御兼容）
+assert _parse_tps35("TPS: 20.0, 19.0, 18.0") == (20.0, 19.0, 18.0)
+# 原版端 Unknown command / 空输出 / None → 不可解析
+assert _parse_tps35('Unknown command. Type "/help" for help.') is None
+assert _parse_tps35("") is None
+assert _parse_tps35(None) is None
+# 裸三数但无 TPS 语境 → 不误判（如 RCON 返回的纯数字行）
+assert _parse_tps35("20.0, 20.0, 20.0") is None
+
+# (b) ServerConfig 监控配置：默认值 / 显式配置 / 非法值兜底
+_sc35_default = _SC35.from_dict({})
+assert _sc35_default.monitor_enabled is True, "监控默认开启（开箱即用）"
+assert _sc35_default.monitor_interval == 60
+assert _sc35_default.monitor_retention_days == 7
+assert _sc35_default.monitor_tps_command == "auto"
+_sc35_cfg = _SC35.from_dict({"monitor": {
+    "enabled": True, "interval": 30, "retention_days": 3, "tps_command": "spark tps"}})
+assert _sc35_cfg.monitor_enabled is True
+assert _sc35_cfg.monitor_interval == 30
+assert _sc35_cfg.monitor_retention_days == 3
+assert _sc35_cfg.monitor_tps_command == "spark tps"
+# 显式关闭/手动调参仍生效（手写配置 JSON 的 monitor 分组）
+assert _SC35.from_dict({"monitor": {"enabled": False}}).monitor_enabled is False
+# 间隔过小 / 保留为 0 / 空指令名都会失真或加重服务器负担，必须兜底
+_sc35_bad = _SC35.from_dict({"monitor": {"interval": 5, "retention_days": 0,
+                                         "tps_command": "   "}})
+assert _sc35_bad.monitor_interval >= 10, "采集间隔下限 10 秒"
+assert _sc35_bad.monitor_retention_days >= 1, "保留天数至少 1 天"
+assert _sc35_bad.monitor_tps_command == "auto", "空 TPS 指令回落自动选择"
+assert _SC35.from_dict({"monitor": {"interval": "abc"}}).monitor_interval == 60
+# MonitorSettings：ping 探测目标解析（地址可带端口 / 端口下限钳制）
+_mset_ping35 = _MSettings35.from_dict(
+    {"ping_host": "mc.example.com:25566", "ping_port": 1})
+assert _mset_ping35.ping_host == "mc.example.com:25566"
+assert _mset_ping35.ping_port == 1
+assert _MSettings35.from_dict({"ping_port": "abc"}).ping_port == 25565
+assert _MSettings35.from_dict({}).ping_host == "" and \
+    _MSettings35.from_dict({}).ping_port == 25565
+# default_tab：只接受 tps / latency，非法回落 tps
+assert _MSettings35.from_dict({"default_tab": "latency"}).default_tab == "latency"
+assert _MSettings35.from_dict({"default_tab": "bogus"}).default_tab == "tps"
+assert _MSettings35.from_dict({}).default_tab == "tps"
+# realtime_interval（实时采集频率）：1~60 钳制
+assert _MSettings35.from_dict({"realtime_interval": 3}).realtime_interval == 3
+assert _MSettings35.from_dict({"realtime_interval": 0}).realtime_interval == 1
+assert _MSettings35.from_dict({"realtime_interval": 999}).realtime_interval == 60
+assert _MSettings35.from_dict({}).realtime_interval == 5
+# auto_refresh_interval（自动刷新间隔）：10~3600 钳制
+assert _MSettings35.from_dict({"auto_refresh_interval": 30}).auto_refresh_interval == 30
+assert _MSettings35.from_dict({"auto_refresh_interval": 1}).auto_refresh_interval == 10
+assert _MSettings35.from_dict({"auto_refresh_interval": 99999}).auto_refresh_interval == 3600
+assert _MSettings35.from_dict({}).auto_refresh_interval == 10
+# auto 指令解析：按 get_status 识别到的服务端类型自动选指令
+from astrbot_plugin_minecraft_queqiao.services.monitor import (  # noqa: E402
+    resolve_tps_command as _resolve_tps35,
+)
+assert _resolve_tps35("forge 1.20.1", "auto") == "forge tps"
+assert _resolve_tps35("Paper 1.20.4", "") == "tps"
+assert _resolve_tps35("Fabric 0.14.21", "auto") == "spark tps", "Fabric 无内置 tps，用 spark"
+assert _resolve_tps35("spigot 1.16.5", "auto") == "tps"
+assert _resolve_tps35(None, "auto") == "tps", "未知/无缓存一律默认尝试 tps"
+assert _resolve_tps35("forge 1.20.1", "spark tps") == "spark tps", "显式指令优先于自动"
+
+# (b2) SLP 直连 ping 端到端：本地起一个伪造 MC 状态服务端，真实走协议
+def _mc_varint_enc35(value):
+    out = bytearray()
+    while True:
+        if value & ~0x7F == 0:
+            out.append(value)
+            return bytes(out)
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+
+
+async def _fake_mc_server35(reader, writer):
+    try:
+        # 读握手包（长度前缀 VarInt + 内容）
+        length = 0
+        shift = 0
+        while True:
+            b = (await reader.readexactly(1))[0]
+            length |= (b & 0x7F) << shift
+            shift += 7
+            if b & 0x80 == 0:
+                break
+        await reader.readexactly(length)
+        await reader.readexactly(2)  # 状态请求（len=1, id=0）
+        body = json.dumps({
+            "version": {"name": "forge 1.20.1", "protocol": 765},
+            "players": {"max": 20, "online": 3},
+            "description": {"text": "A Forge Server"},
+        }).encode("utf-8")
+        payload = b"\x00" + _mc_varint_enc35(len(body)) + body
+        writer.write(_mc_varint_enc35(len(payload)) + payload)
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+
+async def _fake_http_server35(reader, writer):
+    """非 MC 服务（如鹊桥 Web 端口）：对任意请求回一个 HTTP 响应。"""
+    try:
+        await reader.read(4096)
+        writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+
+async def _slp_e2e35():
+    server = await _asyncio35.start_server(_fake_mc_server35, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    ping = await _mc_ping35("127.0.0.1", port, timeout=3.0)
+    server.close()
+    await server.wait_closed()
+    assert ping is not None and ping.rtt_ms is not None, "直连 SLP ping 应返回 RTT"
+    assert ping.online == 3 and ping.max_players == 20
+    assert ping.version_name == "forge 1.20.1"
+    assert _brand35(ping.version_name, ping.description) == "forge"
+    # 非 MC 端口（无监听）：返回 None 而非抛异常
+    assert await _mc_ping35("127.0.0.1", 1, timeout=1.0) is None
+    # 伪 HTTP 服务（如鹊桥 Web 端口）：响应即使能读也必须判失败，
+    # 防止把非游戏端口误测成假低延迟
+    http_server = await _asyncio35.start_server(_fake_http_server35, "127.0.0.1", 0)
+    http_port = http_server.sockets[0].getsockname()[1]
+    try:
+        assert await _mc_ping35("127.0.0.1", http_port, timeout=2.0) is None, \
+            "HTTP 响应不应被当作 MC 状态响应"
+    finally:
+        http_server.close()
+        await http_server.wait_closed()
+    # 空主机：直接 None
+    assert await _mc_ping35("", 25565, timeout=1.0) is None
+_asyncio35.run(_slp_e2e35())
+# schema 守卫：监控设置不占用 conf schema（只在仪表盘内维护），
+# reconnect 仍须位于模板项最底部（35 组旧契约）
+_sh35 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
+                   .read_text(encoding="utf-8"))
+_items35 = _sh35["mc_servers"]["templates"]["server"]["items"]
+_keys35 = list(_items35.keys())
+assert "monitor" not in _items35, "监控设置不应出现在 conf schema 中"
+assert _keys35.index("reconnect") == len(_keys35) - 1, "reconnect 分组必须位于模板项最底部"
+# 代码默认值与常量一致
+from astrbot_plugin_minecraft_queqiao.core.constants import (  # noqa: E402
+    DEFAULT_MONITOR_INTERVAL as _DMI35,
+    DEFAULT_MONITOR_RETENTION_DAYS as _DMRD35,
+    DEFAULT_MONITOR_TPS_COMMAND as _DMTC35,
+)
+assert _sc35_default.monitor_interval == _DMI35
+assert _sc35_default.monitor_retention_days == _DMRD35
+assert _sc35_default.monitor_tps_command == _DMTC35
+
+# (c) MonitorStore：落盘 / 最新值 / 桶聚合 / 摘要 / P95 / 坏行 / 跨天 / 清理
+_mdir35 = pathlib.Path("/tmp/queqiao_test_monitor")
+if _mdir35.exists():
+    _shutil35.rmtree(_mdir35)
+_mdir35.mkdir(parents=True, exist_ok=True)
+_mst35 = _MStore35(_mdir35)
+_mst35.load()
+# 基准时间取整分钟时刻：三个样本落在同一 60s 桶内，避免横跨桶边界断言 flaky
+_now35 = float(_dt35.fromtimestamp(_time35.time()).replace(second=0, microsecond=0).timestamp())
+_mst35.append("Srv", _MS35(ts=_now35, online=2, tps1=20.0, tps5=20.0, tps15=19.5, latency_ms=8.2))
+_mst35.append("Srv", _MS35(ts=_now35 + 1, online=3, tps1=19.0, tps5=19.5, tps15=19.5, latency_ms=15.4))
+_mst35.append("Srv", _MS35(ts=_now35 + 2, online=3, tps1=18.0, tps5=19.0, tps15=19.5, latency_ms=22.6))
+assert _mst35.latest("Srv").tps1 == 18.0 and _mst35.latest("Srv").latency_ms == 22.6
+assert _mst35.sample_count("Srv") == 3
+assert _mst35.latest("Never") is None and _mst35.sample_count("Never") == 0
+# 落盘：当天 JSONL 三行（JSONL 逐行追加）
+_day35 = _date35.today().strftime("%Y-%m-%d")
+_srv_dir35 = _mdir35 / "monitor" / "Srv"
+assert (_srv_dir35 / f"{_day35}.jsonl").exists(), "采样应写入当天分片"
+assert len(list((_srv_dir35 / f"{_day35}.jsonl").read_text(encoding="utf-8").splitlines())) == 3
+# 桶聚合：60s 桶内 3 样本 → avg 19 / min 18 / max 20 / count 3
+_series35 = _mst35.series("Srv", since_ts=_now35 - 3600, bucket_seconds=60)
+_tps_pts35 = _series35["tps"]["points"]
+assert len(_tps_pts35) == 1, _tps_pts35
+assert _tps_pts35[0]["avg"] == 19.0 and _tps_pts35[0]["min"] == 18.0 \
+    and _tps_pts35[0]["max"] == 20.0 and _tps_pts35[0]["count"] == 3, _tps_pts35
+_tps_sum35 = _series35["tps"]["summary"]
+assert _tps_sum35["avg"] == 19.0 and _tps_sum35["min"] == 18.0 and _tps_sum35["max"] == 20.0
+assert _series35["latency"]["summary"] == \
+    {"count": 3, "avg": 15.4, "min": 8.2, "max": 22.6, "p95": 22.6}, _series35["latency"]["summary"]
+# P95：21 个样本 [0..20] 的 95% 分位应为 19
+for _vi35 in range(21):
+    _mst35.append("SrvP95", _MS35(ts=_now35, tps1=float(_vi35)))
+_p95_sum35 = _mst35.series("SrvP95", since_ts=_now35 - 3600, bucket_seconds=60)["tps"]["summary"]
+assert _p95_sum35["p95"] == 19.0, _p95_sum35
+# 无样本时间窗 → 空点序列与零计数摘要
+assert _mst35.series("Srv", since_ts=_now35 + 99999, bucket_seconds=60)["tps"]["points"] == []
+assert _mst35.series("Srv", since_ts=_now35 + 99999, bucket_seconds=60)["tps"]["summary"]["count"] == 0
+# 服务器名安全转义（防路径注入）
+assert _safe_name35("Srv/A:B") == "Srv_A_B" and _safe_name35("..") == "server"
+# 坏行容错：非法 JSON 行被跳过，正常行不受影响（在已有分片末尾追加坏行）
+with open(_srv_dir35 / f"{_day35}.jsonl", "a", encoding="utf-8") as _fh35:
+    _fh35.write("not a json line\n")
+_bad35 = _MStore35(_mdir35)
+_bad35.load()
+assert _bad35.series("Srv", since_ts=_now35 - 3600, bucket_seconds=60)["tps"]["summary"]["count"] == 3, \
+    "坏行被跳过，正常行不受影响"
+# 跨天分片：昨天 + 今天合并；昨天样本参与最小值计算
+(_srv_dir35 / f"{_day35}.jsonl").write_text(
+    "\n".join(json.dumps({"ts": _now35 - 2, "tps1": 20.0}) for _ in range(3)) + "\n",
+    encoding="utf-8")
+_yesterday35 = (_date35.today() - _td35(days=1)).strftime("%Y-%m-%d")
+(_srv_dir35 / f"{_yesterday35}.jsonl").write_text(
+    json.dumps({"ts": _now35 - 90000, "tps1": 17.0}) + "\n", encoding="utf-8")
+_cross35 = _MStore35(_mdir35)
+_cross35.load()
+_cross_pts35 = _cross35.series("Srv", since_ts=_now35 - 200000, bucket_seconds=3600)["tps"]["points"]
+assert len(_cross_pts35) >= 2, _cross_pts35  # 昨天/今天各至少一个桶
+assert _cross35.series("Srv", since_ts=_now35 - 200000,
+                       bucket_seconds=3600)["tps"]["summary"]["min"] == 17.0
+# 保留期清理：31 天前分片在 prune 时删除
+_old35 = (_date35.today() - _td35(days=31)).strftime("%Y-%m-%d")
+(_srv_dir35 / f"{_old35}.jsonl").write_text(
+    json.dumps({"ts": _now35 - 99999999, "tps1": 1.0}) + "\n", encoding="utf-8")
+_prune35 = _MStore35(_mdir35)
+_prune35.load()
+_prune35.prune("Srv", 7)
+assert not (_srv_dir35 / f"{_old35}.jsonl").exists(), "超保留期的分片被清理"
+
+# (d) MonitorCollector：一轮采样（TPS 与延迟并行）、未连接跳过、错误状态
+class _FakeInst35:
+    def __init__(self, connected=True, rcon_out=None):
+        self._connected = connected
+        self._rcon_out = rcon_out
+        self.commands = []
+    @property
+    def connected(self):
+        return self._connected
+    async def execute_command_with_channel(self, command):
+        self.commands.append(command)
+        return self._rcon_out, "queqiao"
+
+
+class _FakePing35:
+    """模拟 SLP ping 结果（版本名含服务端品牌，供 TPS 指令 auto 选择）。"""
+
+    def __init__(self, version_name="Paper 1.20.4", online=3, description="A Minecraft Server"):
+        self.rtt_ms = 1.2
+        self.version_name = version_name
+        self.online = online
+        self.max_players = 20
+        self.description = description
+
+
+class _SM35:
+    def __init__(self):
+        self.insts = {}
+    def add(self, name, inst):
+        self.insts[name] = inst
+    def get(self, name):
+        return self.insts.get(name)
+
+
+_sm35 = _SM35()
+_col35 = _MC35(_mdir35, _sm35)
+_col35._ping = None  # 每台服务器按需替换的 fake ping
+
+async def _fake_ping_ok35(host, port, timeout=5.0):
+    return _FakePing35()
+
+async def _fake_ping_forge35(host, port, timeout=5.0):
+    return _FakePing35(version_name="forge 1.20.1", online=0)
+
+async def _fake_ping_none35(host, port, timeout=5.0):
+    return None
+
+async def _fake_ping_boom35(host, port, timeout=5.0):
+    raise ConnectionError("simulated failure")
+
+_sm35.add("Srv", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_sm35.add("SrvBad", _FakeInst35(
+    connected=True, rcon_out="Unknown command."))
+_sm35.add("SrvOld", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 19.0, 19.5, 20.0"))
+_sm35.add("SrvSlow", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_sm35.add("SrvDown", _FakeInst35(connected=False, rcon_out="x"))
+_cfg35_on = _SC35.from_dict({"server": {"server_name": "Srv"}})  # 监控默认开启
+# auto 指令自动切换：SLP 识别到 forge → 首轮用默认 tps，识别后自动换 forge tps。
+# 该服以 enabled=False 启动（后台任务空转），采样轮次完全由测试手动控制，
+# 避免后台任务抢先缓存品牌导致时序不确定。
+_sm35.add("SrvForge", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_cfg35_forge = _SC35.from_dict({"monitor": {"enabled": False}})
+# 全部放入同一事件循环：start/采样/动态设置/持久化恢复/stop 共享生命周期
+async def _d35():
+    # start：初始化设置（默认开启）并为每台服务器启动常驻任务
+    _col35.start({"Srv": _cfg35_on, "SrvBad": _cfg35_on, "SrvOld": _cfg35_on,
+                  "SrvSlow": _cfg35_on, "SrvDown": _cfg35_on,
+                  "SrvForge": _cfg35_forge})
+    # 延迟探测地址必须显式配置（留空不探测，避免测出内网假低延迟）；
+    # 模拟用户填了公网域名（品牌识别/延迟都依赖 SLP ping）
+    _col35.apply_settings("Srv", {"ping_host": "mc.example.com"})
+    _col35.apply_settings("SrvForge", {"ping_host": "forge.example.com"})
+    # 手动触发一轮采样（settings 取自采集器内当前生效值）
+    async def _smp(name):
+        await _col35._sample_once(name, _col35._settings[name])
+    # Srv：SLP ping 成功（Paper）→ TPS 20.0 + 延迟 1.2ms + 在线人数来自直连
+    _col35._ping = _fake_ping_ok35
+    await _smp("Srv")
+    _lat35 = _col35.store.latest("Srv")
+    assert _lat35 is not None and _lat35.tps1 == 20.0 and _lat35.online == 3
+    assert _lat35.latency_ms is not None, "直连 SLP ping 成功应有延迟（桩返回极快，0 也有效）"
+    _st35 = _col35.status("Srv")
+    assert _st35["enabled"] is True and _st35["sample_count"] >= 1
+    assert _st35["latest"]["tps1"] == 20.0
+    assert _st35["server_type"] == "paper", "SLP 版本名应解析出服务端品牌"
+    assert _st35["tps_command_resolved"] == "tps"
+    # 延迟探测目标：显式填写的域名 + ping_port（默认 25565）；
+    # ws_url 的端口是鹊桥 WS 端口，不得混作 MC 探测端口
+    assert _st35["ping_target"] == "mc.example.com:25565"
+    assert _st35["default_tab"] == "tps", "默认展示项默认 TPS"
+    # 显式配置延迟探测域名：覆盖 ws_url 主机，且地址内嵌端口优先于 ping_port
+    _col35.apply_settings("Srv", {"ping_host": "mc.example.com:25566"})
+    assert _col35.status("Srv")["ping_target"] == "mc.example.com:25566", "域名配置优先"
+    _col35.apply_settings("Srv", {"ping_host": "mc.example.com", "ping_port": 19132})
+    assert _col35.status("Srv")["ping_target"] == "mc.example.com:19132"
+    # 留空 = 不探测（避免回落内网地址把内网互通速度当成玩家延迟）
+    _col35.apply_settings("Srv", {"ping_host": "", "ping_port": 19132})
+    assert _col35.status("Srv")["ping_target"] is None, "域名留空不应回落 ws_url 主机"
+    assert _col35.status("Srv")["ping_host"] == ""
+
+    # 直接粘贴带协议/路径的完整地址（如 ws_url）：主机与端口自动提取
+    _col35.apply_settings("Srv", {"ping_host": "http://8.218.17.111:54040/", "ping_port": 25565})
+    assert _col35.status("Srv")["ping_target"] == "8.218.17.111:54040", "URL 内显式端口优先"
+    _col35.apply_settings("Srv", {"ping_host": "ws://mc.example.com:8080/minecraft/ws", "ping_port": 25565})
+    assert _col35.status("Srv")["ping_target"] == "mc.example.com:8080"
+    _col35.apply_settings("Srv", {"ping_host": "[2001:db8::1]:25566", "ping_port": 25565})
+    assert _col35.status("Srv")["ping_target"] == "2001:db8::1:25566", "IPv6 括号形式"
+    _col35.apply_settings("Srv", {"ping_host": "", "ping_port": 25565})
+    # TPS 输出无法解析：tps=None + 记录错误，但延迟不受影响
+    await _smp("SrvBad")
+    assert _col35.store.latest("SrvBad").tps1 is None
+    assert "无法解析" in _col35.status("SrvBad")["last_error"]
+    # 直连 SLP ping 失败（连接拒绝/非 MC 端口）：latency=None + 错误，TPS 正常
+    _col35._ping = _fake_ping_none35
+    await _smp("SrvOld")
+    _lat35_old = _col35.store.latest("SrvOld")
+    assert _lat35_old.tps1 == 19.0 and _lat35_old.latency_ms is None
+    assert "延迟未采到" in _col35.status("SrvOld")["last_error"]
+    # 直连 ping 异常（模拟超时/网络故障）：同样只记错误，不影响 TPS
+    _col35._ping = _fake_ping_boom35
+    await _smp("SrvSlow")
+    assert _col35.store.latest("SrvSlow") is not None
+    assert _col35.store.latest("SrvSlow").latency_ms is None
+    assert "延迟未采到" in _col35.status("SrvSlow")["last_error"]
+    # 服务器未连接：跳过本轮（不产生样本），记录错误
+    assert _col35.store.latest("SrvDown") is None
+    await _smp("SrvDown")
+    assert _col35.store.latest("SrvDown") is None, "未连接不应产生样本"
+    assert "未连接" in _col35.status("SrvDown")["last_error"]
+    # auto 指令自动切换：首轮（尚无品牌缓存）用默认 tps；SLP 识别出 forge 后，
+    # 下一轮自动换 forge tps；显式指令优先于自动
+    _col35._ping = _fake_ping_forge35
+    await _smp("SrvForge")
+    assert _col35._server_types.get("SrvForge") == "forge", "SLP 应缓存服务端品牌"
+    assert _sm35.get("SrvForge").commands[-1] == "tps", "首轮无缓存时用默认 tps"
+    await _smp("SrvForge")
+    assert _sm35.get("SrvForge").commands[-1] == "forge tps", "识别 forge 后自动切换指令"
+    assert _col35.status("SrvForge")["tps_command_resolved"] == "forge tps"
+    assert _col35.status("SrvForge")["server_type"] == "forge"
+    _col35.apply_settings("SrvForge", {"tps_command": "spark tps"})
+    await _smp("SrvForge")
+    assert _sm35.get("SrvForge").commands[-1] == "spark tps", "显式指令覆盖自动选择"
+    _col35.apply_settings("SrvForge", {"tps_command": "spark tps"})
+    await _smp("SrvForge")
+    assert _sm35.get("SrvForge").commands[-1] == "spark tps", "显式指令覆盖自动选择"
+
+    # 动态设置（仪表盘入口，不走 conf schema）：apply_settings 即时生效 + 持久化
+    _upd35 = _col35.apply_settings("Srv", {"enabled": False, "interval": 120, "retention_days": 3})
+    assert isinstance(_upd35.enabled, bool) and _upd35.enabled is False
+    assert _col35.status("Srv")["enabled"] is False
+    assert _col35.status("Srv")["interval"] == 120
+    assert _col35.status("Srv")["retention_days"] == 3
+    # 非法值防御式兜底（间隔下限 10 / 保留至少 1 / 空指令回落 auto）
+    _col35.apply_settings("Srv", {"interval": 3, "retention_days": 0, "tps_command": "   "})
+    assert _col35.status("Srv")["interval"] == 10
+    assert _col35.status("Srv")["retention_days"] == 1
+    assert _col35.status("Srv")["tps_command"] == "auto"
+    # 持久化恢复：相同数据目录新建采集器，仪表盘保存的设置优先生效
+    _col35b = _MC35(_mdir35, _sm35)
+    _col35b.start({"Srv": _cfg35_on})
+    assert _col35b.status("Srv")["enabled"] is False, "settings.json 中的设置应覆盖代码默认"
+    assert _col35b.status("Srv")["interval"] == 10
+    # 恢复 Srv 为启用状态，供后续 (e) 段路由断言使用（apply 需在事件循环内）
+    _col35.apply_settings("Srv", {"enabled": True})
+    await _col35.stop()
+    await _col35b.stop()
+_asyncio35.run(_d35())
+
+# (e) WebApiController：监控路由注册与响应
+class _MockCtx35:
+    def __init__(self):
+        self.routes = []
+    def register_web_api(self, path, handler, methods, desc):
+        self.routes.append((path, handler, methods, desc))
+
+from astrbot_plugin_minecraft_queqiao.services.web_api import WebApiController as _WAC35
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wa35
+
+_ctx35 = _MockCtx35()
+_wac35 = _WAC35(_ctx35, _sm35, None, None, None,
+                {"Srv": _cfg35_on, "Srv2": _SC35.from_dict({})}, None, _col35)
+_wac35.register_routes()
+assert len(_ctx35.routes) == 20, f"监控注入后应注册 20 条路由, 实际 {len(_ctx35.routes)}"
+_rp35 = [r[0] for r in _ctx35.routes]
+assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
+assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
+assert "/astrbot_plugin_minecraft_queqiao/monitor/settings" in _rp35
+assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/sample" in _rp35
+# monitor/status：每台服务器一份状态（默认开启）
+_res_mstat35 = _asyncio35.run(_wac35.get_monitor_status())
+_mons35 = _res_mstat35["data"]["monitors"]
+assert set(_mons35.keys()) == {"Srv", "Srv2"}
+assert _mons35["Srv"]["enabled"] is True and _mons35["Srv"]["sample_count"] >= 1
+assert _mons35["Srv2"]["enabled"] is True, "未显式配置的服务器默认开启监控"
+assert _mons35["Srv2"]["interval"] == 60 and _mons35["Srv2"]["tps_command"] == "auto"
+assert _mons35["Srv2"]["tps_command_resolved"] == "tps", "auto 无类型缓存时回落默认 tps"
+# monitor/series：聚合序列 + 摘要（覆盖刚才收集的样本）
+_wa35.request.query = {"range": "24h"}
+_res_mseries35 = _asyncio35.run(_wac35.get_monitor_series("Srv"))
+_data35 = _res_mseries35["data"]
+assert _data35["server"] == "Srv" and _data35["range_hours"] == 24
+assert _data35["bucket_seconds"] == 600, "24h 时间窗自动选 10 分钟桶"
+_tps_series35 = _data35["series"]["tps"]
+assert _tps_series35["summary"]["count"] >= 1
+assert _data35["series"]["latency"]["summary"]["count"] >= 1
+# 非法 range 回落 24h
+_wa35.request.query = {"range": "bogus"}
+assert _asyncio35.run(_wac35.get_monitor_series("Srv"))["data"]["range_hours"] == 24
+# 服务器不存在 / 无实例 → 404
+_wa35.request.query = {}
+assert _asyncio35.run(_wac35.get_monitor_series("ghost"))["status_code"] == 404
+assert _asyncio35.run(_wac35.get_monitor_series("Srv2"))["status_code"] == 404
+# range/bucket 解析：实时模式用分钟/秒单位
+_wa35.request.query = {"range": "1m", "bucket": "10s"}
+_h35, _b35 = _wac35._parse_monitor_window()
+assert abs(_h35 - 1 / 60) < 1e-9 and _b35 == 10, "1m 窗口 + 10s 桶（实时模式）"
+_wa35.request.query = {"range": "30s"}
+_h35, _b35 = _wac35._parse_monitor_window()
+assert abs(_h35 - 30 / 3600) < 1e-9 and _b35 == 60, "30s 窗口自动 60s 桶"
+_wa35.request.query = {"range": "bogus"}
+assert _wac35._parse_monitor_window()[0] == 24.0, "非法 range 回落 24h"
+# monitor/settings：保存设置（模拟仪表盘表单提交）→ 立即生效并持久化
+_orig_json35 = _wa35.request.json
+async def _fake_json_save35(default=None):
+    return {"server_name": "Srv", "enabled": False, "interval": 90,
+            "retention_days": 5, "tps_command": "spark tps",
+            "ping_host": "mc.example.com", "ping_port": 12345,
+            "default_tab": "latency", "realtime_interval": 3,
+            "auto_refresh_interval": 30}
+_wa35.request.json = _fake_json_save35
+_res_save35 = _asyncio35.run(_wac35.save_monitor_settings())
+_wa35.request.json = _orig_json35
+assert _res_save35["data"]["server"] == "Srv"
+assert _res_save35["data"]["settings"]["enabled"] is False
+assert _res_save35["data"]["settings"]["interval"] == 90
+assert _res_save35["data"]["settings"]["ping_host"] == "mc.example.com"
+assert _res_save35["data"]["settings"]["ping_port"] == 12345
+assert _res_save35["data"]["settings"]["default_tab"] == "latency", "默认展示项随设置持久化"
+assert _res_save35["data"]["settings"]["realtime_interval"] == 3, "实时采集频率随设置持久化"
+assert _res_save35["data"]["settings"]["auto_refresh_interval"] == 30, "自动刷新间隔随设置持久化"
+assert _col35.status("Srv")["default_tab"] == "latency", "保存后即时生效"
+assert _col35.status("Srv")["realtime_interval"] == 3, "频率保存后即时生效"
+assert _col35.status("Srv")["auto_refresh_interval"] == 30, "自动刷新间隔保存后即时生效"
+assert _col35.status("Srv")["enabled"] is False, "保存后应即时生效"
+# 缺 server_name → 400；未知服务器 → 404；空字段 → 400
+async def _fake_json_none35(default=None):
+    return {}
+_wa35.request.json = _fake_json_none35
+assert _asyncio35.run(_wac35.save_monitor_settings())["status_code"] == 400
+async def _fake_json_ghost35(default=None):
+    return {"server_name": "ghost", "enabled": False}
+_wa35.request.json = _fake_json_ghost35
+assert _asyncio35.run(_wac35.save_monitor_settings())["status_code"] == 404
+async def _fake_json_empty35(default=None):
+    return {"server_name": "Srv"}
+_wa35.request.json = _fake_json_empty35
+assert _asyncio35.run(_wac35.save_monitor_settings())["status_code"] == 400
+_wa35.request.json = _orig_json35
+
+# monitor/<server>/sample：立即采集（不等下一个间隔）→ 采样数 +1 并返回状态。
+# apply_settings 启用会重建采样 task，须与采样同处一个事件循环
+async def _sample_now_e35():
+    _col35.apply_settings("Srv", {"enabled": True})
+    _col35._ping = _fake_ping_ok35
+    before = _col35.status("Srv")["sample_count"]
+    resp = await _wac35.sample_monitor("Srv")
+    ghost = await _wac35.sample_monitor("ghost")
+    return resp, before, ghost
+_res_smp35, _before_smp35, _ghost_smp35 = _asyncio35.run(_sample_now_e35())
+assert _res_smp35["data"]["server"] == "Srv"
+assert _res_smp35["data"]["status"]["sample_count"] == _before_smp35 + 1, "立即采集应新增一个样本"
+assert _res_smp35["data"]["status"]["latest"]["tps1"] == 20.0
+assert _ghost_smp35["status_code"] == 404, "未知服务器 → 404"
+
+print("OK  TPS 解析 / 监控配置与 schema 守卫(不进 conf) / 时序存储(落盘·聚合·P95·坏行·跨天·清理) / "
+      "采集器(并行采样·未连接跳过·动态设置即时生效·持久化恢复) / Web API 路由与响应")

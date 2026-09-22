@@ -15,6 +15,9 @@ from .constants import (
     DEFAULT_DISPLAY_NAME,
     DEFAULT_LOW_FREQUENCY_INTERVAL,
     DEFAULT_LOW_FREQUENCY_THRESHOLD,
+    DEFAULT_MONITOR_INTERVAL,
+    DEFAULT_MONITOR_RETENTION_DAYS,
+    DEFAULT_MONITOR_TPS_COMMAND,
     DEFAULT_PLATFORM_NAMES,
     DEFAULT_RECONNECT_INTERVAL,
     DEFAULT_REVERSE_HOST,
@@ -22,6 +25,7 @@ from .constants import (
     DEFAULT_REVERSE_PATH,
     DEFAULT_WS_URL,
     EMOJI_OK_GESTURE,
+    MONITOR_MIN_INTERVAL,
 )
 
 WS_MODE_FORWARD = "forward"
@@ -214,6 +218,17 @@ class ServerConfig:
     rcon_port: int = 25575
     rcon_password: str = ""
 
+    # ---- 性能监控（TPS / 延迟，长时间采样分析） ----
+    # 默认开启、参数内置（间隔 60s / 保留 7 天 / tps 指令），不占用 WebUI
+    # 配置项（性能监控只在仪表盘展示）。如需关闭或调整，可手动在 AstrBot
+    # 配置 JSON 的服务器条目下写 monitor 分组（enabled/interval/
+    # retention_days/tps_command）；未填时全部回落默认值。
+    # TPS 经 RCON 执行 tps_command 获取；延迟为鹊桥 get_status API 往返耗时。
+    monitor_enabled: bool = True
+    monitor_interval: int = DEFAULT_MONITOR_INTERVAL
+    monitor_retention_days: int = DEFAULT_MONITOR_RETENTION_DAYS
+    monitor_tps_command: str = DEFAULT_MONITOR_TPS_COMMAND
+
     @property
     def server_label(self) -> str:
         """消息格式 `{display_name}` 的取值：**显示名称 → 显示名称默认值**。
@@ -333,6 +348,9 @@ class ServerConfig:
         # 重连项现位于模板项底部独立的 reconnect 分组；
         # 兼容旧版写在 server 子对象内的配置，防止旧配置失效（新分组优先）
         reconnect = _as_object(data.get("reconnect")) or server
+        # 性能监控参数不在 WebUI schema 中（只在仪表盘展示）；仍兼容配置 JSON
+        # 手动写入 monitor 分组（关闭/调参），未填时用代码默认值
+        monitor = _as_object(data.get("monitor"))
 
         ws_mode = _to_str(server.get("ws_mode"), WS_MODE_FORWARD).strip().lower()
         if ws_mode not in VALID_WS_MODES:
@@ -457,5 +475,20 @@ class ServerConfig:
             ),
             rcon_password=_to_str(
                 cmd.get("rcon_password", rcon.get("password")), ""
+            ),
+            # 性能监控：默认开启（仅仪表盘展示，不占 WebUI 配置项）；配置 JSON
+            # 手动写 monitor 分组可关闭/调参。间隔与保留天数做下限防御，
+            # 避免误配造成采集风暴或立即清空历史
+            monitor_enabled=_to_bool(monitor.get("enabled"), True),
+            monitor_interval=max(
+                MONITOR_MIN_INTERVAL,
+                _to_int(monitor.get("interval"), DEFAULT_MONITOR_INTERVAL),
+            ),
+            monitor_retention_days=max(
+                1, _to_int(monitor.get("retention_days"), DEFAULT_MONITOR_RETENTION_DAYS)
+            ),
+            monitor_tps_command=(
+                _to_str(monitor.get("tps_command"), DEFAULT_MONITOR_TPS_COMMAND).strip()
+                or DEFAULT_MONITOR_TPS_COMMAND
             ),
         )

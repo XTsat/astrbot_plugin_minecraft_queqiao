@@ -28,6 +28,8 @@ class ServerInstance:
         # 鹊桥 RCON（send_rcon_command）可用性：None=未确认，True=曾成功，
         # False=鹊桥明确报错/未开启 RCON。仅 WS 连接成功不代表鹊桥 RCON 可用，
         # 必须由真实指令执行结果确认（鹊桥侧未开启 RCON 时 send_rcon_command 报错）。
+        # False 缓存至本次连接结束：不再重复探测，避免仪表盘每次刷新都向
+        # 未开启 RCON 的鹊桥端发 send_rcon_command、在 MC 控制台刷报错。
         self.queqiao_rcon_ok: bool | None = None
         # 本次连接建立时刻（None = 未连接），供仪表盘展示单服务器在线时长
         self.connected_at: float | None = None
@@ -45,7 +47,9 @@ class ServerInstance:
                     await res
 
         async def _wrapped_on_connect() -> None:
-            # 重连后 RCON 可用性未知，重新由指令执行结果确认
+            # 重连后 RCON 可用性结论过期，重置为未确认（None）；恢复探测
+            # 由下一次「进入面板/手动刷新」（force）触发——未确认状态下
+            # 普通请求（自动轮询/监控采样）不主动向鹊桥发 RCON 指令。
             self.queqiao_rcon_ok = None
             self.connected_at = time.time()
             if on_connect:
@@ -151,7 +155,13 @@ class ServerInstance:
         - ``"direct"``：鹊桥通道不可用时回退到直连 RCON 执行成功
         - ``""``：未执行（未连接且未配直连 RCON）/ 鹊桥超时 / 全失败
         """
-        if self.client.connected:
+        # 已确认鹊桥 RCON 不可用（False）时跳过鹊桥通道，不再重复探测：
+        # 否则仪表盘每次刷新都会向未开启 RCON 的鹊桥端发 send_rcon_command，
+        # 在 MC 控制台刷报错。该结论在**本次连接内**保持，重连后过期
+        # （重置为 None），由下一次「进入面板/手动刷新」（force）重新确认；
+        # 未确认（None）时本方法仍允许尝试（如用户主动执行指令的场景），
+        # 玩家列表等轮询路径的探测时机由 `fetch_player_list` 的守卫控制。
+        if self.client.connected and self.queqiao_rcon_ok is not False:
             try:
                 output = await self.client.send_rcon_command(command)
             except QueQiaoTimeout:
@@ -177,7 +187,11 @@ class ServerInstance:
 
         return None, ""
 
-    async def fetch_player_list(self) -> PlayerListResult:
+    async def fetch_player_list(
+        self,
+        force_rcon: bool = False,
+        status_model: ServerStatus | None = None,
+    ) -> PlayerListResult:
         """获取在线玩家，三层兜底（RCON list → SLP sample → 人数）：
 
         1. RCON ``list``（完整权威）：鹊桥 send_rcon_command → 直连 RCON
@@ -186,13 +200,37 @@ class ServerInstance:
         3. sample 为空时退回 ``online``/``max`` 人数
         4. 都失败 → ``source="none"``
 
+        ``status_model`` 可选：调用方（如 ``/servers`` 聚合接口）已拉取过
+        状态时传入复用，避免同一轮请求对鹊桥重复发 ``get_status``。
+
         鹊桥执行 ``list`` 超时属「结果未知」：指令可能已执行，故不再走直连
         RCON 重发（同一条指令会执行两遍）；此时降级到 SLP sample 属**不同
         查询**（SLP ping），不构成重发，符合「超时 ≠ 失败，禁止重发」约定。
+
+        ``force_rcon`` 为 True 时（仪表盘手动刷新/进入面板，``/servers?force=1``）：
+        **每次都会重置**「鹊桥 RCON 不可用」结论并重新探测一次（用户可能刚
+        在鹊桥侧开启 RCON）；探测确认不可用后，同一连接内的普通请求（自动
+        轮询/监控采样）不再重试，直到下一次 force 触发。未确认（None）状态
+        下的普通请求不主动向鹊桥发 RCON 指令（探测仅由 force 触发，避免向
+        未开启 RCON 的鹊桥端反复发指令刷报错）；已确认可用（True）或配了
+        直连 RCON / 鹊桥未连接时，普通请求照常走 RCON。
         """
+        if force_rcon and self.queqiao_rcon_ok is False and self.client.connected:
+            # 进入面板/手动刷新：重置「不可用」结论，本次允许重新探测一次
+            self.queqiao_rcon_ok = None
         # ① RCON list（完整权威）：鹊桥 send_rcon_command → 直连 RCON 兜底
         #    记录实际通道（queqiao / direct），供渲染层标注取数方式
-        output, channel = await self.execute_command_with_channel("list")
+        #    探测守卫：仅 force（显式探测）/ 已确认可用 / 配了直连 RCON /
+        #    鹊桥未连接（直连兜底）时执行；未确认（None）的普通请求跳过，
+        #    避免自动轮询与监控采样反复向未开启 RCON 的鹊桥端发指令。
+        output, channel = None, ""
+        if self.queqiao_rcon_ok is not False and (
+            force_rcon
+            or self.queqiao_rcon_ok is True
+            or self.rcon.enabled
+            or not self.client.connected
+        ):
+            output, channel = await self.execute_command_with_channel("list")
         if output is not None:
             parsed_names = RconClient.parse_player_list(output)
             self.online_players = set(parsed_names)
@@ -202,30 +240,31 @@ class ServerInstance:
                 rcon_channel=channel,
             )
 
-        # ② 鹊桥 get_status 的 SLP sample（免 RCON）
-        status = await self.get_status_model()
-        if status is not None:
-            names = status.online_player_names
+        # ② 鹊桥 get_status 的 SLP sample（免 RCON）；复用调用方已拉取的状态
+        if status_model is None:
+            status_model = await self.get_status_model()
+        if status_model is not None:
+            names = status_model.online_player_names
             if names:
                 self.online_players.update(names)
                 return PlayerListResult(
                     names=names,
-                    online=status.online_players,
-                    max=status.max_players,
+                    online=status_model.online_players,
+                    max=status_model.max_players,
                     source="slp",
                 )
             # ②.5 若 SLP sample 未返回玩家名，但事件追踪缓存有记录
             if self.online_players:
                 return PlayerListResult(
                     names=sorted(self.online_players),
-                    online=max(len(self.online_players), status.online_players),
-                    max=status.max_players,
+                    online=max(len(self.online_players), status_model.online_players),
+                    max=status_model.max_players,
                     source="event_cache",
                 )
             # ③ sample 空且无缓存，退回人数
             return PlayerListResult(
-                online=status.online_players,
-                max=status.max_players,
+                online=status_model.online_players,
+                max=status_model.max_players,
                 source="count",
             )
 

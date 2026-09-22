@@ -51,7 +51,10 @@
                 "type": "string",
                 "description": "连接方式",
                 "hint": "forward: 本插件主动连接鹊桥的 WebSocket Server；reverse: 本插件开启 WebSocket Server 等待鹊桥连入（租赁服推荐）",
-                "options": ["forward", "reverse"],
+                "options": [
+                  "forward",
+                  "reverse"
+                ],
                 "default": "forward"
               },
               "ws_url": {
@@ -159,7 +162,9 @@
                 "type": "list",
                 "description": "平台名称映射",
                 "hint": "把 {platform} 的原始平台名替换为自定义展示名，例如 aiocqhttp=QQ、telegram=电报。每项格式：原始平台名=显示名。默认自带示例 aiocqhttp=QQ（开箱即用）；未命中的平台保持原名，删空则不改写",
-                "default": ["aiocqhttp=QQ"]
+                "default": [
+                  "aiocqhttp=QQ"
+                ]
               },
               "broadcast_color": {
                 "type": "string",
@@ -171,7 +176,11 @@
                 "type": "string",
                 "description": "转发提醒方式",
                 "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
-                "options": ["text", "emoji", "none"],
+                "options": [
+                  "text",
+                  "emoji",
+                  "none"
+                ],
                 "default": "emoji"
               },
               "mark_emoji_id": {
@@ -214,14 +223,23 @@
                 "type": "string",
                 "description": "指令名单类型",
                 "hint": "white: 仅允许名单内指令；black: 禁止名单内指令；none: 不启用黑白名单",
-                "options": ["white", "black", "none"],
+                "options": [
+                  "white",
+                  "black",
+                  "none"
+                ],
                 "default": "white"
               },
               "cmd_list": {
                 "type": "list",
                 "description": "指令名单",
                 "hint": "指令白名单或黑名单，填写指令名（不带/）如 say, gamemode, tp",
-                "default": ["say", "list", "weather", "time"]
+                "default": [
+                  "say",
+                  "list",
+                  "weather",
+                  "time"
+                ]
               },
               "bind_enable": {
                 "type": "bool",

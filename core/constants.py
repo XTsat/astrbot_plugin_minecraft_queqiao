@@ -125,6 +125,34 @@ IMAGE_HOST_MAX_IMAGES = 500
 MAX_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
 IMAGE_DOWNLOAD_TIMEOUT = 15  # 秒
 
+# ---- 性能监控（TPS / 延迟） ----
+# 监控采样按天分片持久化到 data_dir/monitor/<server>/YYYY-MM-DD.jsonl；
+# TPS 通过 RCON 执行 TPS 指令获取（Bukkit 系 tps / forge tps / spark tps 等），
+# 默认 "auto"：按 get_status 返回的服务端类型自动选择指令（见
+# services/monitor.resolve_tps_command）；显式填写具体指令则固定使用。
+# 延迟为鹊桥 API（get_status）往返耗时，无需服务端安装额外插件、无需 RCON。
+DEFAULT_MONITOR_INTERVAL = 60  # 采集间隔（秒）
+DEFAULT_MONITOR_RETENTION_DAYS = 7  # 历史采样保留天数，超出自动清理
+DEFAULT_MONITOR_TPS_COMMAND = "auto"  # TPS 指令：auto=按服务端类型自动选择
+# 延迟探测：直连服务器执行 SLP ping（默认 MC 端口 25565）。ping_host 留空时
+# 从配置的 ws_url 解析主机（正向模式鹊桥与 MC 服务器同机，即服务器地址）
+DEFAULT_MONITOR_PING_PORT = 25565
+# 采集间隔下限：过小的间隔既加重服务器负担，也让图表难以阅读
+MONITOR_MIN_INTERVAL = 10
+# 实时模式（连续采样）频率：每 N 秒对当前服务器采样一次，
+# 可配置（1~60 秒，默认 5 秒）
+DEFAULT_MONITOR_REALTIME_INTERVAL = 5
+MONITOR_REALTIME_MIN = 1
+MONITOR_REALTIME_MAX = 60
+# 仪表盘「自动刷新」轮询间隔（秒）：服务器卡片状态与玩家列表的定时
+# 刷新频率，可配置（10~3600 秒，默认 10；勾选自动刷新时生效）
+DEFAULT_MONITOR_AUTO_REFRESH = 10
+MONITOR_AUTO_REFRESH_MIN = 10
+MONITOR_AUTO_REFRESH_MAX = 3600
+# 延迟采样专用的 get_status 响应超时。比 API_TIMEOUT(10s) 更短：
+# 延迟采不到时不值得为一个指标干等 10 秒（TPS 与状态另有来源）
+MONITOR_API_TIMEOUT = 5
+
 
 def prefix_matches(prefix: str, text: str) -> bool:
     """判断文本是否以指定前缀触发（词边界感知，字母部分不区分大小写）。

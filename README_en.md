@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.4.0-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.0-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -14,7 +14,8 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 - **Image forwarding**: two-way image bridging — images from the group can be relayed into the game (rendered by the [ChatImage](https://github.com/kitUIN/ChatImage) mod), and in-game chat images (CICode / image links) can be downloaded and sent back to the group
 - **Event broadcast**: player join / quit / death / achievement events forwarded to sessions
 - **Server management**: status queries, online player list, remote command execution
-- **Web Dashboard**: built-in AstrBot plugin page to view real-time server status, core & version, MOTD, CPU & memory metrics, online players (with avatars and query channels), with quick broadcast and command console; the top bar switches between "all servers" and each individual server — the all-servers view shows every server as a multi-column grid, while a single-server view follows that server with its own stat cards, card and dedicated bridge terminal. Terminal logs are **persisted to the plugin data directory** (stored in per-day shards with automatic cleanup of expired shards; events are recorded even while the page is closed, and history survives session/browser changes); only the "clear" button deletes them
+- **Web Dashboard**: built-in AstrBot plugin page to view real-time server status, core & version, MOTD, CPU & memory metrics, online players (with avatars and query channels), with quick broadcast and command console; the top bar switches between "all servers" and each individual server — the all-servers view shows every server as a multi-column grid, while a single-server view follows that server with its own stat cards, card, **performance monitor charts** and dedicated bridge terminal. Terminal logs are **persisted to the plugin data directory** (stored in per-day shards with automatic cleanup of expired shards; events are recorded even while the page is closed, and history survives session/browser changes); only the "clear" button deletes them
+- **Performance Monitoring (TPS / Latency)**: **enabled by default** for **long-term monitoring & analysis** — a background task periodically collects server TPS (1m/5m/15m) over RCON plus **direct-connect latency via Minecraft SLP ping** (player-perspective network latency, not relayed through QueQiao); samples are persisted in per-day shards (default 7-day retention, auto-pruned). The dashboard shows the **"Performance Monitoring" panel beside the server panel, each taking half the row width** (equal height, flush bottoms; the "Server Instance Status" title sits on its own full-width row; the all-servers view falls back to a single full-width column so cards sit side by side instead of becoming narrow strips), with trend charts as **two switchable sub-pages — TPS and Latency** (a **🔴 Live mode** that samples the current server every 5 seconds and redraws the latest-60-second curve with 10-second buckets for observing instantaneous fluctuations, plus 1h/6h/24h/7d ranges) and per-page statistical summaries (TPS page: avg/min TPS; Latency page: avg/max/P95 latency); a **"⏱ Sample now" button** triggers one sampling round for the current server on demand (no need to wait for the interval); the **"⚙ Settings" dialog lets you pick the default sub-page** (the panel opens on TPS or Latency automatically, persisted server-side with the rest of the settings); `/mc status` also shows the latest samples. **No WebUI config items needed**: monitor parameters (enable/interval/live sampling frequency/auto-refresh interval/retention/TPS command/latency domain & port/default sub-page) are adjusted inside the panel's "⚙ Settings" (the dialog is widened for readability) and take effect immediately on save; **TPS needs server-side support for the tps command (executed over RCON), while latency connects to the server directly — you must explicitly fill in a public probe address (domain + MC game port, e.g. `25565`) in "⚙ Settings"; when left empty no latency is collected** (no fallback to internal addresses, so LAN interconnect speed is never mistaken for player latency; QueQiao web ports like 54040 are not MC game ports and will fail the probe)
 - **AI chat**: talk to the AI in-game with its own prefix (`ai hello`); replies are sent privately and normal bridging is unaffected
 - **Multiple servers**: connect several servers, each with independent forwarding settings
 - **Flexible transport**: forward mode (plugin dials QueQiao) or reverse mode (QueQiao dials plugin, ideal for rented servers)
@@ -344,6 +345,31 @@ With the defaults (bridging prefix empty = relay all, AI `ai`):
 | `max_reconnect` | int | `0` | Max reconnect attempts; `0` means unlimited |
 | `low_frequency_threshold` | int | `30` | **Failures after which low-frequency retries kick in**: once consecutive reconnect failures **exceed** this count, the delay stops growing and stays fixed at `low_frequency_interval`. Default `30` (normal backoff for the first 30, low-frequency from attempt 31 on); set `0` to disable low-frequency mode and always use backoff |
 | `low_frequency_interval` | int | `300` | **Low-frequency retry delay (s)**: fixed wait once low-frequency mode is active. Default `300` (5 minutes); larger values give quieter retries (no busy polling during long outages) |
+
+</details>
+
+### Performance Monitoring (no WebUI config items)
+
+<details>
+<summary>Show options</summary>
+
+> **Monitoring class**: TPS and latency are treated as *long-term monitored* data — sampled periodically, persisted and analyzed, rather than fetched live on every query. **Enabled by default, zero-config**: it adds **no WebUI config items** (nothing in `_conf_schema.json`). Parameters (enable / sample interval / retention / TPS command) are maintained inside the **dashboard's "Performance Monitoring" panel — "⚙ Settings"** button, persist immediately on save, and are stored in `data_dir/monitor/settings.json`.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Enable switch | `on` | Stops sampling when off (history is kept until the retention window expires) |
+| Sample interval | `60` s | Minimum `10` s. Lower values are more responsive but add load to the server and RCON |
+| Retention | `7` days | Samples older than this are pruned automatically; raise it for longer analysis windows (e.g. 30 days) |
+| TPS command | `auto` | **Automatic by default**: picks the command from the server brand detected by the direct SLP ping (Forge → `forge tps`; Fabric/Quilt → `spark tps`; Paper/Spigot/Bukkit forks → `tps`; unknown → `tps`). You can also pin `tps` / `forge tps` / `spark tps` explicitly |
+| Latency domain | empty | Direct-connect **public domain/address** of the MC server (may include a port, e.g. `mc.example.com:25565`, or a pasted URL like `http://8.218.17.111:54040/` — host/port are extracted automatically) to measure real player-perspective latency; **empty = latency probing is disabled** (never falls back to internal addresses, so LAN interconnect speed is not mistaken for player latency) |
+| Latency port | `25565` | MC game port; QueQiao web ports (e.g. 54040) are not MC game ports — probes against them fail; servers with SLP disabled report latency as unavailable |
+
+**Data sources & limitations**:
+
+- **TPS**: executed over RCON and parsed from `TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0` (three buckets). In `auto` mode the first sample tries the default `tps`, then **auto-switches to the matching command** based on the server brand detected by the SLP ping (e.g. `forge 1.20.1` → `forge tps`). Vanilla servers lack any tps command — TPS is then reported as unavailable with a hint on the dashboard status line.
+- **Latency**: **direct-connect Minecraft SLP ping** (Server List Ping handshake + status request round-trip, ms) — the same measurement a player client sees, **not relayed through QueQiao**, no RCON, no server-side plugin. The probe target is the **public domain/port configured in Settings** (a public address measures real player-perspective latency); when left empty latency probing is disabled. When the server disables SLP (`enable-status=false`), the port is not a MC game port, or the address is unreachable, latency is skipped while TPS sampling is unaffected.
+- **Storage**: `data_dir/monitor/<server_name>/YYYY-MM-DD.jsonl`, per-day shards; history survives restarts and is pruned past the retention window even after monitoring is disabled.
+- **Timeout semantics**: a timed-out sample (result unknown) is recorded as "not collected" and skipped — the collector **never** re-sends through another channel, to avoid executing commands twice.
 
 </details>
 

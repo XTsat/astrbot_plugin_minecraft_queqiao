@@ -74,6 +74,9 @@
   --scrollbar-thumb: rgba(100, 116, 139, 0.25);
   --scrollbar-thumb-hover: rgba(100, 116, 139, 0.45);
 
+  /* 监控图表网格线（Canvas 绘制时读取） */
+  --chart-grid: rgba(100, 116, 139, 0.18);
+
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --radius-sm: 6px;
@@ -147,6 +150,9 @@
   /* 滚动条 */
   --scrollbar-thumb: rgba(148, 163, 184, 0.2);
   --scrollbar-thumb-hover: rgba(148, 163, 184, 0.35);
+
+  /* 监控图表网格线（Canvas 绘制时读取） */
+  --chart-grid: rgba(148, 163, 184, 0.14);
 }
 
 /* 独立打开/系统偏好兜底 */
@@ -548,19 +554,30 @@ body {
    -------------------------------------------------------------------------- */
 
 .layout-main {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
+  /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控（各占一半，
+     紧贴排列），第 3 行终端通栏。行内 grid item 默认 stretch → 两面板
+     严格等高（顶部/底部都对齐） */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .servers-panel {
+  grid-column: 1;
+  grid-row: 2;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .servers-section-title {
+  grid-column: 1 / -1;
+  grid-row: 1;
   font-size: 16px;
   font-weight: 600;
-  margin-bottom: 16px;
+  margin-bottom: 4px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -569,9 +586,12 @@ body {
 
 .servers-container {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  /* auto-fit + 1fr：多台服务器横向并排、平分面板宽度（占满一排），
+     不留未填充的空列；flex 填满面板剩余高度 → 卡片随面板纵向拉伸，
+     与右侧性能监控面板等高（align-items 默认 stretch 确保卡片填满行高） */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  flex: 1 1 auto;
   gap: 20px;
-  align-items: start;
 }
 
 .servers-container > .loading-box,
@@ -850,6 +870,8 @@ body {
    -------------------------------------------------------------------------- */
 
 .terminal-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1082,6 +1104,456 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   11. 性能监控面板 (TPS / 延迟)
+   -------------------------------------------------------------------------- */
+
+/* 子页面切换（TPS / 延迟） */
+.monitor-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.monitor-tab {
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.monitor-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, var(--bg-subtle));
+}
+
+.monitor-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--border-subtle);
+  border-bottom-color: var(--bg-card);
+  font-weight: 600;
+  position: relative;
+  top: 1px;
+}
+
+.monitor-subpage {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.monitor-subpage.hidden {
+  display: none;
+}
+
+.monitor-panel {
+  grid-column: 2;
+  grid-row: 2;
+  /* 高度由 grid 行 stretch 保证与左侧服务器面板严格等高（见 .layout-main）；
+     内部 flex 列布局：图表区吃掉剩余空间，面板底部无空白 */
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+/* 监控面板隐藏（全局视图/监控关闭）时：主布局退化为单列全宽，
+   服务器卡片不再被挤在左半列（避免细长） */
+.layout-main.monitor-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+.layout-main.monitor-hidden .servers-panel {
+  grid-column: 1 / -1;
+}
+
+/* 服务器卡片内的监控摘要行（全局视图与单服视图都可见） */
+.monitor-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.monitor-mini-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+
+.monitor-mini-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.monitor-mini-badge.monitor-good { background: var(--mc-green-bg); color: var(--mc-green); }
+.monitor-mini-badge.monitor-warning { background: var(--mc-yellow-bg); color: var(--mc-yellow); }
+.monitor-mini-badge.monitor-danger { background: var(--mc-red-bg); color: var(--mc-red); }
+
+.monitor-mini-spacer { flex: 1; }
+
+.monitor-mini-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monitor-mini-btn {
+  border: 1px solid var(--border-color);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.monitor-mini-btn:hover {
+  background: var(--btn-hover);
+  border-color: var(--border-focus);
+}
+
+.monitor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.monitor-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.monitor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.monitor-range-select {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.monitor-status-line {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  line-height: 1.5;
+}
+
+.monitor-status-line code {
+  background: var(--bg-tertiary);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.monitor-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  margin-right: 2px;
+}
+
+.monitor-dot.on { background: var(--mc-green); }
+.monitor-dot.off { background: var(--text-muted); }
+
+.monitor-err { color: var(--mc-yellow); }
+
+.monitor-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.monitor-stat-card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.monitor-stat-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.monitor-stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-good { color: var(--mc-green); }
+.monitor-warning { color: var(--mc-yellow); }
+.monitor-danger { color: var(--mc-red); }
+
+.monitor-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  /* 吃掉面板剩余高度：图表随面板动态缩放 */
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+.monitor-chart-card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px 10px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.monitor-chart-title {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.monitor-chart-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 100px;
+  width: 100%;
+}
+
+.monitor-chart-wrap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.monitor-tooltip {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  z-index: 20;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.monitor-tip-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+.monitor-tip-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.monitor-tip-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  /* 单列布局：按 DOM 顺序自然排布（标题 → 服务器 → 监控 → 终端），各面板占满宽度 */
+  .layout-main { grid-template-columns: minmax(0, 1fr); }
+  .servers-section-title, .servers-panel, .terminal-panel, .monitor-panel { grid-column: 1; grid-row: auto; }
+  .monitor-panel { margin-top: 0; }
+  .monitor-summary { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .monitor-summary { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* --------------------------------------------------------------------------
+   12. 性能监控设置弹窗
+   -------------------------------------------------------------------------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+}
+
+.modal-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, var(--shadow-sm));
+  width: min(440px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+}
+
+/* 监控设置弹窗：字段较多（采集/保留/指令/探测/展示/实时频率），加宽便于阅读 */
+#monitor-settings-modal .modal-card {
+  width: min(560px, 94vw);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.modal-close {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.modal-close:hover {
+  background: var(--bg-hover, var(--bg-subtle));
+  color: var(--text-primary);
+}
+
+.modal-sub {
+  padding: 10px 18px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.modal-body {
+  padding: 12px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-row {
+  display: grid;
+  grid-template-columns: 120px auto 1fr;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.modal-row-label {
+  color: var(--text-secondary);
+}
+
+.modal-row-control input[type='number'],
+.modal-row-control input[type='text'] {
+  width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-tertiary));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.modal-row-control input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--mc-green);
+  cursor: pointer;
+}
+
+.modal-row-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 480px) {
+  .modal-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .modal-row-hint { margin-bottom: 8px; }
+}
+
+/* 兼容旧主题缺省变量 */
+:root {
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.25);
+  --border-subtle: color-mix(in srgb, var(--border-color) 55%, transparent);
+  --bg-hover: color-mix(in srgb, var(--border-color) 20%, transparent);
+  --bg-input: var(--bg-tertiary);
+}
+
+/* --------------------------------------------------------------------------
    11. 响应式布局 (Mobile Breakpoints)
    -------------------------------------------------------------------------- */
 
@@ -1090,7 +1562,6 @@ body {
   .dashboard-header { flex-direction: column; align-items: flex-start; }
   .header-actions { width: 100%; justify-content: space-between; }
   .details-grid { grid-template-columns: 1fr 1fr; }
-  .layout-main { flex-direction: column; }
   .servers-container { grid-template-columns: 1fr; }
   .terminal-panel { height: 60vh; min-height: 320px; }
 }

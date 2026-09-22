@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from ..core.server_manager import ServerManager
     from .binding import BindingService
     from .image_bed import ImageBedUploaderGroup
+    from .monitor import MonitorCollector
     from .terminal_log import TerminalLogStore
 
 
@@ -60,6 +62,7 @@ class WebApiController:
         metrics: MetricsCollector,
         configs: dict[str, ServerConfig],
         terminal_logs: TerminalLogStore | None = None,
+        monitor: "MonitorCollector | None" = None,
     ) -> None:
         self.context = context
         self.server_manager = server_manager
@@ -68,6 +71,7 @@ class WebApiController:
         self.metrics = metrics
         self.configs = configs
         self.terminal_logs = terminal_logs
+        self.monitor = monitor
 
     def register_routes(self) -> None:
         """向 AstrBot Context 注册所有 Web API 路由。"""
@@ -118,6 +122,36 @@ class WebApiController:
             ("/image_bed/status", self.get_image_bed_status, ["GET"], "获取图床服务状态"),
             ("/config", self.get_config_overview, ["GET"], "获取插件配置概览"),
         ]
+        # 性能监控（TPS/延迟）路由：未注入 MonitorCollector 时（如旧测试桩）不注册
+        if self.monitor is not None:
+            routes.extend(
+                [
+                    (
+                        "/monitor/status",
+                        self.get_monitor_status,
+                        ["GET"],
+                        "获取全部服务器的性能监控状态（含最新采样）",
+                    ),
+                    (
+                        "/monitor/<server_name>/series",
+                        self.get_monitor_series,
+                        ["GET"],
+                        "获取某台服务器的监控时间序列与统计摘要",
+                    ),
+                    (
+                        "/monitor/settings",
+                        self.save_monitor_settings,
+                        ["POST"],
+                        "保存某台服务器的性能监控设置（启用/间隔/保留/指令）",
+                    ),
+                    (
+                        "/monitor/<server_name>/sample",
+                        self.sample_monitor,
+                        ["POST"],
+                        "立即对某台服务器执行一次采样（不等下一个采集间隔）",
+                    ),
+                ]
+            )
 
         count = 0
         for path, handler, methods, desc in routes:
@@ -140,7 +174,18 @@ class WebApiController:
         return json_response(data)
 
     async def get_servers(self) -> Any:
-        """获取所有服务器列表及其连接状态，并附带各服务器的实时状态与在线玩家。"""
+        """获取所有服务器列表及其连接状态，并附带各服务器的实时状态与在线玩家。
+
+        查询参数 ``force=1``（仪表盘「手动刷新」按钮）：把已判定「鹊桥 RCON
+        不可用」的服务器重置为未确认，重新探测一次——用户可能刚在鹊桥侧开启
+        RCON。自动轮询不带该参数，避免向未开启 RCON 的鹊桥端反复发
+        send_rcon_command、在 MC 控制台刷报错。
+        """
+        try:
+            force_rcon = str(request.query.get("force", "")).strip().lower() in (
+                "1", "true")
+        except (AttributeError, ValueError, TypeError):
+            force_rcon = False
         servers_info = []
         for server_name, config in self.configs.items():
             instance = self.server_manager.get(server_name)
@@ -151,6 +196,7 @@ class WebApiController:
 
             status_data = None
             players_data = None
+            status_model = None
             if instance and connected:
                 try:
                     status_model = await instance.get_status_model()
@@ -162,7 +208,10 @@ class WebApiController:
                     )
 
                 try:
-                    plr = await instance.fetch_player_list()
+                    # 复用已拉取的状态：避免同一轮请求对鹊桥重复发 get_status
+                    plr = await instance.fetch_player_list(
+                        force_rcon=force_rcon, status_model=status_model
+                    )
                     if plr:
                         players_data = plr.to_dict()
                 except Exception as exc:
@@ -203,6 +252,12 @@ class WebApiController:
                     "target_sessions_count": len(config.target_sessions),
                     "status": status_data,
                     "players": players_data,
+                    # 性能监控摘要：当前生效设置（默认开启，仪表盘内可调）+ 最新采样等
+                    "monitor": (
+                        self.monitor.status(server_name)
+                        if self.monitor is not None
+                        else {"enabled": config.monitor_enabled}
+                    ),
                 }
             )
         return json_response({"servers": servers_info})
@@ -504,3 +559,154 @@ class WebApiController:
                 }
             )
         return json_response({"servers": servers})
+
+    # ---- 性能监控（TPS / 延迟） ----
+
+    async def get_monitor_status(self) -> Any:
+        """获取全部服务器性能监控状态（当前生效设置、最新采样、错误等）。"""
+        if self.monitor is None:
+            return error_response("性能监控未接入", status_code=503)
+        result = {}
+        for name in self.configs:
+            result[name] = self.monitor.status(name)
+        return json_response({"monitors": result})
+
+    async def get_monitor_series(self, server_name: str) -> Any:
+        """获取某台服务器在一段时间窗内的监控序列与统计摘要。
+
+        Query 参数：
+        - ``range``：时间窗，``1h``/``6h``/``24h``/``168h``/``7d`` 或纯数字小时，默认 24h
+        - ``bucket``：显式桶宽（``1m``/``15m``/``1h``）；缺省按时间窗自动选择
+        """
+        if self.monitor is None:
+            return error_response("性能监控未接入", status_code=503)
+        instance = self.server_manager.get(server_name)
+        if instance is None:
+            return error_response(f"服务器不存在: {server_name}", status_code=404)
+
+        range_hours, bucket_seconds = self._parse_monitor_window()
+        since_ts = time.time() - range_hours * 3600
+        series = self.monitor.store.series(server_name, since_ts, bucket_seconds)
+        return json_response(
+            {
+                "server": server_name,
+                "range_hours": range_hours,
+                "bucket_seconds": bucket_seconds,
+                "series": series,
+            }
+        )
+
+    @staticmethod
+    def _parse_monitor_window() -> tuple[float, int]:
+        """解析 range / bucket 参数，返回 (时长小时, 桶宽秒)。
+
+        - ``range``：``1h``/``6h``/``24h``/``168h``/``7d``、纯数字小时，
+          以及实时模式使用的 ``1m``/``30s`` 等分钟/秒单位；非法回落 24h
+        - ``bucket``：显式桶宽（``10s``/``1m``/``15m``/``1h``）；缺省按
+          时间窗自动选择
+        """
+        try:
+            raw_range = str(request.query.get("range", "24h")).strip().lower()
+        except (AttributeError, ValueError, TypeError):
+            raw_range = "24h"
+        range_hours = 24.0
+        if raw_range:
+            try:
+                if raw_range.endswith("s"):
+                    value = float(raw_range[:-1]) / 3600
+                elif raw_range.endswith("m"):
+                    value = float(raw_range[:-1]) / 60
+                elif raw_range.endswith("h"):
+                    value = float(raw_range[:-1])
+                elif raw_range.endswith("d"):
+                    value = float(raw_range[:-1]) * 24
+                else:
+                    value = float(raw_range)
+            except ValueError:
+                value = 24.0
+            if value > 0:
+                range_hours = min(value, 24 * 90)  # 上限 90 天，防止极端参数拖垮响应
+
+        # 桶宽自动选择：短窗细粒度，长窗粗粒度，保证图表点数适中
+        if range_hours <= 2:
+            bucket_seconds = 60
+        elif range_hours <= 24:
+            bucket_seconds = 600
+        elif range_hours <= 72:
+            bucket_seconds = 1800
+        else:
+            bucket_seconds = 3600
+
+        try:
+            raw_bucket = str(request.query.get("bucket", "")).strip().lower()
+        except (AttributeError, ValueError, TypeError):
+            raw_bucket = ""
+        if raw_bucket:
+            try:
+                if raw_bucket.endswith("s"):
+                    bucket_seconds = max(5, int(float(raw_bucket[:-1])))
+                elif raw_bucket.endswith("m") and not raw_bucket.endswith("h"):
+                    bucket_seconds = max(60, int(float(raw_bucket[:-1]) * 60))
+                elif raw_bucket.endswith("h"):
+                    bucket_seconds = max(60, int(float(raw_bucket[:-1]) * 3600))
+                else:
+                    bucket_seconds = max(60, int(float(raw_bucket)))
+            except ValueError:
+                pass
+        return range_hours, bucket_seconds
+
+    async def save_monitor_settings(self) -> Any:
+        """保存某台服务器的性能监控设置（来自仪表盘页面，不走 conf schema）。
+
+        请求体：``{"server_name": "...", "enabled": bool, "interval": int,
+        "retention_days": int, "tps_command": "..."}``，仅更新出现的字段；
+        保存后立即生效并持久化到 ``data_dir/monitor/settings.json``。
+        非法数值由 ``MonitorSettings.from_dict`` 防御式兜底（下限钳制）。
+        """
+        if self.monitor is None:
+            return error_response("性能监控未接入", status_code=503)
+        try:
+            body = await request.json(default={}) or {}
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return error_response("请求体必须是 JSON 对象", status_code=400)
+
+        server_name = str(body.get("server_name") or body.get("server") or "").strip()
+        if not server_name:
+            return error_response("缺少 server_name", status_code=400)
+        if server_name not in self.configs and self.server_manager.get(server_name) is None:
+            return error_response(f"服务器不存在: {server_name}", status_code=404)
+
+        fields = {
+            key: body[key]
+            for key in (
+                "enabled", "interval", "retention_days", "tps_command",
+                "ping_host", "ping_port", "default_tab", "realtime_interval",
+                "auto_refresh_interval",
+            )
+            if key in body
+        }
+        if not fields:
+            return error_response("缺少可保存的设置字段", status_code=400)
+
+        updated = self.monitor.apply_settings(server_name, fields)
+        return json_response(
+            {"server": server_name, "settings": updated.to_dict()}
+        )
+
+    async def sample_monitor(self, server_name: str) -> Any:
+        """立即对某台服务器执行一次采样（不等下一个采集间隔）。
+
+        触发一轮与定时循环相同的采样（TPS 经 RCON、延迟经直连 SLP ping，
+        并行执行），结果写入当天分片；返回该服最新监控状态，供仪表盘
+        「⏱ 立即采集」按钮调用。
+        """
+        if self.monitor is None:
+            return error_response("性能监控未接入", status_code=503)
+        if server_name not in self.configs and self.server_manager.get(server_name) is None:
+            return error_response(f"服务器不存在: {server_name}", status_code=404)
+        status = await self.monitor.sample_now(server_name)
+        if status is None:
+            return error_response(f"服务器不存在: {server_name}", status_code=404)
+        return json_response({"server": server_name, "status": status})

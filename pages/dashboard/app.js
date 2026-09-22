@@ -83,6 +83,24 @@ class DashboardApp {
     this.isRefreshing = false;
     this.activeServerTab = 'all'; // 当前激活的服务器视图标签（'all' 或 server_name）
     this.defaultServerIcon = './default-server-icon.png';
+    // 性能监控状态
+    this.monitorRange = '24'; // 分析时间窗（小时）
+    // 性能监控子页面（'tps' | 'latency'）：默认展示项由后端持久化
+    // （server.monitor.default_tab，存 settings.json，不依赖浏览器存储）。
+    // _defaultTabServer 记录已应用默认展示项的服务器：切换服务器时
+    // 重新套用该服务器的默认子页面，同一服务器内手动切换保持
+    this.monitorTab = 'tps';
+    this._defaultTabServer = null;
+    this.monitorSeriesCache = new Map(); // server_name -> 最近一次 series payload
+    this.isMonitorLoading = false;
+    // 实时模式：连续采样 + 高频刷新最近 60 秒（realtimeActive 标记、timer 句柄）。
+    // 频率 realtimeInterval（秒）来自后端设置（默认 5，1~60）
+    this.realtimeActive = false;
+    this.realtimeTimer = null;
+    this.realtimeInterval = 5;
+    // 自动刷新轮询间隔（秒）：后端设置持久化（默认 10，10~3600）
+    this.autoRefreshInterval = 10;
+    this.chartState = null; // { canvas, opts } 供 resize/hover 重算
   }
 
   async init() {
@@ -90,6 +108,7 @@ class DashboardApp {
     this.initDefaultIcon();
     this.bindEvents();
     this.bindTerminalActions();
+    this.bindMonitorActions();
 
     if (this.bridge) {
       try {
@@ -107,8 +126,19 @@ class DashboardApp {
       console.warn('window.AstrBotPluginPage not found; falling back to direct HTTP mode');
     }
 
-    await this.refreshAll();
-    this.setupAutoRefresh(true);
+    // 打开页面首次加载同样强制探测一次 RCON（与手动刷新一致）；
+    // 之后的自动轮询不强制，避免向未开启 RCON 的鹊桥端反复发请求刷报错
+    await this.refreshAll(false, true);
+    // 自动刷新间隔（秒）取第一台服务器的设置（面板级偏好，后端持久化）
+    const firstMon = this.servers && this.servers[0] && this.servers[0].monitor;
+    if (firstMon && Number.isFinite(firstMon.auto_refresh_interval)) {
+      this.autoRefreshInterval =
+        Math.max(10, Math.min(3600, firstMon.auto_refresh_interval));
+    }
+    // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；是否开启以开关为准
+    this.setupAutoRefresh(
+      document.getElementById('auto-refresh-toggle')?.checked || false
+    );
   }
 
   initDefaultIcon() {
@@ -147,7 +177,9 @@ class DashboardApp {
 
   bindEvents() {
     document.getElementById('btn-refresh')?.addEventListener('click', () => {
-      this.refreshAll();
+      // 手动刷新强制重新探测一次 RCON（自动轮询不强制，避免向未开启
+      // RCON 的鹊桥端反复发 send_rcon_command、在 MC 控制台刷报错）
+      this.refreshAll(false, true);
     });
 
     const autoToggle = document.getElementById('auto-refresh-toggle');
@@ -162,9 +194,11 @@ class DashboardApp {
       this.refreshInterval = null;
     }
     if (enable) {
+      // 间隔取后端设置（秒），越界时按 10~3600 收拢
+      const secs = Math.max(10, Math.min(3600, this.autoRefreshInterval || 10));
       this.refreshInterval = setInterval(() => {
         this.refreshAll(true);
-      }, 10000);
+      }, secs * 1000);
     }
   }
 
@@ -193,7 +227,7 @@ class DashboardApp {
     return await res.json();
   }
 
-  async refreshAll(silent = false) {
+  async refreshAll(silent = false, force = false) {
     if (this.isRefreshing) return;
     this.isRefreshing = true;
 
@@ -205,7 +239,7 @@ class DashboardApp {
 
     try {
       // 1. 获取服务器列表（包含附带的实时 status 与 players）
-      const serversData = await this.apiGet('servers');
+      const serversData = await this.apiGet('servers', force ? { force: 1 } : {});
       this.servers = serversData?.servers || [];
 
       // 2. 获取统计数据
@@ -220,6 +254,7 @@ class DashboardApp {
       this.renderOverview();
       this.renderServers();
       await this.renderTerminal();
+      this.renderMonitorPanel();
       this.updateLastRefreshTime();
     } catch (err) {
       console.error('Refresh failed:', err);
@@ -471,6 +506,9 @@ class DashboardApp {
       rconBadgeClass = 'badge-rcon';
     }
 
+    // 性能监控徽标行（仅启用监控的服务器显示；全局视图同样可见）
+    const monitorRowHtml = this.buildMonitorBadgesHtml(server);
+
     return `
       <div class="server-card ${isConnected ? 'connected' : 'disconnected'}" id="server-card-${escapeHtml(server.server_name)}">
         <div class="server-card-header">
@@ -513,6 +551,8 @@ class DashboardApp {
           </div>
         </div>
 
+        ${monitorRowHtml}
+
         <div class="players-box">
           <div class="players-header">
             <span>在线玩家 (${playersCountText})</span>
@@ -528,6 +568,12 @@ class DashboardApp {
   }
 
   bindServerCardActions() {
+    // 监控「图表」按钮：全局视图点击切到该服视图并展开监控面板
+    document.querySelectorAll('.monitor-mini-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.focusServer(btn.dataset.server);
+      });
+    });
     // 玩家标签点击：快捷私聊/踢出/OP 管理，结果统一显示在互通终端
     document.querySelectorAll('.player-tag').forEach(tag => {
       tag.addEventListener('click', async () => {
@@ -629,6 +675,7 @@ class DashboardApp {
       this.renderServers();
       // 异步拉取后端历史日志；内部已捕获异常，无需等待
       this.renderTerminal();
+      this.renderMonitorPanel();
     }
   }
 
@@ -824,10 +871,557 @@ class DashboardApp {
     }
   }
 
+  // ---- 性能监控面板（TPS / 延迟） ----
+
+  // 服务器卡片上的监控摘要行：仅启用监控的服务器渲染；最新值来自
+  // get_servers 返回的 server.monitor.latest，跟随 10s 自动刷新
+  buildMonitorBadgesHtml(server) {
+    const m = server.monitor || {};
+    if (!m.enabled) return '';
+    const latest = m.latest || null;
+
+    let tpsHtml, latHtml, metaHtml, detailBtn;
+    if (latest) {
+      const tps1 = (typeof latest.tps1 === 'number') ? latest.tps1 : null;
+      const lat = (typeof latest.latency_ms === 'number') ? latest.latency_ms : null;
+      tpsHtml = tps1 != null
+        ? `<span class="monitor-mini-badge ${this.tpsValueClass(tps1)}">⚡ TPS ${tps1.toFixed(1)}</span>`
+        : '<span class="monitor-mini-badge">⚡ TPS 不可用</span>';
+      latHtml = lat != null
+        ? `<span class="monitor-mini-badge">📡 延迟 ${Math.round(lat)}ms</span>`
+        : '<span class="monitor-mini-badge">📡 延迟 --</span>';
+      metaHtml = `<span class="monitor-mini-meta">${m.sample_count ?? 0} 采样 · ${this.formatClock(latest.ts)}</span>`;
+    } else {
+      tpsHtml = '<span class="monitor-mini-badge">⚡ 采集中…</span>';
+      latHtml = '';
+      metaHtml = m.last_error
+        ? `<span class="monitor-mini-meta monitor-warning">⚠ ${escapeHtml(m.last_error)}</span>`
+        : '<span class="monitor-mini-meta">等待首次采样…</span>';
+    }
+    detailBtn = `<button class="monitor-mini-btn" data-server="${escapeHtml(server.server_name)}" title="查看趋势图与统计摘要">图表</button>`;
+
+    return `
+      <div class="monitor-mini-row">
+        <span class="monitor-mini-title">📈 性能监控</span>
+        ${tpsHtml}${latHtml}
+        <span class="monitor-mini-spacer"></span>
+        ${metaHtml}
+        ${detailBtn}
+      </div>`;
+  }
+
+  renderMonitorPanel() {
+    const panel = document.getElementById('monitor-panel');
+    const server = this.activeServerObject();
+    const enabled = !!server && !!(server.monitor && server.monitor.enabled);
+
+    if (panel) panel.classList.toggle('hidden', !enabled);
+    // 监控面板隐藏（全局视图/监控关闭）时，主布局退化为单列全宽，
+    // 服务器卡片不再被挤在左半列（否则会变细长）
+    const layoutMain = document.querySelector('.layout-main');
+    if (layoutMain) layoutMain.classList.toggle('monitor-hidden', !enabled);
+    if (!enabled) {
+      // 全局视图/监控关闭：无采样目标，实时模式一并停止
+      this._defaultTabServer = null;
+      this.stopRealtime();
+      return;
+    }
+
+    // 默认展示项来自后端设置（default_tab）：切换服务器时套用该服默认子页面
+    if (this._defaultTabServer !== server.server_name) {
+      const defTab = (server.monitor && server.monitor.default_tab) || 'tps';
+      this.monitorTab = defTab === 'latency' ? 'latency' : 'tps';
+      this._defaultTabServer = server.server_name;
+    }
+
+    // 打开页面时按「默认展示项」恢复子页面（HTML 初始为 TPS）
+    this.setMonitorTab(this.monitorTab);
+
+    this.updateMonitorStatusLine(server);
+    // 右侧面板高度与左侧服务器面板动态同步（底部对齐）
+    this.syncMonitorPanelHeight();
+    if (this.monitorSeriesCache.has(server.server_name)) {
+      this.renderMonitorCharts(
+        server.server_name,
+        this.monitorSeriesCache.get(server.server_name)
+      );
+    } else {
+      // 进入视图首次：拉取时间序列（含摘要）
+      this.loadMonitorSeries(server.server_name);
+    }
+  }
+
+  updateMonitorStatusLine(server) {
+    const line = document.getElementById('monitor-status-line');
+    if (!line) return;
+    const m = server.monitor || {};
+    const parts = [];
+    parts.push(`<span class="monitor-dot ${m.running ? 'on' : 'off'}"></span> 采集${m.running ? '中' : '未运行'}`);
+    parts.push(`间隔 ${m.interval || '-'}s`);
+    parts.push(`保留 ${m.retention_days ?? '-'} 天`);
+    const tpsPref = (m.tps_command || 'auto').trim().toLowerCase();
+    if (tpsPref === '' || tpsPref === 'auto') {
+      const resolved = m.tps_command_resolved || m.tps_command || '-';
+      parts.push(`TPS 指令 <code>${escapeHtml(resolved)}</code>（按服务端自动）`);
+    } else {
+      parts.push(`TPS 指令 <code>${escapeHtml(m.tps_command)}</code>`);
+    }
+    parts.push(`已采样 ${m.sample_count ?? 0} 条`);
+    const pingTarget = m.ping_target || '';
+    if (pingTarget) {
+      const pingLabel = (m.ping_host || '').trim()
+        ? `延迟探测 <code>${escapeHtml(pingTarget)}</code>（域名）`
+        : `延迟探测 <code>${escapeHtml(pingTarget)}</code>`;
+      parts.push(pingLabel);
+    } else {
+      parts.push('延迟探测 <span class="monitor-err">未配置</span>（⚙ 设置里填公网域名/端口）');
+    }
+    if (m.last_ts) parts.push(`最近采样 ${this.formatClock(m.last_ts)}`);
+    if (m.last_error) {
+      const err = m.last_error;
+      const short = err.length > 28 ? err.slice(0, 28) + '…' : err;
+      line.innerHTML = parts.join(' · ') +
+        ` &nbsp;<span class="monitor-err" title="${escapeHtml(err)}">⚠ ${escapeHtml(short)}</span>`;
+      return;
+    }
+    line.innerHTML = parts.join(' · ');
+  }
+
+  formatClock(ts) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  // 按子页面渲染统计卡：kind='tps' 或 'latency'，写入对应容器
+  renderMonitorSummary(payload, kind) {
+    const boxId = kind === 'latency' ? 'monitor-summary-latency' : 'monitor-summary-tps';
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    const s = payload.series || {};
+    const fmt = (v, suffix = '') => (v == null ? '--' : `${v}${suffix}`);
+    let cards = [];
+    if (kind === 'latency') {
+      const lat = (s.latency || {}).summary || {};
+      cards = [
+        { label: '平均延迟', value: fmt(lat.avg, 'ms') },
+        { label: '最大延迟', value: fmt(lat.max, 'ms') },
+        { label: 'P95 延迟', value: fmt(lat.p95, 'ms') },
+        { label: '采样数', value: fmt(lat.count) },
+      ];
+    } else {
+      const tps = (s.tps || {}).summary || {};
+      cards = [
+        { label: '平均 TPS', value: fmt(tps.avg), cls: this.tpsValueClass(tps.avg) },
+        { label: '最低 TPS', value: fmt(tps.min), cls: this.tpsValueClass(tps.min) },
+        { label: '采样数', value: fmt(tps.count) },
+      ];
+    }
+    box.innerHTML = cards.map(c => `
+      <div class="monitor-stat-card">
+        <span class="monitor-stat-label">${c.label}</span>
+        <span class="monitor-stat-value ${c.cls || ''}">${c.value}</span>
+      </div>`).join('');
+  }
+
+  tpsValueClass(v) {
+    if (v == null) return '';
+    if (v < 15) return 'monitor-danger';
+    if (v < 19) return 'monitor-warning';
+    return 'monitor-good';
+  }
+
+  async loadMonitorSeries(serverName) {
+    if (this.isMonitorLoading) return;
+    this.isMonitorLoading = true;
+    try {
+      // 实时模式：窗口 60 秒、10 秒桶（细粒度？实时曲线）；其余按小时窗口
+      const isRealtime = this.monitorRange === 'realtime';
+      const payload = await this.apiGet(
+        `monitor/${encodeURIComponent(serverName)}/series`,
+        isRealtime
+          ? { range: '1m', bucket: '10s' }
+          : { range: `${this.monitorRange}h` }
+      );
+      this.monitorSeriesCache.set(serverName, payload);
+      // 拉取期间用户已切换视图，丢弃过期结果
+      if (this.activeServerTab !== serverName) return;
+      this.renderMonitorCharts(serverName, payload);
+    } catch (e) {
+      console.warn('拉取监控数据失败:', e);
+      const line = document.getElementById('monitor-status-line');
+      if (line && this.activeServerTab === serverName) {
+        line.innerHTML =
+          `<span class="monitor-err">⚠ 监控数据加载失败: ${escapeHtml(e.message || '网络错误')}</span>`;
+      }
+    } finally {
+      this.isMonitorLoading = false;
+    }
+  }
+
+  renderMonitorCharts(serverName, payload) {
+    // 两个子页面各自的统计卡
+    this.renderMonitorSummary(payload, 'tps');
+    this.renderMonitorSummary(payload, 'latency');
+    const series = payload.series || {};
+    if (this.monitorTab !== 'latency') {
+      const tpsCanvas = document.getElementById('monitor-chart-tps');
+      if (tpsCanvas) {
+        this.drawTimeSeries(tpsCanvas, {
+          lines: [
+            { name: '1m', color: '#4ade80', points: (series.tps || {}).points || [] },
+            { name: '5m', color: '#fbbf24', points: (series.tps5m || {}).points || [] },
+            { name: '15m', color: '#f472b6', points: (series.tps15m || {}).points || [] },
+          ],
+          rangeHours: payload.range_hours || 24,
+          legend: true,
+          yMin: 0,
+          yMax: 20,
+          yTicks: 4,
+          decimals: 1,
+        });
+      }
+    } else {
+      const latCanvas = document.getElementById('monitor-chart-latency');
+      if (latCanvas) {
+        this.drawTimeSeries(latCanvas, {
+          lines: [
+            { name: '延迟', color: '#60a5fa', points: (series.latency || {}).points || [] },
+          ],
+          rangeHours: payload.range_hours || 24,
+          legend: false,
+          yMin: 0,
+          dynamicMax: true,
+          yTicks: 4,
+          decimals: 0,
+        });
+      }
+    }
+  }
+
+  redrawMonitorCharts() {
+    const server = this.activeServerObject();
+    if (!server) return;
+    const payload = this.monitorSeriesCache.get(server.server_name);
+    if (!payload) return;
+    this.renderMonitorCharts(server.server_name, payload);
+  }
+
+  formatTsLabel(ts, rangeHours) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    if (rangeHours > 48) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  drawTimeSeries(canvas, opts) {
+    const wrap = canvas.parentElement;
+    const rect = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(80, rect.width);
+    const H = Math.max(80, rect.height);
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const css = getComputedStyle(document.documentElement);
+    const gridColor = css.getPropertyValue('--chart-grid').trim() || 'rgba(148,163,184,0.15)';
+    const textColor = css.getPropertyValue('--text-muted').trim() || '#94a3b8';
+
+    const pad = { top: 16, right: 12, bottom: 24, left: 48 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+
+    const lines = opts.lines.filter(l => l.points && l.points.length > 0);
+    if (!lines.length) {
+      ctx.fillStyle = textColor;
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('该时间窗内暂无采样数据', W / 2, H / 2 - 2);
+      this.chartState = null;
+      return;
+    }
+
+    // 值域：固定 yMin/yMax 优先；dynamicMax 时按数据上浮取整
+    let yMin = opts.yMin != null ? opts.yMin : Infinity;
+    let yMax = opts.yMax != null ? opts.yMax : -Infinity;
+    if (opts.yMin == null || opts.yMax == null) {
+      for (const line of lines) {
+        for (const p of line.points) {
+          if (opts.yMin == null) yMin = Math.min(yMin, p.min);
+          if (opts.yMax == null) yMax = Math.max(yMax, p.max);
+        }
+      }
+    }
+    if (opts.dynamicMax) {
+      yMin = 0;
+      yMax = Math.max(Math.ceil(yMax * 1.15), 1);
+    }
+    if (yMin === yMax) yMax = yMin + 1;
+
+    // 时间范围（跨所有线）
+    let t0 = Infinity, t1 = -Infinity;
+    for (const line of lines) {
+      t0 = Math.min(t0, line.points[0].ts);
+      t1 = Math.max(t1, line.points[line.points.length - 1].ts);
+    }
+    if (t1 <= t0) t1 = t0 + 1;
+    const xAt = ts => pad.left + (ts - t0) / (t1 - t0) * plotW;
+    const yAt = v => pad.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+    // 横网格 + y 轴刻度
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const yTicks = opts.yTicks || 4;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = yMin + (yMax - yMin) * i / yTicks;
+      const yy = yAt(v);
+      ctx.strokeStyle = gridColor;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, yy);
+      ctx.lineTo(W - pad.right, yy);
+      ctx.stroke();
+      ctx.fillStyle = textColor;
+      ctx.fillText(v.toFixed(opts.decimals != null ? opts.decimals : 0), pad.left - 6, yy);
+    }
+
+    // 纵网格 + x 轴时间标签
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const xTicks = 5;
+    for (let i = 0; i <= xTicks; i++) {
+      const ts = t0 + (t1 - t0) * i / xTicks;
+      const xx = xAt(ts);
+      ctx.strokeStyle = gridColor;
+      ctx.beginPath();
+      ctx.moveTo(xx, pad.top);
+      ctx.lineTo(xx, H - pad.bottom);
+      ctx.stroke();
+      ctx.fillStyle = textColor;
+      ctx.fillText(this.formatTsLabel(ts, opts.rangeHours || 24), xx, H - 8);
+    }
+
+    // 各线：min~max 半透明带 + avg 折线 + 末端点
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const line of lines) {
+      const pts = line.points;
+      ctx.beginPath();
+      pts.forEach((p, idx) => {
+        const xx = xAt(p.ts);
+        if (idx === 0) ctx.moveTo(xx, yAt(p.max));
+        else ctx.lineTo(xx, yAt(p.max));
+      });
+      for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(xAt(pts[i].ts), yAt(pts[i].min));
+      ctx.closePath();
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle = line.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.beginPath();
+      pts.forEach((p, idx) => {
+        const xx = xAt(p.ts);
+        if (idx === 0) ctx.moveTo(xx, yAt(p.avg));
+        else ctx.lineTo(xx, yAt(p.avg));
+      });
+      ctx.strokeStyle = line.color;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      const last = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.arc(xAt(last.ts), yAt(last.avg), 2.4, 0, Math.PI * 2);
+      ctx.fillStyle = line.color;
+      ctx.fill();
+    }
+
+    // 图例（线名色块）画在绘图区左上角
+    if (opts.legend) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '10px sans-serif';
+      let lx = pad.left;
+      for (const line of lines) {
+        const label = line.name;
+        ctx.fillStyle = line.color;
+        ctx.fillRect(lx, pad.top - 11, 10, 3);
+        ctx.fillStyle = textColor;
+        ctx.fillText(label, lx + 14, pad.top - 9.5);
+        lx += 14 + ctx.measureText(label).width + 18;
+      }
+    }
+
+    // 记录命中数据供 hover tooltip / resize 重绘
+    this.chartState = {
+      wrap,
+      opts: { ...opts, lines, yMin, yMax, t0, t1, xAt, yAt },
+    };
+  }
+
+  onChartHover(e) {
+    const state = this.chartState;
+    if (!state) return;
+    const rect = state.wrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const { t0, t1, xAt } = state.opts;
+    const hoverTs = t0 + (mx - 48) / (rect.width - 48 - 12) * (t1 - t0);
+    let best = null;
+    let bestDist = Infinity;
+    for (const line of state.opts.lines) {
+      for (const p of line.points) {
+        const dist = Math.abs(p.ts - hoverTs);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = { line, p };
+        }
+      }
+    }
+    if (!best || typeof best.p.avg !== 'number') return;
+    const span = t1 - t0;
+    if (bestDist > span * 0.5) return;
+    const xx = xAt(best.p.ts);
+    const yy = state.opts.yAt(best.p.avg);
+    let html = `<div class="monitor-tip-time">${this.formatTsLabel(best.p.ts, state.opts.rangeHours || 24)}</div>`;
+    html += `<div><span class="monitor-tip-swatch" style="background:${best.line.color}"></span>` +
+      `${escapeHtml(best.line.name)}: <b>${best.p.avg}</b></div>`;
+    html += `<div class="monitor-tip-sub">min ${best.p.min} / max ${best.p.max} / 样本 ${best.p.count}</div>`;
+    this.showChartTooltip(state.wrap, html, xx, yy);
+  }
+
+  showChartTooltip(wrap, html, x, y) {
+    let tip = wrap.querySelector('.monitor-tooltip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'monitor-tooltip';
+      wrap.appendChild(tip);
+    }
+    tip.innerHTML = html;
+    const wrapRect = wrap.getBoundingClientRect();
+    const tipW = tip.offsetWidth || 150;
+    const left = Math.min(Math.max(4, x - tipW / 2), wrapRect.width - tipW - 4);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(2, y - 34)}px`;
+    tip.style.display = 'block';
+  }
+
+  hideChartTooltip() {
+    document.querySelectorAll('.monitor-tooltip').forEach(t => {
+      t.style.display = 'none';
+    });
+  }
+
+  // 性能监控子页面：'tps' | 'latency'（手动切换仅本次浏览有效，
+  // 默认展示项由设置里的「默认展示」保存到后端，刷新/重开按默认恢复）
+  setMonitorTab(tab) {
+    if (tab !== 'tps' && tab !== 'latency') return;
+    // 幂等：当前 tab 与 DOM 状态一致时跳过（避免面板每次刷新都触发重绘）
+    const activeBtn = document.querySelector('.monitor-tab.active');
+    if (this.monitorTab === tab && activeBtn && activeBtn.dataset.tab === tab) return;
+    this.monitorTab = tab;
+    document.querySelectorAll('.monitor-tab').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === tab));
+    document.getElementById('monitor-page-tps')?.classList.toggle('hidden', tab !== 'tps');
+    document.getElementById('monitor-page-latency')?.classList.toggle('hidden', tab !== 'latency');
+    // 目标 canvas 刚从 hidden 容器恢复尺寸，立即重绘
+    const server = this.activeServerObject();
+    if (server && this.monitorSeriesCache.has(server.server_name)) {
+      this.renderMonitorCharts(server.server_name,
+        this.monitorSeriesCache.get(server.server_name));
+    }
+  }
+
+  bindMonitorActions() {
+    const rangeSel = document.getElementById('monitor-range');
+    rangeSel?.addEventListener('change', () => {
+      if (rangeSel.value === 'realtime') {
+        this.startRealtime();
+        return;
+      }
+      this.stopRealtime();
+      this.monitorRange = rangeSel.value;
+      const server = this.activeServerObject();
+      if (!server || !(server.monitor && server.monitor.enabled)) return;
+      this.monitorSeriesCache.delete(server.server_name);
+      this.loadMonitorSeries(server.server_name);
+    });
+    document.getElementById('monitor-refresh')?.addEventListener('click', () => {
+      const server = this.activeServerObject();
+      if (!server) return;
+      this.monitorSeriesCache.delete(server.server_name);
+      this.loadMonitorSeries(server.server_name);
+    });
+    document.getElementById('monitor-sample-btn')?.addEventListener('click', () => this.sampleMonitorNow());
+    // 子页面切换（TPS / 延迟）：统一走 setMonitorTab（会持久化默认展示项）
+    document.querySelectorAll('.monitor-tab').forEach(btn => {
+      btn.addEventListener('click', () => this.setMonitorTab(btn.dataset.tab));
+    });
+    // 设置弹窗：监控参数仅在此维护（不走插件 WebUI 配置）
+    document.getElementById('monitor-settings-btn')?.addEventListener('click', () => this.openMonitorSettings());
+    document.getElementById('ms-close')?.addEventListener('click', () => this.closeMonitorSettings());
+    document.getElementById('ms-cancel')?.addEventListener('click', () => this.closeMonitorSettings());
+    document.getElementById('ms-save')?.addEventListener('click', () => this.saveMonitorSettings());
+    const overlay = document.getElementById('monitor-settings-modal');
+    overlay?.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closeMonitorSettings();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.isMonitorSettingsOpen()) this.closeMonitorSettings();
+    });
+    // hover 提示与窗口缩放重绘
+    document.querySelectorAll('.monitor-chart-wrap').forEach(wrap => {
+      wrap.addEventListener('mousemove', (e) => this.onChartHover(e));
+      wrap.addEventListener('mouseleave', () => this.hideChartTooltip());
+    });
+    window.addEventListener('resize', () => {
+      this.syncMonitorPanelHeight();
+      this.redrawMonitorCharts();
+      this.hideChartTooltip();
+    });
+    // 高度随时跟随：任一面板尺寸变化（玩家列表/图表渲染/服务器卡增减）
+    // 都自动重新做等高钳制，避免异步渲染后只因一次同步就失效
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => this.syncMonitorPanelHeight());
+      const sp = document.querySelector('.servers-panel');
+      const mp = document.getElementById('monitor-panel');
+      if (sp) ro.observe(sp);
+      if (mp) ro.observe(mp);
+      this._panelResizeObserver = ro;
+    }
+  }
+
+  // 左右面板等高：测量服务器面板与性能监控面板实际高度，取较大值，
+  // 同时给两边设 min-height 做「双向钳制」——无论内容是谁撑高，另一侧
+  // 都会被拉到同高、底部齐平；min-height（而非固定 height）保证内容
+  // 增加时面板能自然长高，下次钳制再跟上。
+  syncMonitorPanelHeight() {
+    const panel = document.getElementById('monitor-panel');
+    const serversPanel = document.querySelector('.servers-panel');
+    if (!panel || !serversPanel) return;
+    if (window.innerWidth <= 900) {
+      // 单列布局：各面板自然高度，无需等高
+      panel.style.minHeight = '';
+      serversPanel.style.minHeight = '';
+      return;
+    }
+    if (panel.classList.contains('hidden')) {
+      serversPanel.style.minHeight = '';
+      return;
+    }
+    const h = Math.max(serversPanel.offsetHeight, panel.offsetHeight);
+    if (h > 0) {
+      if (serversPanel.style.minHeight !== h + 'px') serversPanel.style.minHeight = h + 'px';
+      if (panel.style.minHeight !== h + 'px') panel.style.minHeight = h + 'px';
+    }
+  }
+
   bindTerminalActions() {
     const input = document.getElementById('terminal-input');
     if (input) {
-      // 回车智能识别：/ 开头 = 执行指令，否则 = 广播
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.isComposing) {
           e.preventDefault();
@@ -855,6 +1449,212 @@ class DashboardApp {
       }
       this.terminalLog('system', key, '终端已清空');
     });
+  }
+
+  // ---- 性能监控设置（弹窗，仅此维护监控参数） ----
+
+  isMonitorSettingsOpen() {
+    const overlay = document.getElementById('monitor-settings-modal');
+    return !!(overlay && !overlay.classList.contains('hidden'));
+  }
+
+  openMonitorSettings() {
+    const server = this.activeServerObject();
+    if (!server) {
+      this.showToast('请先切换到具体服务器视图', 'error');
+      return;
+    }
+    const m = server.monitor || {};
+    document.getElementById('ms-server-label').textContent =
+      `正在配置：${server.server_label || server.server_name}`;
+    document.getElementById('ms-enabled').checked = !!m.enabled;
+    document.getElementById('ms-interval').value = m.interval ?? 60;
+    document.getElementById('ms-retention').value = m.retention_days ?? 7;
+    document.getElementById('ms-tps-command').value = (m.tps_command || 'auto').trim() || 'auto';
+    document.getElementById('ms-ping-host').value = m.ping_host || '';
+    document.getElementById('ms-ping-port').value = m.ping_port ?? 25565;
+    // 默认展示项由后端持久化（刷新/重开后仍生效）
+    document.getElementById('ms-default-tab').value =
+      (m.default_tab === 'latency') ? 'latency' : 'tps';
+    // 实时采集频率（秒）：随设置持久化，1~60
+    document.getElementById('ms-realtime-interval').value =
+      (m.realtime_interval >= 1 && m.realtime_interval <= 60) ? m.realtime_interval : 5;
+    // 自动刷新间隔（秒）：随设置持久化，10~3600
+    document.getElementById('ms-auto-refresh').value =
+      (m.auto_refresh_interval >= 10 && m.auto_refresh_interval <= 3600)
+        ? m.auto_refresh_interval : 10;
+    document.getElementById('monitor-settings-modal').classList.remove('hidden');
+  }
+
+  closeMonitorSettings() {
+    document.getElementById('monitor-settings-modal').classList.add('hidden');
+  }
+
+  async saveMonitorSettings() {
+    const server = this.activeServerObject();
+    if (!server) return;
+    const enabled = document.getElementById('ms-enabled').checked;
+    const interval = parseInt(document.getElementById('ms-interval').value, 10);
+    const retentionDays = parseInt(document.getElementById('ms-retention').value, 10);
+    const rawTps = document.getElementById('ms-tps-command').value.trim();
+    // 空 / auto → auto（按服务端类型自动选择）；否则使用显式指令
+    const tpsCommand = (rawTps === '' || rawTps.toLowerCase() === 'auto') ? 'auto' : rawTps;
+    const pingHost = document.getElementById('ms-ping-host').value.trim();
+    const pingPort = parseInt(document.getElementById('ms-ping-port').value, 10);
+    // 实时采集频率（秒）：1~60，越界时按当前值提交（后端会防御钳制）
+    const realtimeInterval = parseInt(
+      document.getElementById('ms-realtime-interval').value, 10);
+    // 自动刷新间隔（秒）：10~3600，越界时按当前值提交（后端会防御钳制）
+    const autoRefresh = parseInt(
+      document.getElementById('ms-auto-refresh').value, 10);
+    // 默认展示项：提交后端持久化（存 settings.json），不依赖浏览器存储；
+    // 立即切到所选子页面，刷新/重开面板后按该默认恢复
+    const defaultTab = document.getElementById('ms-default-tab').value === 'latency' ? 'latency' : 'tps';
+    this.monitorTab = defaultTab;
+    this._defaultTabServer = server.server_name;
+
+    // 后端会做防御式钳制，这里提前提示常见误配
+    if (!Number.isFinite(interval) || interval < 10) {
+      this.showToast('采集间隔最小 10 秒', 'error');
+      return;
+    }
+    if (!Number.isFinite(retentionDays) || retentionDays < 1) {
+      this.showToast('保留天数至少 1 天', 'error');
+      return;
+    }
+    if (!Number.isFinite(pingPort) || pingPort < 1 || pingPort > 65535) {
+      this.showToast('延迟探测端口需在 1-65535 之间', 'error');
+      return;
+    }
+
+    const saveBtn = document.getElementById('ms-save');
+    saveBtn.disabled = true;
+    try {
+      const resp = await this.apiPost('monitor/settings', {
+        server_name: server.server_name,
+        enabled,
+        interval,
+        retention_days: retentionDays,
+        tps_command: tpsCommand,
+        ping_host: pingHost,
+        ping_port: pingPort,
+        default_tab: defaultTab,
+        realtime_interval: realtimeInterval,
+        auto_refresh_interval: autoRefresh,
+      });
+      // 保存后立即用新频率（若正在实时模式，下一轮按新频率排期）
+      if (Number.isFinite(realtimeInterval) &&
+          realtimeInterval >= 1 && realtimeInterval <= 60) {
+        this.realtimeInterval = realtimeInterval;
+      }
+      // 自动刷新间隔即时应用：若正在自动刷新，用新间隔重启定时器
+      if (Number.isFinite(autoRefresh) &&
+          autoRefresh >= 10 && autoRefresh <= 3600) {
+        this.autoRefreshInterval = autoRefresh;
+        this.setupAutoRefresh(
+          document.getElementById('auto-refresh-toggle')?.checked || false
+        );
+      }
+      this.closeMonitorSettings();
+      this.showToast(`监控设置已保存：${enabled ? '已启用' : '已停用'}（间隔 ${resp?.settings?.interval ?? interval}s）`, 'success');
+      // 设置变更后重拉服务器摘要（含最新开关/采样），面板与卡片同步刷新
+      this.monitorSeriesCache.delete(server.server_name);
+      await this.refreshAll(true);
+    } catch (e) {
+      this.showToast('保存监控设置失败: ' + (e.message || '网络错误'), 'error');
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  async sampleMonitorNow() {
+    const server = this.activeServerObject();
+    if (!server) return;
+    const btn = document.getElementById('monitor-sample-btn');
+    if (btn) btn.disabled = true;
+    try {
+      await this.apiPost(`monitor/${encodeURIComponent(server.server_name)}/sample`, {});
+      this.monitorSeriesCache.delete(server.server_name);
+      await this.refreshAll(true);
+      this.showToast('已采集一次（TPS + 延迟）', 'success');
+    } catch (e) {
+      this.showToast('立即采集失败: ' + (e.message || '网络错误'), 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // 实时模式：选中后每 5 秒对当前服务器连续采样一次，并刷新最近 60 秒曲线。
+  // 使用链式 setTimeout（上一轮完成后才排下一轮），采样慢也不会并发堆积；
+  // 状态行同时给出实时指示与最新采样值/错误，让连续采集过程可见
+  startRealtime() {
+    if (this.realtimeActive) return;
+    this.realtimeActive = true;
+    this.monitorRange = 'realtime';
+    this.realtimeTick(); // 立即跑一轮，随后每轮结束自动排下一轮
+  }
+
+  stopRealtime() {
+    this.realtimeActive = false;
+    if (this.realtimeTimer) {
+      clearTimeout(this.realtimeTimer);
+      this.realtimeTimer = null;
+    }
+    // 恢复普通状态行（renderMonitorPanel 也会重刷，这里兜底切换 range 的场景）
+    const server = this.activeServerObject();
+    if (server) this.updateMonitorStatusLine(server);
+  }
+
+  async realtimeTick() {
+    // 先排下一轮：本 tick 无论快慢，完成后按配置频率（秒）必然续跑（除非被 stop）
+    if (this.realtimeActive) {
+      const delayMs = Math.max(1000, Math.min(60000, this.realtimeInterval || 5)) * 1000;
+      this.realtimeTimer = setTimeout(() => this.realtimeTick(), delayMs);
+    }
+    const server = this.activeServerObject();
+    if (!server || !(server.monitor && server.monitor.enabled)) {
+      // 当前无可采样的服务器（全局视图/监控关闭）：停止连续测试
+      if (this.realtimeActive) this.stopRealtime();
+      return;
+    }
+    try {
+      const resp = await this.apiPost(
+        `monitor/${encodeURIComponent(server.server_name)}/sample`, {});
+      const st = resp && resp.data && resp.data.status;
+      if (st) this._renderRealtimeStatus(server, st);
+      this.monitorSeriesCache.delete(server.server_name);
+      await this.loadMonitorSeries(server.server_name);
+    } catch (e) {
+      console.warn('实时采样失败:', e);
+      const line = document.getElementById('monitor-status-line');
+      if (line) {
+        line.innerHTML =
+          `<span class="monitor-err">⚠ 实时采样失败: ${escapeHtml(e.message || '网络错误')}</span>`;
+      }
+    }
+  }
+
+  // 实时模式状态行：🔴 指示 + 最近采样时间 + 最新 TPS/延迟（或错误）
+  _renderRealtimeStatus(server, st) {
+    const line = document.getElementById('monitor-status-line');
+    if (!line) return;
+    const parts = [];
+    const freq = Math.max(1, Math.min(60, this.realtimeInterval || 5));
+    parts.push(`<span class="monitor-dot on"></span> 实时采集 每 ${freq} 秒一次`);
+    const ts = st.last_ts ? this.formatClock(st.last_ts) : '-';
+    if (st.last_error) {
+      const err = st.last_error;
+      const short = err.length > 28 ? err.slice(0, 28) + '…' : err;
+      parts.push(`最近采样 ${ts}`);
+      parts.push(`<span class="monitor-err" title="${escapeHtml(err)}">${escapeHtml(short)}</span>`);
+    } else {
+      parts.push(`最近采样 ${ts}`);
+      if (st.latest) {
+        if (st.latest.tps1 != null) parts.push(`TPS <b>${st.latest.tps1}</b>`);
+        if (st.latest.latency_ms != null) parts.push(`延迟 <b>${st.latest.latency_ms}ms</b>`);
+      }
+    }
+    line.innerHTML = parts.join(' · ');
   }
 
   showToast(message, type = 'info') {

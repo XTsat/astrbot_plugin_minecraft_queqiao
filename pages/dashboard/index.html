@@ -24,7 +24,7 @@
     </div>
     <div class="header-actions">
       <label class="auto-refresh-toggle">
-        <input type="checkbox" id="auto-refresh-toggle" checked />
+        <input type="checkbox" id="auto-refresh-toggle" />
         <span>自动刷新 (10s)</span>
       </label>
       <button class="btn btn-primary" id="btn-refresh" title="立即刷新数据">
@@ -77,16 +77,64 @@
     </div>
   </section>
 
-  <!-- 主体：服务器卡片网格 + 单服务器视图下的互通终端 -->
-  <main class="layout-main">
+  <!-- 主体：标题单独一行通栏 + 服务器卡片网格 + 单服务器视图下的互通终端。
+     monitor-hidden 与 monitor-panel 初始 hidden 对应：JS 渲染后按需切换 -->
+  <main class="layout-main monitor-hidden">
+    <div class="servers-section-title" id="servers-section-title">
+      <span>🌐 服务器实例状态</span>
+    </div>
     <section class="servers-panel">
-      <div class="servers-section-title" id="servers-section-title">
-        <span>🌐 服务器实例状态</span>
-      </div>
       <div class="servers-container" id="servers-container">
         <div class="loading-box">
           <div class="spinner"></div>
           <p>正在拉取服务器各项信息...</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="monitor-panel hidden" id="monitor-panel">
+      <div class="monitor-header">
+        <span class="monitor-title">📈 性能监控</span>
+        <div class="monitor-toolbar">
+          <select id="monitor-range" class="monitor-range-select" title="分析时间窗">
+            <option value="realtime">🔴 实时（最近 60 秒）</option>
+            <option value="1">最近 1 小时</option>
+            <option value="6">最近 6 小时</option>
+            <option value="24" selected>最近 24 小时</option>
+            <option value="168">最近 7 天</option>
+          </select>
+          <button class="btn btn-sm" id="monitor-sample-btn" title="立即对当前服务器采集一次（不等下一个采集间隔）">⏱ 采集</button>
+          <button class="btn btn-sm" id="monitor-refresh" title="重新拉取监控数据">↻ 刷新</button>
+          <button class="btn btn-sm" id="monitor-settings-btn" title="监控设置（启用/间隔/保留/指令）">⚙ 设置</button>
+        </div>
+      </div>
+      <div class="monitor-status-line" id="monitor-status-line">
+        正在加载监控数据...
+      </div>
+      <div class="monitor-tabs" id="monitor-tabs">
+        <button class="monitor-tab active" data-tab="tps" title="服务端 TPS（经 RCON 执行 tps 指令）">⚡ TPS</button>
+        <button class="monitor-tab" data-tab="latency" title="服务端响应延迟（直连服务器 SLP ping，玩家视角，无需 RCON/插件）">📡 延迟</button>
+      </div>
+      <div class="monitor-subpage" id="monitor-page-tps">
+        <div class="monitor-summary" id="monitor-summary-tps"></div>
+        <div class="monitor-charts">
+          <div class="monitor-chart-card">
+            <div class="monitor-chart-title">TPS 趋势（1m / 5m / 15m）</div>
+            <div class="monitor-chart-wrap">
+              <canvas id="monitor-chart-tps"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="monitor-subpage hidden" id="monitor-page-latency">
+        <div class="monitor-summary" id="monitor-summary-latency"></div>
+        <div class="monitor-charts">
+          <div class="monitor-chart-card">
+            <div class="monitor-chart-title">直连延迟 (ms)</div>
+            <div class="monitor-chart-wrap">
+              <canvas id="monitor-chart-latency"></canvas>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -121,5 +169,88 @@
   </main>
 
   <script type="module" src="./app.js"></script>
+
+  <!-- 性能监控设置弹窗（监控参数仅在此维护，不走插件 WebUI 配置） -->
+  <div class="modal-overlay hidden" id="monitor-settings-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title">⚙ 性能监控设置</span>
+        <button class="modal-close" id="ms-close" title="关闭">✕</button>
+      </div>
+      <div class="modal-sub" id="ms-server-label">服务器</div>
+      <div class="modal-body">
+        <label class="modal-row">
+          <span class="modal-row-label">启用监控</span>
+          <span class="modal-row-control">
+            <input type="checkbox" id="ms-enabled" />
+          </span>
+          <span class="modal-row-hint">关闭后停止采样，历史数据保留至过期自动清理</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">采集间隔（秒）</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-interval" min="10" step="1" value="60" />
+          </span>
+          <span class="modal-row-hint">最小 10 秒；调小更灵敏但增加服务器与 RCON 负担</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">实时采集频率（秒）</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-realtime-interval" min="1" max="60" step="1" value="5" />
+          </span>
+          <span class="modal-row-hint">实时模式下每 N 秒连续采样一次（1～60 秒，默认 5）</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">自动刷新间隔（秒）</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-auto-refresh" min="10" max="3600" step="1" value="10" />
+          </span>
+          <span class="modal-row-hint">勾选仪表盘「自动刷新」后每 N 秒拉取一次卡片状态（10～3600，默认 10）</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">数据保留（天）</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-retention" min="1" step="1" value="7" />
+          </span>
+          <span class="modal-row-hint">超过该天数的历史采样自动清理</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">TPS 指令</span>
+          <span class="modal-row-control">
+            <input type="text" id="ms-tps-command" placeholder="auto 或 tps / forge tps / spark tps" value="auto" />
+          </span>
+          <span class="modal-row-hint">留空或填 auto = 按服务端类型自动选择（forge→forge tps，fabric→spark tps，Paper/Spigot→tps）；也可固定指定</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">延迟探测域名</span>
+          <span class="modal-row-control">
+            <input type="text" id="ms-ping-host" placeholder="如 mc.example.com（留空=用配置 ws_url 主机）" value="" />
+          </span>
+          <span class="modal-row-hint">域名和端口可一体填写（`mc.example.com:25565`、`http://8.218.17.111:54040/` 这类带协议/路径的地址也能直接粘贴，端口自动提取）；留空时取插件配置 ws_url 的主机名（内网互通测到的是内网延迟）</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">延迟探测端口</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-ping-port" min="1" step="1" value="25565" />
+          </span>
+          <span class="modal-row-hint">MC 服务端口（默认 25565）；非标端口或 SLP 禁用时延迟会显示不可用</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">默认展示</span>
+          <span class="modal-row-control">
+            <select id="ms-default-tab">
+              <option value="tps">⚡ TPS</option>
+              <option value="latency">📡 延迟</option>
+            </select>
+          </span>
+          <span class="modal-row-hint">打开页面时性能监控面板自动展示的子页面（保存在本机浏览器）</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="ms-cancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="ms-save">保存并生效</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

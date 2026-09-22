@@ -9,3 +9,4 @@ venv/
 *.tmp
 .DS_Store
 .notes/
+.dsh-vision-router/

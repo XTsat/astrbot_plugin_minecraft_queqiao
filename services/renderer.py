@@ -18,11 +18,18 @@ class InfoRenderer:
 
     @staticmethod
     def format_status(
-        server_name: str, status: ServerStatus | None, label: str | None = None
+        server_name: str,
+        status: ServerStatus | None,
+        label: str | None = None,
+        tps: tuple[float | None, float | None, float | None] | None = None,
+        latency_ms: float | None = None,
     ) -> str:
         """状态文本（渲染失败或未启用渲染时的输出）。
 
         `label` 为展示用名称（`display_name`，可中文），缺省时回退 `server_name`。
+        `tps` 为监控采样的 ``(1m, 5m, 15m)`` 三档值（可含 None）；
+        `latency_ms` 为监控采样的 API 往返延迟。两者来自性能监控的最新采样，
+        与实时状态查询相互独立；未启用监控时不展示。
         """
         name = label or server_name
         if status is None:
@@ -34,6 +41,13 @@ class InfoRenderer:
             f"版本：{status.server_version or '未知'}",
             f"在线：{status.players_text}",
         ]
+        if tps is not None and any(value is not None for value in tps):
+            tps_text = " / ".join(
+                f"{value:.1f}" if value is not None else "-" for value in tps
+            )
+            lines.append(f"TPS：{tps_text}（1m/5m/15m）")
+        if latency_ms is not None:
+            lines.append(f"延迟：{latency_ms:.0f}ms")
         if status.description:
             lines.append(f"描述：{status.description}")
         # 在线玩家名（SLP players.sample，免 RCON 即可得；可能不全/被伪造）
@@ -49,7 +63,12 @@ class InfoRenderer:
         return "\n".join(lines)
 
     async def render_status(
-        self, server_name: str, status: ServerStatus | None, label: str | None = None
+        self,
+        server_name: str,
+        status: ServerStatus | None,
+        label: str | None = None,
+        tps: tuple[float | None, float | None, float | None] | None = None,
+        latency_ms: float | None = None,
     ) -> str:
         """渲染状态图。
 
@@ -57,13 +76,13 @@ class InfoRenderer:
         使「渲染失败自动回退文本」的配置语义始终成立。
         """
         if not self.enabled:
-            return self.format_status(server_name, status, label)
+            return self.format_status(server_name, status, label, tps, latency_ms)
 
         try:
-            return self.format_status(server_name, status, label)
+            return self.format_status(server_name, status, label, tps, latency_ms)
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}][{server_name}] 状态渲染失败，回退文本: {exc}")
-            return self.format_status(server_name, None, label)
+            return self.format_status(server_name, None, label, tps, latency_ms)
 
     @staticmethod
     def format_player_list(

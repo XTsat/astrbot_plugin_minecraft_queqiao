@@ -39,6 +39,7 @@ from .services.message_bridge import (
     resolve_image_url,
 )
 from .services.metrics import MetricsCollector
+from .services.monitor import MonitorCollector
 from .services.renderer import InfoRenderer
 from .services.terminal_log import TerminalLogStore
 from .services.web_api import WebApiController
@@ -74,10 +75,12 @@ class MinecraftQueQiaoPlugin(Star):
         self.image_bed = ImageBedUploaderGroup()
         self.metrics = MetricsCollector()
         self.terminal_logs = TerminalLogStore(data_dir)
+        self.monitor = MonitorCollector(data_dir, self.server_manager)
         self.command_handler = CommandHandler(
             self.server_manager, self.binding_service, self.renderer
         )
         self.command_handler.attach_bridge(self.message_bridge)
+        self.command_handler.attach_monitor(self.monitor)
 
         self._configs: dict[str, ServerConfig] = {}
         self.web_api = WebApiController(
@@ -88,6 +91,7 @@ class MinecraftQueQiaoPlugin(Star):
             self.metrics,
             self._configs,
             self.terminal_logs,
+            self.monitor,
         )
         self.web_api.register_routes()
         self._init_task: asyncio.Task | None = None
@@ -156,6 +160,8 @@ class MinecraftQueQiaoPlugin(Star):
 
         await self._setup_image_services()
         await self.server_manager.start_all()
+        # 性能监控（TPS/延迟）采集任务：仅对启用了监控的服务器启动
+        self.monitor.start(self._configs)
         logger.info(
             f"[{PLUGIN_NAME}] 插件已初始化，共 {len(self._configs)} 台服务器"
         )
@@ -171,6 +177,7 @@ class MinecraftQueQiaoPlugin(Star):
 
         await self.image_bed.stop_builtin()
         await self.server_manager.stop_all()
+        await self.monitor.stop()
         logger.info(f"[{PLUGIN_NAME}] 已关闭")
 
     async def _setup_image_services(self) -> None:
