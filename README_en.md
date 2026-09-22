@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.2-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.3-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -25,8 +25,8 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 | Command | Permission | Description |
 |---------|------------|-------------|
 | `/mc help` | Everyone | Show help and custom command list |
-| `/mc status` | Everyone | Show server status |
-| `/mc list` | Everyone | Show online players |
+| `/mc status` | Everyone | Show server status (incl. online count; player names too when the server exposes them) |
+| `/mc list` | Everyone | Show online players (RCON first; falls back to online query when RCON is off) |
 | `/mc player <id>` | Everyone | Show player info (requires RCON) |
 | `/mc cmd <command>` | Admin | Execute a server command, filtered by the allow/deny list |
 | `/mc say <text>` | Admin | Broadcast a message in-game |
@@ -437,7 +437,9 @@ subscribe_event:             # enable the events you need
 
 **Q: The plugin keeps reconnecting. Should I change the address to `0.0.0.0`?** `0.0.0.0` is a listen address, set on QueQiao's `websocket_server.host`. Under Docker, if AstrBot and MC are not on the same network stack, change it to `0.0.0.0`; for a Windows / Linux same-machine install no change is normally needed. See "Networking and addresses" above, and the MC server IP note there when the two are on different machines.
 
-**Q: `mc cmd` and `mc list` return nothing?** Both depend on RCON. Set `rcon.enable: true` with a password in QueQiao's `config.yml`, or enable the plugin's "direct RCON fallback" and fill in the server's RCON details.
+**Q: `mc cmd` returns nothing?** `mc cmd` depends on RCON. Set `rcon.enable: true` with a password in QueQiao's `config.yml`, or enable the plugin's "direct RCON fallback" and fill in the server's RCON details.
+
+**Q: Can `mc list` show player names without enabling RCON?** Yes. `mc list` now prefers RCON `list` (complete and authoritative); when RCON is off it falls back to the online query from QueQiao's `get_status` (SLP `players.sample`) — the same source motd-style query sites use, no RCON needed. The trade-off is that the SLP list may be incomplete (vanilla truncates it; anti-bot plugins may leave it empty or stuff it with fake names); when only the count is available it still shows "online N/M". For a 100% complete list you still need RCON enabled.
 
 **Q: Why am I not receiving death, achievement or command events?** These events are **unsupported on Vanilla and Velocity** servers; this is an upstream limitation.
 

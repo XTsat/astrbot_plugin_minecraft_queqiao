@@ -2,6 +2,7 @@
 
 from .constants import PLUGIN_NAME
 from .models import (
+    PlayerListResult,
     QueQiaoAchievement,
     QueQiaoEvent,
     QueQiaoPlayer,
@@ -15,6 +16,7 @@ from .server_manager import ServerInstance, ServerManager
 
 __all__ = [
     "PLUGIN_NAME",
+    "PlayerListResult",
     "QueQiaoAchievement",
     "QueQiaoClient",
     "QueQiaoEvent",

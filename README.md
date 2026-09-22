@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.2-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.3-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -25,8 +25,8 @@
 | 命令 | 权限 | 说明 |
 |------|------|------|
 | `/mc help` | 全部 | 显示帮助信息与自定义指令列表 |
-| `/mc status` | 全部 | 查看服务器状态 |
-| `/mc list` | 全部 | 查看在线玩家列表 |
+| `/mc status` | 全部 | 查看服务器状态（含在线人数；服务器返回名单时也显示玩家名） |
+| `/mc list` | 全部 | 查看在线玩家列表（优先 RCON，未开 RCON 时用在线查询兜底） |
 | `/mc player <玩家ID>` | 全部 | 查看玩家信息（依赖 RCON） |
 | `/mc cmd <指令>` | 管理员 | 远程执行服务器指令，受黑白名单约束 |
 | `/mc say <内容>` | 管理员 | 向游戏内广播消息 |
@@ -437,9 +437,13 @@ subscribe_event:             # 按需开启事件订阅
 
 `0.0.0.0` 是监听地址，填鹊桥的 `websocket_server.host`。Docker 下若 AstrBot 与 MC不在同一网络栈，需改为 `0.0.0.0`；Windows / Linux 同机直装则通常无需修改。详见「网络与地址」一节。
 
-**Q：`mc cmd` 和 `mc list` 没有输出？**
+**Q：`mc cmd` 没有输出？**
 
-这两项依赖 RCON。请在鹊桥 `config.yml` 中设置 `rcon.enable: true` 并填写密码；若无法开启鹊桥 RCON，可在插件配置中启用「直连 RCON 兜底」并填写服务器 RCON 信息。
+`mc cmd` 依赖 RCON。请在鹊桥 `config.yml` 中设置 `rcon.enable: true` 并填写密码；若无法开启鹊桥 RCON，可在插件配置中启用「直连 RCON 兜底」并填写服务器 RCON 信息。
+
+**Q：`mc list` 不想开 RCON 也能看到玩家名吗？**
+
+可以。`mc list` 现在优先用 RCON `list`（完整权威），未开 RCON 时自动回退到鹊桥 `get_status` 的在线查询（SLP `players.sample`）——和你用 motd 查询站看到的一样，无需 RCON。代价是 SLP 名单可能不全（原版端会截断、反 bot 插件会留空或塞假名）；只拿到人数时也会显示「在线 N/M 人」。要 100% 完整名单仍需开 RCON。
 
 **Q：死亡 / 成就 / 命令事件收不到？** 
 

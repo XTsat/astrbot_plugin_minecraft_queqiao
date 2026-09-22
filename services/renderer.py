@@ -7,7 +7,7 @@
 from astrbot.api import logger
 
 from ..core.constants import PLUGIN_NAME
-from ..core.models import ServerStatus
+from ..core.models import PlayerListResult, ServerStatus
 
 
 class InfoRenderer:
@@ -36,6 +36,12 @@ class InfoRenderer:
         ]
         if status.description:
             lines.append(f"描述：{status.description}")
+        # 在线玩家名（SLP players.sample，免 RCON 即可得；可能不全/被伪造）
+        names = status.online_player_names
+        if names:
+            shown = "、".join(names[:8])
+            more = f" 等 {len(names)} 人" if len(names) > 8 else ""
+            lines.append(f"玩家：{shown}{more}")
         if status.memory_total:
             lines.append(f"内存：{status.memory_usage_text}")
         if status.cpu_cores:
@@ -61,15 +67,54 @@ class InfoRenderer:
 
     @staticmethod
     def format_player_list(
-        server_id: str, players: list[str] | None, label: str | None = None
+        server_id: str,
+        players: "PlayerListResult | list[str] | None",
+        label: str | None = None,
     ) -> str:
-        """在线玩家列表文本。"""
+        """在线玩家列表文本。
+
+        兼容两种入参：
+        - `PlayerListResult`（新）：按 source 区分 RCON / SLP / 仅人数 / 失败
+        - `list[str]`（旧）：视作 RCON 完整名单，`None` 视作查询失败
+          （保留以兼容既有调用与 tests_offline 第 21 组契约）
+
+        三层取数语义见 `ServerInstance.fetch_player_list`：RCON `list`
+        完整权威；未开 RCON 时用鹊桥 `get_status` 的 SLP `players.sample`
+        兜底（免 RCON，但可能不全/被服务端伪造）。
+        """
         name = label or server_id
-        if players is None:
+        if not isinstance(players, PlayerListResult):
+            # 旧调用归一化：list[str] → rcon 完整名单，None → 失败
+            players = PlayerListResult(
+                names=list(players) if players else [],
+                source="rcon" if players is not None else "none",
+            )
+
+        if players.source == "none":
             return (
                 f"❌ 无法获取服务器 {name} 的玩家列表\n"
-                f"请确认：鹊桥已开启 RCON，或在配置中启用直连 RCON 兜底"
+                f"请确认：鹊桥已连接（get_status 需 v0.5.0+），"
+                f"或已开启 RCON"
             )
-        if not players:
+
+        # 只有人数、没有名单（未开 RCON 且 SLP 未返回玩家名）
+        if players.source == "count":
+            if players.online == 0:
+                # 0 人在线：与 RCON 空名单一致，按「没人在线」处理
+                return f"👥 服务器 {name} 当前没有玩家在线"
+            return (
+                f"👥 服务器 {name} 在线 {players.online}/{players.max} 人\n"
+                f"（未开 RCON 且在线查询未返回玩家名；"
+                f"部分服务端会隐藏或伪造在线名单）"
+            )
+
+        # source in ("rcon", "slp")
+        if not players.names:
+            # RCON 成功但无人 → 确实没人在线
             return f"👥 服务器 {name} 当前没有玩家在线"
-        return f"👥 服务器 {name} 在线 {len(players)} 人：\n" + "、".join(players)
+
+        note = "（在线查询，可能不全）" if players.source == "slp" else ""
+        return (
+            f"👥 服务器 {name} 在线 {len(players.names)} 人{note}：\n"
+            + "、".join(players.names)
+        )

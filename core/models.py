@@ -6,6 +6,7 @@ Velocity 仅有 nickname/uuid/is_op），因此所有解析一律走 `.get()` �
 缺失字段降级为空值而不抛异常。
 """
 
+import re
 from dataclasses import dataclass, field
 
 from .constants import (
@@ -70,6 +71,19 @@ def _as_bool(value: object, default: bool = False) -> bool:
         if lowered in ("0", "false", "no", "n", "off"):
             return False
     return default
+
+
+# § 后跟一位格式/颜色代码（如 §a、§6、§r）。SLP 的 players.sample 名字在
+# 部分服务端会被塞入这类彩色/广告文本（如 CubeCraft 的宣传链接），转发展示
+# 前剥离成可读纯文本。玩家正常昵称不含 §，剥离安全。
+_SECTION_RE = re.compile(r"§.")
+
+
+def _strip_format_codes(value: str) -> str:
+    """去掉 Minecraft 文本格式码（§ 后跟一位代码）与首尾空白。"""
+    if not value:
+        return ""
+    return _SECTION_RE.sub("", value).strip()
 
 
 @dataclass
@@ -313,7 +327,12 @@ class QueQiaoEvent:
 
 @dataclass
 class ServerStatus:
-    """`get_status` 接口返回的服务器状态（鹊桥 >= v0.5.0）。"""
+    """`get_status` 接口返回的服务器状态（鹊桥 >= v0.5.0）。
+
+    `player_sample` 取自 SLP 的 `server_list_ping.players.sample`：每项
+    `(name, uuid)`，name 已剥离 § 格式码。它免 RCON 即可得，但可能不全
+    或被服务端伪造（原版端会截断、反 bot 插件会留空/塞假名）。
+    """
 
     server_type: str = ""
     server_version: str = ""
@@ -328,6 +347,7 @@ class ServerStatus:
     memory_total: int = 0
     memory_used: int = 0
     memory_percentage: float = 0.0
+    player_sample: list[tuple[str, str]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: object) -> "ServerStatus":
@@ -347,6 +367,17 @@ class ServerStatus:
         physical = memory.get("physical_memory")
         physical = physical if isinstance(physical, dict) else {}
 
+        # SLP players.sample：在线玩家名+UUID 样本（免 RCON，但可能不全/伪造）
+        player_sample: list[tuple[str, str]] = []
+        sample_raw = players.get("sample")
+        if isinstance(sample_raw, list):
+            for item in sample_raw:
+                if not isinstance(item, dict):
+                    continue
+                name = _strip_format_codes(_as_str(item.get("name")))
+                if name:
+                    player_sample.append((name, _as_str(item.get("id"))))
+
         return cls(
             server_type=_as_str(data.get("server_type")),
             server_version=_as_str(data.get("server_version"))
@@ -362,6 +393,7 @@ class ServerStatus:
             memory_total=_as_int(physical.get("total")),
             memory_used=_as_int(physical.get("used")),
             memory_percentage=_as_float(physical.get("percentage")),
+            player_sample=player_sample,
         )
 
     @property
@@ -381,3 +413,26 @@ class ServerStatus:
     @property
     def players_text(self) -> str:
         return f"{self.online_players}/{self.max_players}"
+
+    @property
+    def online_player_names(self) -> list[str]:
+        """SLP players.sample 的在线玩家名（已剥离格式码，可能不全/被伪造）。"""
+        return [name for name, _ in self.player_sample]
+
+
+@dataclass
+class PlayerListResult:
+    """在线玩家查询结果：`fetch_player_list` 三层兜底的统一返回。
+
+    source 取值：
+    - ``"rcon"``：RCON ``list`` 指令，完整且权威（鹊桥 send_rcon / 直连 RCON）
+    - ``"slp"``：鹊桥 ``get_status`` 的 SLP ``players.sample``，**免 RCON**，
+      但可能不全或被服务端伪造
+    - ``"count"``：sample 为空，仅拿到 ``online``/``max`` 人数
+    - ``"none"``：两条通道都失败
+    """
+
+    names: list[str] = field(default_factory=list)
+    online: int = 0
+    max: int = 0
+    source: str = ""

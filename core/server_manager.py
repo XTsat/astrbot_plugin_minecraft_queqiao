@@ -5,6 +5,7 @@ import asyncio
 from astrbot.api import logger
 
 from .constants import PLUGIN_NAME
+from .models import PlayerListResult, ServerStatus
 from .models_config import ServerConfig
 from .queqiao_client import QueQiaoClient, QueQiaoTimeout
 from .rcon_client import RconClient
@@ -70,6 +71,15 @@ class ServerInstance:
 
     # ---- 指令执行：鹊桥优先，RCON 兜底 ----
 
+    async def get_status_model(self) -> ServerStatus | None:
+        """获取服务器状态模型；未连接/失败返回 None（需鹊桥 >= v0.5.0）。
+
+        把 `client.get_status()` 的原始 dict 包成 `ServerStatus`，供
+        `handle_status` 与 `fetch_player_list`（SLP sample 兜底）共用。
+        """
+        raw = await self.client.get_status()
+        return ServerStatus.from_dict(raw) if raw else None
+
     async def execute_command(self, command: str) -> str | None:
         """执行服务器指令，返回输出；两条通道都失败返回 None。
 
@@ -96,12 +106,47 @@ class ServerInstance:
 
         return None
 
-    async def fetch_player_list(self) -> list[str] | None:
-        """获取在线玩家名列表；失败返回 None（与「空列表」区分）。"""
+    async def fetch_player_list(self) -> PlayerListResult:
+        """获取在线玩家，三层兜底（RCON list → SLP sample → 人数）：
+
+        1. RCON ``list``（完整权威）：鹊桥 send_rcon_command → 直连 RCON
+        2. 鹊桥 ``get_status`` 的 SLP ``players.sample``（**免 RCON**，
+           可能不全/被服务端伪造）
+        3. sample 为空时退回 ``online``/``max`` 人数
+        4. 都失败 → ``source="none"``
+
+        鹊桥执行 ``list`` 超时属「结果未知」：指令可能已执行，故不再走直连
+        RCON 重发（同一条指令会执行两遍）；此时降级到 SLP sample 属**不同
+        查询**（SLP ping），不构成重发，符合「超时 ≠ 失败，禁止重发」约定。
+        """
+        # ① RCON list（完整权威）
         output = await self.execute_command("list")
-        if output is None:
-            return None
-        return RconClient.parse_player_list(output)
+        if output is not None:
+            return PlayerListResult(
+                names=RconClient.parse_player_list(output),
+                source="rcon",
+            )
+
+        # ② 鹊桥 get_status 的 SLP sample（免 RCON）
+        status = await self.get_status_model()
+        if status is not None:
+            names = status.online_player_names
+            if names:
+                return PlayerListResult(
+                    names=names,
+                    online=status.online_players,
+                    max=status.max_players,
+                    source="slp",
+                )
+            # ③ sample 空，退回人数
+            return PlayerListResult(
+                online=status.online_players,
+                max=status.max_players,
+                source="count",
+            )
+
+        # ④ 全失败
+        return PlayerListResult(source="none")
 
 
 class ServerManager:

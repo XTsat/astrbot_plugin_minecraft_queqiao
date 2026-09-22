@@ -13,7 +13,6 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..core.constants import PENDING_ACTION_TTL, PLUGIN_NAME
-from ..core.models import ServerStatus
 from ..core.models_config import ServerConfig
 from ..core.server_manager import ServerInstance, ServerManager
 from ..services.binding import BindingService
@@ -238,8 +237,7 @@ class CommandHandler:
         if not instance.connected:
             return f"❌ 服务器 {label} 未连接鹊桥"
 
-        raw = await instance.client.get_status()
-        status = ServerStatus.from_dict(raw) if raw else None
+        status = await instance.get_status_model()
         return await self.renderer.render_status(server_id, status, label)
 
     async def handle_list(self, event: AstrMessageEvent, server_id: str) -> str:
@@ -247,9 +245,9 @@ class CommandHandler:
         if instance is None:
             return f"❌ 未找到服务器 {server_id}"
 
-        players = await instance.fetch_player_list()
+        result = await instance.fetch_player_list()
         return self.renderer.format_player_list(
-            server_id, players, instance.config.display_name
+            server_id, result, instance.config.display_name
         )
 
     async def handle_player(self, event: AstrMessageEvent, server_id: str, player_id: str) -> str:

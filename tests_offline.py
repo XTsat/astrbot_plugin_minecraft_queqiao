@@ -2243,4 +2243,129 @@ assert _mk29.index("forward_image_from_mc") == _mk29.index("chatimage_name") + 1
     "forward_image_from_mc 必须紧跟 chatimage_name，实际顺序: " + str(_mk29)
 print("OK  引用提取 / 剥离与保留 / file 路径解析 / 下载字节 / 配置解析 / 端到端 / schema 同步")
 
-print("\n全部离线逻辑校验通过 ✅（含双向图片转发与内置图片 HTTP 服务 / 通用图床）")
+print("\n=== 30. 在线玩家三层兜底（RCON list → SLP sample → 人数） ===")
+from astrbot_plugin_minecraft_queqiao.core.models import (
+    PlayerListResult as _PLR30, ServerStatus as _SS30,
+)
+from astrbot_plugin_minecraft_queqiao.core.queqiao_client import QueQiaoTimeout as _QT30
+from astrbot_plugin_minecraft_queqiao.core.server_manager import ServerInstance as _SI30
+from astrbot_plugin_minecraft_queqiao.services.renderer import InfoRenderer as _IR30
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _S30
+
+# (a) ServerStatus 解析 players.sample：剥离 § 格式码、跳过空名/畸形项
+_st30 = _SS30.from_dict({
+    "server_type": "Fabric", "server_version": "1.20.1",
+    "server_list_ping": {"players": {"online": 2, "max": 20, "sample": [
+        {"name": "XTxiaotong", "id": "cd62632e-bd77-33d1-9516-206063e6d244"},
+        {"name": "§6Steve", "id": "00000000-0000-0000-0000-000000000000"},
+        {"name": "", "id": "x"},      # 空名跳过
+        "not-a-dict",                  # 畸形项跳过
+        {"id": "y"},                   # 无名跳过
+    ]}}})
+assert _st30.online_player_names == ["XTxiaotong", "Steve"], _st30.online_player_names
+assert _st30.player_sample[0] == \
+    ("XTxiaotong", "cd62632e-bd77-33d1-9516-206063e6d244"), _st30.player_sample[0]
+# 真实在线查询形态：sample 带真实玩家名+UUID（对应用户服 8.162.6.112:59209）
+# 无 sample 字段 / 无 players / 空对象 均不得抛异常
+assert _SS30.from_dict({"players": {"online": 0, "max": 20}}).online_player_names == []
+assert _SS30.from_dict({}).online_player_names == []
+assert _SS30.from_dict("not-a-dict").online_player_names == []
+
+# (b) 渲染：四种 source 分支
+# rcon 完整名单（无「可能不全」备注）
+assert _IR30.format_player_list("S", _PLR30(names=["A", "B"], source="rcon"), "生存服") \
+    == "👥 服务器 生存服 在线 2 人：\nA、B"
+# slp 来源必须带「可能不全」提示
+_slp_out = _IR30.format_player_list(
+    "S", _PLR30(names=["A"], online=1, max=20, source="slp"))
+assert "在线 1 人" in _slp_out and "可能不全" in _slp_out and "A" in _slp_out, _slp_out
+# count 来源：只有人数，提示未开 RCON 且在线查询未返回名
+_cnt_out = _IR30.format_player_list(
+    "S", _PLR30(online=3, max=20, source="count"), "生存服")
+assert "在线 3/20 人" in _cnt_out and "未返回玩家名" in _cnt_out, _cnt_out
+# count 且 0 人在线 → 视同没人在线（服务器无人时往往连 sample 键都不返回）
+assert _IR30.format_player_list("S", _PLR30(online=0, max=20, source="count")) \
+    == "👥 服务器 S 当前没有玩家在线"
+# none 来源：失败提示
+assert "无法获取" in _IR30.format_player_list("S", _PLR30(source="none"))
+# rcon 但空名单（确实没人在线）
+assert _IR30.format_player_list("S", _PLR30(names=[], source="rcon")) \
+    == "👥 服务器 S 当前没有玩家在线"
+# 向后兼容：直接传 list[str] / None（第 21 组契约不破坏）
+assert _IR30.format_player_list("S", ["Steve"]) == "👥 服务器 S 在线 1 人：\nSteve"
+assert "无法获取" in _IR30.format_player_list("S", None)
+
+# (c) fetch_player_list 三层兜底顺序
+class _Cli30:
+    """鹊桥客户端桩：可控 connected / get_status / send_rcon_command。"""
+    def __init__(self, connected=True, status=None,
+                 rcon_out=None, rcon_timeout=False):
+        self.connected = connected
+        self._status = status
+        self._rcon_out = rcon_out
+        self._rcon_timeout = rcon_timeout
+        self.rcon_calls = 0
+    async def get_status(self): return self._status
+    async def send_rcon_command(self, cmd):
+        self.rcon_calls += 1
+        if self._rcon_timeout:
+            raise _QT30("send_rcon_command", 10)
+        return self._rcon_out
+class _Rcon30:
+    def __init__(self, enabled=False, out=None):
+        self.enabled = enabled; self._out = out; self.calls = []
+    async def execute(self, cmd):
+        self.calls.append(cmd); return self._out
+
+def _mk_inst30(client, rcon=None):
+    _i = _SI30(_S30.from_dict({"server": {"server_id": "S30"}}))
+    _i.client = client; _i.rcon = rcon or _Rcon30()
+    return _i
+
+# c1) RCON list 成功 → source=rcon，不再查 SLP
+_i1 = _mk_inst30(_Cli30(connected=True,
+    rcon_out="There are 2 of a max of 20 players online: A, B"))
+_r1 = asyncio.run(_i1.fetch_player_list())
+assert _r1.source == "rcon" and _r1.names == ["A", "B"], (_r1.source, _r1.names)
+assert _i1.client.rcon_calls == 1
+
+# c2) 鹊桥未开 RCON（send_rcon 返回 None）+ 直连 RCON 未配 → 退 SLP sample（免 RCON）
+#     对应用户服场景：不开 RCON 也能拿到玩家名
+_i2 = _mk_inst30(_Cli30(connected=True, rcon_out=None,
+    status={"server_list_ping": {"players": {"online": 1, "max": 20, "sample": [
+        {"name": "XTxiaotong", "id": "cd62632e-bd77-33d1-9516-206063e6d244"}]}}}))
+_r2 = asyncio.run(_i2.fetch_player_list())
+assert _r2.source == "slp" and _r2.names == ["XTxiaotong"], (_r2.source, _r2.names)
+assert _r2.online == 1 and _r2.max == 20
+
+# c3) RCON 失败 + SLP sample 为空但有人数 → source=count
+_i3 = _mk_inst30(_Cli30(connected=True, rcon_out=None,
+    status={"server_list_ping": {"players": {"online": 5, "max": 20}}}))
+_r3 = asyncio.run(_i3.fetch_player_list())
+assert _r3.source == "count" and _r3.names == [] and _r3.online == 5, \
+    (_r3.source, _r3.online)
+
+# c4) 全失败（鹊桥未连、无 RCON）→ source=none
+_i4 = _mk_inst30(_Cli30(connected=False, status=None))
+_r4 = asyncio.run(_i4.fetch_player_list())
+assert _r4.source == "none" and _r4.names == [], (_r4.source, _r4.names)
+
+# c5) 鹊桥执行 list 超时（结果未知）→ 不走直连 RCON 重发（避免执行两遍），
+#     而是降级到 SLP sample（属不同查询，不构成重发）
+_rto = _Rcon30(enabled=True, out="rcon-out")
+_i5 = _mk_inst30(_Cli30(connected=True, rcon_timeout=True,
+    status={"server_list_ping": {"players": {"online": 1, "max": 20, "sample": [
+        {"name": "Steve", "id": "u"}]}}}), _rto)
+_r5 = asyncio.run(_i5.fetch_player_list())
+assert _r5.source == "slp" and _r5.names == ["Steve"], (_r5.source, _r5.names)
+assert _rto.calls == [], "RCON list 超时后不得走直连 RCON 重发（会执行两遍）"
+
+# c6) 直连 RCON 兜底仍生效：鹊桥未连但配了直连 RCON → source=rcon
+_i6 = _mk_inst30(_Cli30(connected=False),
+    _Rcon30(enabled=True,
+            out="There are 1 of a max of 20 players online: Steve"))
+_r6 = asyncio.run(_i6.fetch_player_list())
+assert _r6.source == "rcon" and _r6.names == ["Steve"], (_r6.source, _r6.names)
+print("OK  sample 解析(剥离§/跳畸形) / 渲染四分支 / 三层兜底顺序 / 超时不重发降级 SLP")
+
+print("\n全部离线逻辑校验通过 ✅（含在线玩家三层兜底）")
