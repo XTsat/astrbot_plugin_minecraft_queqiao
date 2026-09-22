@@ -85,12 +85,19 @@ class DashboardApp {
   }
 
   async init() {
+    this.initThemeSync();
     this.bindEvents();
     this.bindTerminalActions();
 
     if (this.bridge) {
       try {
         await this.bridge.ready();
+        this.applyThemeFromBridge();
+        if (typeof this.bridge.onContext === 'function') {
+          this.bridge.onContext(() => {
+            this.applyThemeFromBridge();
+          });
+        }
       } catch (err) {
         console.warn('Bridge ready warning:', err);
       }
@@ -100,6 +107,33 @@ class DashboardApp {
 
     await this.refreshAll();
     this.setupAutoRefresh(true);
+  }
+
+  initThemeSync() {
+    // 1. 若 URL query 显式包含 ?theme=dark / light，预先设定
+    const urlParams = new URLSearchParams(window.location.search);
+    const themeParam = urlParams.get('theme');
+    if (themeParam === 'dark' || themeParam === 'light') {
+      document.documentElement.setAttribute('data-theme', themeParam);
+    }
+
+    // 2. 监听系统 prefers-color-scheme 变化
+    if (window.matchMedia) {
+      const darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
+      darkMedia.addEventListener('change', (e) => {
+        if (!document.documentElement.getAttribute('data-theme')) {
+          document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+        }
+      });
+    }
+  }
+
+  applyThemeFromBridge() {
+    if (!this.bridge || typeof this.bridge.getContext !== 'function') return;
+    const ctx = this.bridge.getContext();
+    if (ctx && typeof ctx.isDark === 'boolean') {
+      document.documentElement.setAttribute('data-theme', ctx.isDark ? 'dark' : 'light');
+    }
   }
 
   bindEvents() {
