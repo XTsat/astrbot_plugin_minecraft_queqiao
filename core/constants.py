@@ -74,15 +74,15 @@ API_TIMEOUT = 10
 # 外部消息转发到 MC 后，该内容在此窗口内再次出现（回声）时不再回传外部
 ECHO_SUPPRESS_WINDOW = 5.0
 
-DEFAULT_CHAT_FORMAT = "[{server}]{player}: {message}"
+DEFAULT_CHAT_FORMAT = "[{display_name}]{player}: {message}"
 DEFAULT_BROADCAST_FORMAT = "[{platform}]{sender}: {message}"
 
 # 平台名称映射的默认值：自带 aiocqhttp=QQ 示例，开箱即用。
 # 用户在配置里删空该列表项即关闭改写（保留原始平台名）
 DEFAULT_PLATFORM_NAMES: dict[str, str] = {"aiocqhttp": "QQ"}
 
-# 服务器显示名称（server_name）留空时，{server} 占位符的默认展示内容。
-# 对应配置项 server_name_default 的默认值；用户可改，显式清空则输出空串
+# 服务器显示名称（display_name）留空时，{display_name} 占位符的默认展示内容。
+# 对应配置项 display_name_default 的默认值；用户可改，显式清空则输出空串
 DEFAULT_DISPLAY_NAME = "MC"
 
 # ---- 转发回执 ----

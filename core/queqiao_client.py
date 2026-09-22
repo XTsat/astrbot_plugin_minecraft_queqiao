@@ -102,11 +102,11 @@ class SharedReverseServer:
     def is_empty(self) -> bool:
         return not self.clients
 
-    def register(self, server_id: str, client: "QueQiaoClient") -> None:
-        self.clients[server_id] = client
+    def register(self, server_name: str, client: "QueQiaoClient") -> None:
+        self.clients[server_name] = client
 
-    def unregister(self, server_id: str) -> None:
-        self.clients.pop(server_id, None)
+    def unregister(self, server_name: str) -> None:
+        self.clients.pop(server_name, None)
 
     async def start(self) -> None:
         if self._running:
@@ -152,7 +152,7 @@ class SharedReverseServer:
             logger.warning(f"[{PLUGIN_NAME}] 反向 WS 缺少 x-self-name Header")
             return connection.respond(400, "Missing X-Self-Name Header")
 
-        server_id = unquote_plus(self_name_raw)
+        server_name = unquote_plus(self_name_raw)
 
         # 拒绝来自插件自身的回环连接，避免自己连自己造成消息风暴
         origin = _get_header(headers, HEADER_CLIENT_ORIGIN) or ""
@@ -160,20 +160,20 @@ class SharedReverseServer:
             logger.warning(f"[{PLUGIN_NAME}] 反向 WS 拒绝 x-client-origin=astrbot 的连接")
             return connection.respond(403, "X-Client-Origin cannot be astrbot")
 
-        client = self.clients.get(server_id)
+        client = self.clients.get(server_name)
         if client is None:
             logger.warning(
-                f"[{PLUGIN_NAME}] 反向 WS 未知 server_id={server_id}，"
+                f"[{PLUGIN_NAME}] 反向 WS 未知 server_name={server_name}，"
                 f"已注册: {list(self.clients.keys())}"
             )
-            return connection.respond(404, f"Unknown server_id: {server_id}")
+            return connection.respond(404, f"Unknown server_name: {server_name}")
 
         expected = client.config.access_token
         if expected:
             auth = _get_header(headers, HEADER_AUTHORIZATION) or ""
             token = auth[7:] if auth.startswith("Bearer ") else auth
             if token != expected:
-                logger.warning(f"[{PLUGIN_NAME}] 反向 WS 鉴权失败: server_id={server_id}")
+                logger.warning(f"[{PLUGIN_NAME}] 反向 WS 鉴权失败: server_name={server_name}")
                 return connection.respond(401, "Invalid access token")
 
         return None
@@ -183,14 +183,14 @@ class SharedReverseServer:
         if headers is None and hasattr(websocket, "request"):
             headers = getattr(websocket.request, "headers", None)
 
-        server_id = unquote_plus(_get_header(headers, HEADER_SELF_NAME) or "")
-        client = self.clients.get(server_id)
+        server_name = unquote_plus(_get_header(headers, HEADER_SELF_NAME) or "")
+        client = self.clients.get(server_name)
         if client is None:
-            logger.warning(f"[{PLUGIN_NAME}] 反向 WS 连接后找不到客户端: {server_id}")
+            logger.warning(f"[{PLUGIN_NAME}] 反向 WS 连接后找不到客户端: {server_name}")
             await websocket.close(1008, "Unknown server")
             return
 
-        logger.info(f"[{PLUGIN_NAME}] 反向 WS 鹊桥已连入: server_id={server_id}")
+        logger.info(f"[{PLUGIN_NAME}] 反向 WS 鹊桥已连入: server_name={server_name}")
         await client.attach_reverse_connection(websocket)
 
 
@@ -211,7 +211,7 @@ class QueQiaoClient:
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
-        self.server_id = config.server_id
+        self.server_name = config.server_name
         self.on_event = on_event
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
@@ -313,7 +313,7 @@ class QueQiaoClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"[{PLUGIN_NAME}][{self.server_id}] 反向 WS 连接异常: {exc}")
+            logger.warning(f"[{PLUGIN_NAME}][{self.server_name}] 反向 WS 连接异常: {exc}")
         finally:
             if self._ws is websocket:
                 self._ws = None
@@ -330,7 +330,7 @@ class QueQiaoClient:
         self._connected = True
         self._retries = 0
         logger.info(
-            f"[{PLUGIN_NAME}][{self.server_id}] 已连接鹊桥 "
+            f"[{PLUGIN_NAME}][{self.server_name}] 已连接鹊桥 "
             f"({'反向' if self.config.is_reverse else self.config.ws_url})"
         )
         if self.on_connect:
@@ -362,7 +362,7 @@ class QueQiaoClient:
 
         if self.config.max_reconnect and self._retries >= self.config.max_reconnect:
             logger.error(
-                f"[{PLUGIN_NAME}][{self.server_id}] 重连次数已达上限 "
+                f"[{PLUGIN_NAME}][{self.server_name}] 重连次数已达上限 "
                 f"({self.config.max_reconnect})，停止重连"
             )
             return False
@@ -392,7 +392,7 @@ class QueQiaoClient:
             return
         wait, stage = self._reconnect_wait(self._retries, self.config)
         logger.warning(
-            f"[{PLUGIN_NAME}][{self.server_id}] {stage}重试：{wait} 秒后重连 "
+            f"[{PLUGIN_NAME}][{self.server_name}] {stage}重试：{wait} 秒后重连 "
             f"(第 {self._retries} 次)"
         )
         with contextlib.suppress(asyncio.CancelledError):
@@ -414,19 +414,19 @@ class QueQiaoClient:
             elif shared.path != self.config.normalized_path:
                 logger.warning(
                     f"[{PLUGIN_NAME}] 端口 {self.config.reverse_port} 已使用 path="
-                    f"{shared.path}，服务器 {self.server_id} 的 path="
+                    f"{shared.path}，服务器 {self.server_name} 的 path="
                     f"{self.config.normalized_path} 将被忽略"
                 )
-            shared.register(self.server_id, self)
+            shared.register(self.server_name, self)
             self._shared_server = shared
             try:
                 await shared.start()
             except OSError as exc:
-                shared.unregister(self.server_id)
+                shared.unregister(self.server_name)
                 _SHARED_SERVERS.pop(key, None)
                 self._shared_server = None
                 logger.error(
-                    f"[{PLUGIN_NAME}][{self.server_id}] 反向 WS 服务端启动失败 "
+                    f"[{PLUGIN_NAME}][{self.server_name}] 反向 WS 服务端启动失败 "
                     f"({self.config.reverse_host}:{self.config.reverse_port}): {exc}"
                 )
                 self._running = False
@@ -437,7 +437,7 @@ class QueQiaoClient:
         if shared is None:
             return
         async with _SHARED_LOCK:
-            shared.unregister(self.server_id)
+            shared.unregister(self.server_name)
             if shared.is_empty:
                 key = (shared.host, shared.port)
                 if _SHARED_SERVERS.get(key) is shared:
@@ -453,13 +453,13 @@ class QueQiaoClient:
             try:
                 raw = raw.decode("utf-8")
             except UnicodeDecodeError:
-                logger.error(f"[{PLUGIN_NAME}][{self.server_id}] 收到无法解码的消息")
+                logger.error(f"[{PLUGIN_NAME}][{self.server_name}] 收到无法解码的消息")
                 return
 
         try:
             data = json.loads(raw)
         except ValueError:
-            logger.error(f"[{PLUGIN_NAME}][{self.server_id}] 无法解析 JSON: {raw[:200]}")
+            logger.error(f"[{PLUGIN_NAME}][{self.server_name}] 无法解析 JSON: {raw[:200]}")
             return
 
         if not isinstance(data, dict):
@@ -476,11 +476,11 @@ class QueQiaoClient:
                     await self.on_event(event)
                 except Exception as exc:
                     logger.error(
-                        f"[{PLUGIN_NAME}][{self.server_id}] 事件处理异常 "
+                        f"[{PLUGIN_NAME}][{self.server_name}] 事件处理异常 "
                         f"({event.event_name}): {exc}"
                     )
         elif post_type != POST_TYPE_RESPONSE:
-            logger.debug(f"[{PLUGIN_NAME}][{self.server_id}] 忽略未知消息: {raw[:200]}")
+            logger.debug(f"[{PLUGIN_NAME}][{self.server_name}] 忽略未知消息: {raw[:200]}")
 
     def _resolve_pending(self, data: dict) -> bool:
         """把 API 响应投递给等待中的 Future。
@@ -509,14 +509,14 @@ class QueQiaoClient:
     async def _send(self, payload: dict) -> bool:
         ws = self._ws
         if ws is None or not self._connected:
-            logger.warning(f"[{PLUGIN_NAME}][{self.server_id}] 发送失败：连接未建立")
+            logger.warning(f"[{PLUGIN_NAME}][{self.server_name}] 发送失败：连接未建立")
             return False
         try:
             async with self._send_lock:
                 await ws.send(json.dumps(payload, ensure_ascii=False))
             return True
         except Exception as exc:
-            logger.error(f"[{PLUGIN_NAME}][{self.server_id}] 发送异常: {exc}")
+            logger.error(f"[{PLUGIN_NAME}][{self.server_name}] 发送异常: {exc}")
             return False
 
     async def call_api(
@@ -545,12 +545,12 @@ class QueQiaoClient:
         except asyncio.TimeoutError:
             self._pending.pop(echo, None)
             logger.warning(
-                f"[{PLUGIN_NAME}][{self.server_id}] API {api} 响应超时"
+                f"[{PLUGIN_NAME}][{self.server_name}] API {api} 响应超时"
                 "（请求可能已投递，勿据此重发）"
             )
             raise QueQiaoTimeout(api, timeout) from None
         except ConnectionError as exc:
-            logger.warning(f"[{PLUGIN_NAME}][{self.server_id}] API {api} 失败: {exc}")
+            logger.warning(f"[{PLUGIN_NAME}][{self.server_name}] API {api} 失败: {exc}")
             return None
 
     # ---- 业务接口封装 ----

@@ -148,11 +148,11 @@ class ServerConfig:
     # ---- 基础 ----
     enabled: bool = True
     # 与 conf 模板默认值一致；显式填空串仍会被 main 层跳过并告警
-    server_id: str = "Server"
-    server_name: str = ""
-    # server_name 留空时 {server} 与状态查询展示的默认内容；
+    server_name: str = "Server"
+    display_name: str = ""
+    # display_name 留空时 {display_name} 与状态查询展示的默认内容；
     # 显式清空（WebUI 里删成空串）才输出空串，用于配置无前缀展示
-    server_name_default: str = DEFAULT_DISPLAY_NAME
+    display_name_default: str = DEFAULT_DISPLAY_NAME
 
     # ---- 鹊桥连接 ----
     ws_mode: str = WS_MODE_FORWARD
@@ -216,27 +216,27 @@ class ServerConfig:
 
     @property
     def server_label(self) -> str:
-        """消息格式 `{server}` 的取值：**显示名称 → 显示名称默认值**。
+        """消息格式 `{display_name}` 的取值：**显示名称 → 显示名称默认值**。
 
-        - 填了 `server_name`：原样使用（可中文，如 `生存服`）
-        - `server_name` 留空：使用 `server_name_default`（默认 `MC`，
-          即什么都不填时 `{server}` 显示 `MC`）
+        - 填了 `display_name`：原样使用（可中文，如 `生存服`）
+        - `display_name` 留空：使用 `display_name_default`（默认 `MC`，
+          即什么都不填时 `{display_name}` 显示 `MC`）
         - 两者**都**显式留空：才输出空串——唯一的无前缀途径，
-          供 `[{server}]<{player}> {message}` 这类格式在未命名时隐藏前缀
+          供 `[{display_name}]<{player}> {message}` 这类格式在未命名时隐藏前缀
 
-        注意：这是**展示**语义，与连接握手用的 `server_id` 无关。
+        注意：这是**展示**语义，与连接握手用的 `server_name` 无关。
         """
-        return self.server_name or self.server_name_default
+        return self.display_name or self.display_name_default
 
     @property
-    def display_name(self) -> str:
+    def display_label(self) -> str:
         """带兜底的展示名称，用于状态/列表等孤立文案。
 
-        与 `server_label` 共用同一条取值链，额外兜底 `server_id` /「未知」：
+        与 `server_label` 共用同一条取值链，额外兜底 `server_name` /「未知」：
         孤立文案（如「服务器状态：」）必须给出一个非空标识，
         否则会变成没有主语的半句话。
         """
-        return self.server_label or self.server_id or "未知"
+        return self.server_label or self.server_name or "未知"
 
     def platform_display_name(self, platform: str) -> str:
         """把原始平台名按用户映射转换为游戏内展示名；未命中时原样返回。
@@ -290,7 +290,7 @@ class ServerConfig:
     def forward_headers(self) -> dict[str, str]:
         """正向连接所需握手 Header；token 为空时不发送 Authorization。"""
         headers = {
-            "x-self-name": self.server_id,
+            "x-self-name": self.server_name,
             "x-client-origin": self.client_origin or DEFAULT_CLIENT_ORIGIN,
         }
         if self.access_token:
@@ -350,8 +350,8 @@ class ServerConfig:
         if list_mode not in VALID_LIST_MODES:
             list_mode = "white"
 
-        # server_id 缺省回落 conf 模板默认值 Server；显式留空仍触发 main 层跳过告警
-        server_id = _to_str(server.get("server_id"), "Server").strip()
+        # server_name 缺省回落 conf 模板默认值 Server；显式留空仍触发 main 层跳过告警
+        server_name = _to_str(server.get("server_name"), "Server").strip()
 
         # 目标会话现位于模板项顶层（紧随「启用此服务器」，避免被折叠的消息转发分组
         # 藏住）；同时兼容早期写在 message 子对象内的配置，防止旧配置失效。
@@ -361,12 +361,12 @@ class ServerConfig:
 
         return cls(
             enabled=_to_bool(data.get("enabled"), True),
-            server_id=server_id,
-            server_name=_to_str(server.get("server_name"), "").strip(),
+            server_name=server_name,
+            display_name=_to_str(server.get("display_name"), "").strip(),
             # 键缺失（旧配置/WebUI 默认注入）→ 默认 MC；显式清空 → 空串（无前缀）。
             # _to_str(None, 默认) 得默认值，_to_str("", 默认) 保持空串，二者可区分
-            server_name_default=_to_str(
-                server.get("server_name_default"), DEFAULT_DISPLAY_NAME
+            display_name_default=_to_str(
+                server.get("display_name_default"), DEFAULT_DISPLAY_NAME
             ).strip(),
             ws_mode=ws_mode,
             ws_url=_to_str(server.get("ws_url"), DEFAULT_WS_URL).strip() or DEFAULT_WS_URL,

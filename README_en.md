@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.4-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.4.0-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -62,9 +62,9 @@ If user A has bound the game ID `Misaka` and sends `tp 114 514 1919` in the grou
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `target_sessions` | list | empty | **Target sessions**, shown at the very top of the list entry, right below "Enable this server". Session UMO list for MC messages; **defines the MC ↔ chat binding** — when empty the plugin connects but the group receives nothing |
-| `server_id` | string | `Server` | Unique server ID, **must match QueQiao's `server_name`**; must differ across servers when configuring multiple |
-| `server_name` | string | empty | **Display name** of the server, may be Chinese (e.g. `生存服`). When empty, the **display-name default** below is used. Display only, does not affect the connection |
-| `server_name_default` | string | `MC` | **Display-name default**: what `{server}` and status output show when `server_name` is blank — with nothing filled in you get `[MC]<player>`. Clear it to render an empty string (no prefix) |
+| `server_name` | string | `Server` | **Server name** (unique identifier), **must match QueQiao's `server_name`**; must differ across servers when configuring multiple |
+| `display_name` | string | empty | **Display name** of the server, may be Chinese (e.g. `生存服`). When empty, the **display-name default** below is used. Display only, does not affect the connection |
+| `display_name_default` | string | `MC` | **Display-name default**: what `{display_name}` and status output show when `display_name` is blank — with nothing filled in you get `[MC]<player>`. Clear it to render an empty string (no prefix) |
 | `ws_mode` | string | `forward` | `forward`: plugin dials QueQiao; `reverse`: plugin listens for QueQiao |
 | `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | Forward-mode URL, matches QueQiao `websocket_server` |
 | `reverse_host` | string | `0.0.0.0` | Reverse-mode listen address |
@@ -83,12 +83,12 @@ If user A has bound the game ID `Misaka` and sends `tp 114 514 1919` in the grou
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `forward_chat_to_astrbot` | bool | `true` | Forward player chat to target sessions |
-| `forward_chat_format` | string | `[{server}]{player}: {message}` | Chat format; `{player}` name, `{message}` content, `{server}` **server display name** (falls back to the default `MC` when unset) |
-| `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages |
+| `forward_chat_format` | string | `[{display_name}]{player}: {message}` | Chat format; `{player}` name, `{message}` content, `{display_name}` **server display name** (falls back to the default `MC` when unset) |
+| `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages (the server display name is appended after "server", e.g. `[生存服]`, so the source is clear when several servers share one group) |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
-| `auto_forward_prefix` | string | empty | **Prefix for relaying group messages into MC**; empty relays all (only takes effect for bound target sessions) |
-| `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; `{server}` display name (falls back to the default `MC` when unset), `{server_id}` raw server ID (always populated) |
+| `auto_forward_prefix` | string | empty | **Prefix for relaying external messages into MC**; empty relays all (only takes effect for bound target sessions) |
+| `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; `{display_name}` server display name (falls back to the default `MC` when unset), `{server_name}` server name (always populated) |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | **Platform name mapping**: replace the raw platform name behind `{platform}` with a custom display name, one entry per line in the form `raw=display`. Ships with a default `aiocqhttp=QQ` entry (works out of the box); unmapped platforms keep their original name, clearing the list disables the rewrite |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
 | `mark_option` | string | `emoji` | Acknowledgement after a successful relay: `text` replies ✅ / `emoji` reacts to the original message / `none` silent |
@@ -201,34 +201,34 @@ Automatically **upload images without a public URL to an image bed** to get a pu
 <details>
 <summary>Show options</summary>
 
-`server_id` is the **connection identity** used by QueQiao (bound to `x-self-name`, so it cannot be Chinese). To make multiple servers easier to tell apart in a group, set **`server_name` (display name)** as well — it only affects presentation and may be Chinese:
+`server_name` is the **connection identity** used by QueQiao (bound to `x-self-name`, so it cannot be Chinese). To make multiple servers easier to tell apart in a group, set **`display_name` (display name)** as well — it only affects presentation and may be Chinese:
 
 ```jsonc
 "server": {
-  "server_id": "survival",       // must match QueQiao's config.yml server_name; don't change
-  "server_name": "生存服",        // display only, may be Chinese
-  "server_name_default": "MC"    // shown when server_name is blank; defaults to MC
+  "server_name": "survival",       // must match QueQiao's config.yml server_name; don't change
+  "display_name": "生存服",        // display only, may be Chinese
+  "display_name_default": "MC"    // shown when display_name is blank; defaults to MC
 }
 ```
 
-Both format strings accept `{server}`, which resolves through the chain **`server_name` → `server_name_default` (default `MC`) → empty string**:
+Both format strings accept `{display_name}`, which resolves through the chain **`display_name` → `display_name_default` (default `MC`) → empty string**:
 
 | Placeholder | Available in | Meaning |
 |-------------|--------------|---------|
 | `{player}` | `forward_chat_format` | Player name |
 | `{message}` | both formats | Message content (rich text and color codes already stripped for MC → external) |
-| `{server}` | both formats | **Server display name**; falls back to the **display-name default** (`MC`) when `server_name` is blank; renders empty only when both are cleared |
+| `{display_name}` | both formats | **Server display name**; falls back to the **display-name default** (`MC`) when `display_name` is blank; renders empty only when both are cleared |
 | `{platform}` | `broadcast_format` | Platform name; may be rewritten via **`platform_names`** to a custom display name (e.g. `aiocqhttp` → `QQ`); unmapped names are kept as-is |
 | `{sender}` | `broadcast_format` | Sender name |
-| `{server_id}` | `broadcast_format` | Raw server ID (**always populated**, when you need the exact identifier) |
+| `{server_name}` | `broadcast_format` | Server name (**always populated**, matches QueQiao `server_name`) |
 
 Example (labelling the source when several servers share a group):
 
 | Setting | Format | Result |
 |---------|--------|--------|
-| `server_name` = `生存服` | `[{server}] <{player}> {message}` | `[生存服] <Steve> 大家好` |
-| nothing filled in | `[{server}] <{player}> {message}` | `[MC] <Steve> 大家好` (default `MC`) |
-| default changed to `本服` | `[{server}]{player}: {message}` | `[本服]Steve: 大家好` |
+| `display_name` = `生存服` | `[{display_name}] <{player}> {message}` | `[生存服] <Steve> 大家好` |
+| nothing filled in | `[{display_name}] <{player}> {message}` | `[MC] <Steve> 大家好` (default `MC`) |
+| default changed to `本服` | `[{display_name}]{player}: {message}` | `[本服]Steve: 大家好` |
 
 `{platform}` can also be rewritten into something nicer via **`platform_names`** — raw platform IDs (such as `aiocqhttp`, `qq_official`) are often long and ugly inside the game. This option **ships with a default `aiocqhttp=QQ` entry**: with no configuration at all, `aiocqhttp` already renders as `QQ` in-game. Delete the entry if you do not want the rewrite:
 
@@ -239,11 +239,19 @@ Example (labelling the source when several servers share a group):
 
 > The mapping is configured **per server** (in the "Message forwarding" section), so different servers may use different names. Matching is case-insensitive (platform IDs are lowercase, so a case typo still hits). Entries take the form `raw=display`; malformed entries (no `=`, empty key, empty value) are silently ignored; clearing the whole list disables the rewrite and restores the original platform name.
 
-> **Empty behaviour**: when `server_name` is blank, the **display-name default** (`MC`) is used — leaving everything untouched yields `[MC]<player>`. To make `{server}` render an **empty string** (no prefix), clear `server_name_default` as well; literal brackets in the format string remain (`[{server}]<{player}> {message}` then yields `[]<Steve> 大家好`; drop the brackets for a clean look). Use `{server_id}` if you always want a value.
+> **Empty behaviour**: when `display_name` is blank, the **display-name default** (`MC`) is used — leaving everything untouched yields `[MC]<player>`. To make `{display_name}` render an **empty string** (no prefix), clear `display_name_default` as well; literal brackets in the format string remain (`[{display_name}]<{player}> {message}` then yields `[]<Steve> 大家好`; drop the brackets for a clean look). Use `{server_name}` if you always want a value.
 
-> Existing format strings without `{server}` keep working unchanged.
+> Existing format strings without `{display_name}` keep working unchanged.
 
-`/mc status` and `/mc list` label the server through the same chain (`server_name` → default → `server_id`), so multi-server setups are easier to read; the handshake and logs keep using `server_id`.
+`/mc status` and `/mc list` label the server through the same chain (`display_name` → default → `server_name`), so multi-server setups are easier to read; the handshake and logs keep using `server_name`.
+
+**Join/quit pushes are labelled too**: with "Forward join/quit messages" enabled, the join/leave notification appends this server's display name after "server" (same chain, defaulting to `MC`), e.g.:
+
+| Setting | Result |
+|---------|--------|
+| `display_name` = `生存服` | `🔴 Steve 离开了服务器[生存服]` |
+| nothing filled in (default `MC`) | `🔴 Steve 离开了服务器[MC]` |
+| both `display_name` and `display_name_default` cleared | `🔴 Steve 离开了服务器[survival]` (falls back to `server_name`, still distinguishable) |
 
 </details>
 
@@ -344,7 +352,7 @@ With the defaults (bridging prefix empty = relay all, AI `ai`):
 
 1. Place this plugin under AstrBot's `data/plugins/` directory and restart AstrBot
 2. In the WebUI plugin config, click "Add MC server" and **fill in "Target sessions" (required)**
-3. Make sure `server_id` exactly matches QueQiao's `server_name`
+3. Make sure `server_name` exactly matches QueQiao's `server_name`
 
 > **The defaults work out of the box for a same-machine setup**: when AstrBot and MC run on one machine, the connection settings (`ws_url` → `ws://127.0.0.1:8080/minecraft/ws`) already line up with QueQiao's default port, so **nothing needs changing** — just set "Target sessions" and you are done. For cross-machine or Docker setups, see the next section.
 
@@ -392,7 +400,7 @@ Troubleshooting notes:
 Install the [QueQiao](https://modrinth.com/plugin/queqiao) plugin/mod on your Minecraft server and configure `config.yml` as described in its [documentation](https://github.com/17TheWord/queqiao-docs):
 
 ```yaml
-server_name: "Server"        # must match the plugin's server_id
+server_name: "Server"        # must match the plugin's server_name
 access_token: ""             # matches the plugin's access_token
 websocket_server:
   enable: true               # required for forward mode
@@ -433,7 +441,7 @@ subscribe_event:             # enable the events you need
 
 ### FAQ
 
-**Q: Connection fails with an auth error or 404?** Verify that `server_id` matches QueQiao's `server_name` exactly, including case, and that `access_token` is identical on both sides.
+**Q: Connection fails with an auth error or 404?** Verify that `server_name` matches QueQiao's `server_name` exactly, including case, and that `access_token` is identical on both sides.
 
 **Q: The plugin keeps reconnecting. Should I change the address to `0.0.0.0`?** `0.0.0.0` is a listen address, set on QueQiao's `websocket_server.host`. Under Docker, if AstrBot and MC are not on the same network stack, change it to `0.0.0.0`; for a Windows / Linux same-machine install no change is normally needed. See "Networking and addresses" above, and the MC server IP note there when the two are on different machines.
 

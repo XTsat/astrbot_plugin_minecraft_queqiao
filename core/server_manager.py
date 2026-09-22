@@ -22,7 +22,7 @@ class ServerInstance:
         on_disconnect=None,
     ) -> None:
         self.config = config
-        self.server_id = config.server_id
+        self.server_name = config.server_name
         self.client = QueQiaoClient(
             config,
             on_event=on_event,
@@ -43,7 +43,7 @@ class ServerInstance:
         try:
             self._task = asyncio.create_task(self.client.start())
         except RuntimeError as exc:
-            logger.error(f"[{PLUGIN_NAME}][{self.server_id}] 无法启动连接任务: {exc}")
+            logger.error(f"[{PLUGIN_NAME}][{self.server_name}] 无法启动连接任务: {exc}")
             return
         self._task.add_done_callback(self._on_task_done)
 
@@ -53,7 +53,7 @@ class ServerInstance:
         except asyncio.CancelledError:
             return
         if exc:
-            logger.error(f"[{PLUGIN_NAME}][{self.server_id}] 连接任务异常退出: {exc}")
+            logger.error(f"[{PLUGIN_NAME}][{self.server_name}] 连接任务异常退出: {exc}")
 
     async def stop(self) -> None:
         """停止连接与 RCON。"""
@@ -110,7 +110,7 @@ class ServerInstance:
                 output = await self.client.send_rcon_command(command)
             except QueQiaoTimeout:
                 logger.warning(
-                    f"[{PLUGIN_NAME}][{self.server_id}] 鹊桥执行指令响应超时"
+                    f"[{PLUGIN_NAME}][{self.server_name}] 鹊桥执行指令响应超时"
                     "（指令可能已执行，不再走 RCON 兜底，避免重复执行）"
                 )
                 return None, ""
@@ -119,7 +119,7 @@ class ServerInstance:
 
         if self.rcon.enabled:
             logger.info(
-                f"[{PLUGIN_NAME}][{self.server_id}] 鹊桥通道不可用，回退直连 RCON"
+                f"[{PLUGIN_NAME}][{self.server_name}] 鹊桥通道不可用，回退直连 RCON"
             )
             output = await self.rcon.execute(command)
             if output is not None:
@@ -178,17 +178,17 @@ class ServerManager:
     def __init__(self) -> None:
         self._servers: dict[str, ServerInstance] = {}
 
-    def __contains__(self, server_id: str) -> bool:
-        return server_id in self._servers
+    def __contains__(self, server_name: str) -> bool:
+        return server_name in self._servers
 
-    def get(self, server_id: str) -> ServerInstance | None:
-        return self._servers.get(server_id)
+    def get(self, server_name: str) -> ServerInstance | None:
+        return self._servers.get(server_name)
 
     def all(self) -> list[ServerInstance]:
         return list(self._servers.values())
 
     @property
-    def server_ids(self) -> list[str]:
+    def server_names(self) -> list[str]:
         return list(self._servers.keys())
 
     def add(
@@ -204,7 +204,7 @@ class ServerManager:
             on_connect=on_connect,
             on_disconnect=on_disconnect,
         )
-        self._servers[config.server_id] = instance
+        self._servers[config.server_name] = instance
         return instance
 
     async def start_all(self) -> None:

@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.3.4-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.4.0-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -62,9 +62,9 @@
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `target_sessions` | list | 空 | **目标会话**，位于列表项最上方「启用此服务器」下方。MC 消息转发到的会话 UMO 列表，**此项决定 MC 与群聊的绑定关系**，不填则插件能连上但群里收不到消息 |
-| `server_id` | string | `Server` | 服务器唯一标识，**必须与鹊桥 `config.yml` 的 `server_name` 一致**；多台服务器时每台的 `server_id` 必须互不相同 |
-| `server_name` | string | 空 | **服务器显示名称**，可写中文（如 `生存服`）。留空时用下方「显示名称默认值」；仅影响展示，不影响连接 |
-| `server_name_default` | string | `MC` | **显示名称默认值**：`server_name` 留空时 `{server}` 与状态查询显示的内容，什么都不填即显示 `[MC]<玩家名>`。改成留空则输出空串（无前缀效果） |
+| `server_name` | string | `Server` | **服务器名称**（唯一标识），**必须与鹊桥 `config.yml` 的 `server_name` 一致**；多台服务器时每台的 `server_name` 必须互不相同 |
+| `display_name` | string | 空 | **服务器显示名称**，可写中文（如 `生存服`）。留空时用下方「显示名称默认值」；仅影响展示，不影响连接 |
+| `display_name_default` | string | `MC` | **显示名称默认值**：`display_name` 留空时 `{display_name}` 与状态查询显示的内容，什么都不填即显示 `[MC]<玩家名>`。改成留空则输出空串（无前缀效果） |
 | `ws_mode` | string | `forward` | `forward` 插件连鹊桥；`reverse` 插件开服务端等鹊桥连入 |
 | `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | 正向连接地址，对应鹊桥 `websocket_server`（IP 与端口按实际部署填写） |
 | `reverse_host` | string | `0.0.0.0` | 反向监听地址 |
@@ -83,12 +83,12 @@
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `forward_chat_to_astrbot` | bool | `true` | 转发玩家聊天到指定会话 |
-| `forward_chat_format` | string | `[{server}]{player}: {message}` | 聊天消息格式，`{player}` 玩家名，`{message}` 内容，`{server}` **服务器显示名称**（可中文，留空用默认值 `MC`） |
-| `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息 |
+| `forward_chat_format` | string | `[{display_name}]{player}: {message}` | 聊天消息格式，`{player}` 玩家名，`{message}` 内容，`{display_name}` **服务器显示名称**（可中文，留空用默认值 `MC`） |
+| `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息（消息中的「服务器」后会自动附上该服务器的显示名称，如 `[生存服]`，多服同群时能区分来源） |
 | `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
-| `auto_forward_prefix` | string | 空 | **群消息转发到 MC 的前缀**，留空则全部转发（仅对已绑定目标会话的群生效） |
-| `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，`{server}` 显示名称（留空用默认值 `MC`）、`{server_id}` 服务器 ID（始终有值） |
+| `auto_forward_prefix` | string | 空 | **外部消息转发到 MC 的前缀**，留空则全部转发（仅对已绑定目标会话的会话生效） |
+| `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，`{display_name}` 服务器显示名称（留空用默认值 `MC`）、`{server_name}` 服务器名称（始终有值） |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | **平台名称映射**：把 `{platform}` 的原始平台名替换为自定义展示名，每项格式 `原始平台名=显示名`。默认自带示例 `aiocqhttp=QQ`（开箱即用）；未命中的平台保持原名，删空则不改写 |
 | `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
 | `mark_option` | string | `emoji` | 转发成功后的提醒方式：`text` 回复 ✅ 文本 / `emoji` 给原消息贴表情 / `none` 不提醒 |
@@ -201,34 +201,34 @@
 <details>
 <summary>展开配置表</summary>
 
-`server_id` 是给鹊桥用的**连接标识**（受 `x-self-name` 约束，不能用中文）；如果想让多台服务器在群里更好辨认，可以另外填写 **`server_name`（服务器显示名称）**，它只影响展示，可以随意写中文：
+`server_name` 是给鹊桥用的**连接标识**（受 `x-self-name` 约束，不能用中文）；如果想让多台服务器在群里更好辨认，可以另外填写 **`display_name`（服务器显示名称）**，它只影响展示，可以随意写中文：
 
 ```jsonc
 "server": {
-  "server_id": "survival",       // 必须与鹊桥 config.yml 的 server_name 一致，别改
-  "server_name": "生存服",        // 仅用于展示，可写中文
-  "server_name_default": "MC"    // server_name 留空时的默认展示内容，默认 MC
+  "server_name": "survival",       // 必须与鹊桥 config.yml 的 server_name 一致，别改
+  "display_name": "生存服",        // 仅用于展示，可写中文
+  "display_name_default": "MC"    // display_name 留空时的默认展示内容，默认 MC
 }
 ```
 
-两个格式串都支持 `{server}`，取值链为 **`server_name` → `server_name_default`（默认 `MC`）→ 空串**：
+两个格式串都支持 `{display_name}`，取值链为 **`display_name` → `display_name_default`（默认 `MC`）→ 空串**：
 
 | 占位符 | 可用位置 | 含义 |
 |--------|----------|------|
 | `{player}` | `forward_chat_format` | 玩家名称 |
 | `{message}` | 两个格式串 | 消息内容（MC → 外部时已剥离富文本与颜色代码） |
-| `{server}` | 两个格式串 | **服务器显示名称**；`server_name` 留空时用**显示名称默认值**（默认 `MC`），两者都留空才输出空串 |
+| `{display_name}` | 两个格式串 | **服务器显示名称**；`display_name` 留空时用**显示名称默认值**（默认 `MC`），两者都留空才输出空串 |
 | `{platform}` | `broadcast_format` | 平台名（群消息来源平台）；可经 **`platform_names`** 映射为自定义名称（如 `aiocqhttp` → `QQ`），未命中原样保留 |
 | `{sender}` | `broadcast_format` | 发送者名 |
-| `{server_id}` | `broadcast_format` | 服务器原始 ID（**始终有值**，需要精确标识时用） |
+| `{server_name}` | `broadcast_format` | 服务器名称（**始终有值**，对应鹊桥 `server_name`，需要精确标识时用） |
 
 示例（多服同群时标明来源）：
 
 | 配置项 | 值 | 实际效果 |
 |--------|-----|--------------|
-| `server_name` = `生存服`、格式 `[{server}] <{player}> {message}` | — | `[生存服] <Steve> 大家好` |
-| 什么都不填、格式 `[{server}] <{player}> {message}` | — | `[MC] <Steve> 大家好`（默认值 `MC`） |
-| 默认值改成 `本服`、格式 `[{server}]{player}: {message}` | — | `[本服]Steve: 大家好` |
+| `display_name` = `生存服`、格式 `[{display_name}] <{player}> {message}` | — | `[生存服] <Steve> 大家好` |
+| 什么都不填、格式 `[{display_name}] <{player}> {message}` | — | `[MC] <Steve> 大家好`（默认值 `MC`） |
+| 默认值改成 `本服`、格式 `[{display_name}]{player}: {message}` | — | `[本服]Steve: 大家好` |
 
 `{platform}` 还可以通过 **`platform_names`** 映射成顺眼的名字——原始平台 ID（如 `aiocqhttp`、`qq_official`）往往又长又不好看，放进游戏里占地方。该项**默认自带示例 `aiocqhttp=QQ`**：什么都不配，aiocqhttp 在游戏内也会显示为 `QQ`；不需要改写的平台可以删掉示例项：
 
@@ -239,11 +239,19 @@
 
 > 映射是**每台服务器独立**配置的（在「消息转发配置」分组里），不同服可以有不同的叫法；匹配忽略大小写（平台 ID 均为小写，手误大小写也能命中）；条目写法`原始平台名=显示名`，写错的条目（无 `=`、空键、空值）会被自动忽略；把整个列表删空则关闭改写，恢复显示原始平台名。
 
-> **留空行为**：`server_name` 留空时用「显示名称默认值」（默认 `MC`，即什么都不填就是 `[MC]<玩家名>` 效果）。想让 `{server}` 输出**空字符串**（无前缀），需要把 `server_name_default` 也显式清空——此时格式串里的字面量方括号仍在（`[{server}]<{player}>` 会得到 `[]<Steve> 大家好`），干净效果就不要写方括号。想让前缀永远有值，请改用 `{server_id}`。
+> **留空行为**：`display_name` 留空时用「显示名称默认值」（默认 `MC`，即什么都不填就是 `[MC]<玩家名>` 效果）。想让 `{display_name}` 输出**空字符串**（无前缀），需要把 `display_name_default` 也显式清空——此时格式串里的字面量方括号仍在（`[{display_name}]<{player}>` 会得到 `[]<Steve> 大家好`），干净效果就不要写方括号。想让前缀永远有值，请改用 `{server_name}`。
 
-> 不写 `{server}` 的旧格式串完全不受影响，无需迁移。
+> 不写 `{display_name}` 的旧格式串完全不受影响，无需迁移。
 
-`/mc status` 与 `/mc list` 的标题沿用同一条取值链（`server_name` → 默认值 → `server_id`），多服排障时不用再对着英文 ID 猜是哪台；连接握手与日志仍使用 `server_id`。
+`/mc status` 与 `/mc list` 的标题沿用同一条取值链（`display_name` → 默认值 → `server_name`），多服排障时不用再对着英文名称猜是哪台；连接握手与日志仍使用 `server_name`。
+
+**进出消息同样标注来源**：开启「转发玩家进出消息」后，加入/离开推送会在「服务器」后附上该服务器的展示名称（同一条取值链，缺省为 `MC`），例如：
+
+| 配置 | 实际效果 |
+|------|----------|
+| `display_name` = `生存服` | `🔴 Steve 离开了服务器[生存服]` |
+| 什么都不填（默认值 `MC`） | `🔴 Steve 离开了服务器[MC]` |
+| `display_name` 与 `display_name_default` 都清空 | `🔴 Steve 离开了服务器[survival]`（回退 `server_name`，仍可区分） |
 
 </details>
 
@@ -342,7 +350,7 @@
 
 1. 将本插件放入 AstrBot 的 `data/plugins/` 目录，重启 AstrBot
 2. 在 WebUI 插件配置中点击「添加 MC服务器」，**填写「目标会话」（必填）**
-3. 确保 `server_id` 与鹊桥 `config.yml` 的 `server_name` 完全一致
+3. 确保 `server_name` 与鹊桥 `config.yml` 的 `server_name` 完全一致
 
 > **默认配置即可直连本机双端**：AstrBot 与 MC 装在同一台机器时，连接信息（`ws_url` → `ws://127.0.0.1:8080/minecraft/ws`）与鹊桥默认端口已经对齐，**通常无需改动**，只要填好「目标会话」就能用。跨机器、Docker 等场景见下一节。
 
@@ -388,7 +396,7 @@ ws_url: "ws://127.0.0.1:8080/minecraft/ws"   # 端口需与上方 port 一致
 在 Minecraft 服务端安装 [鹊桥](https://modrinth.com/plugin/queqiao) 插件/模组，并按其[文档](https://github.com/17TheWord/queqiao-docs)配置 `config.yml`：
 
 ```yaml
-server_name: "Server"        # 必须与插件配置的 server_id 一致
+server_name: "Server"        # 必须与插件配置的 server_name 一致
 access_token: ""             # 对应插件配置的 access_token
 websocket_server:
   enable: true               # 正向连接（插件连鹊桥）需开启
@@ -431,7 +439,7 @@ subscribe_event:             # 按需开启事件订阅
 
 **Q：连接不上，日志提示鉴权失败或 404？**
 
-检查 `server_id` 是否与鹊桥 `server_name` 完全一致（含大小写），以及 `access_token` 是否与鹊桥配置相同。
+检查 `server_name` 是否与鹊桥 `server_name` 完全一致（含大小写），以及 `access_token` 是否与鹊桥配置相同。
 
 **Q：日志一直重连、连不上鹊桥，是不是该把地址改成 `0.0.0.0`？** 
 

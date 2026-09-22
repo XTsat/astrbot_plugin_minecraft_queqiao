@@ -26,7 +26,7 @@ class RconClient:
 
     def __init__(self, config: ServerConfig) -> None:
         self.config = config
-        self.server_id = config.server_id
+        self.server_name = config.server_name
         self._client: object | None = None
         self._connected = False
         self._lock = asyncio.Lock()
@@ -38,12 +38,12 @@ class RconClient:
             return False
         if not self.config.rcon_password:
             logger.warning(
-                f"[{PLUGIN_NAME}][{self.server_id}] 已启用 RCON 兜底但未配置密码，跳过"
+                f"[{PLUGIN_NAME}][{self.server_name}] 已启用 RCON 兜底但未配置密码，跳过"
             )
             return False
         if not _RCON_AVAILABLE:
             logger.warning(
-                f"[{PLUGIN_NAME}][{self.server_id}] 已启用 RCON 兜底但未安装 "
+                f"[{PLUGIN_NAME}][{self.server_name}] 已启用 RCON 兜底但未安装 "
                 f"aio-mc-rcon，请执行 pip install aio-mc-rcon"
             )
             return False
@@ -72,7 +72,7 @@ class RconClient:
                 await client.connect()
             except Exception as exc:
                 logger.error(
-                    f"[{PLUGIN_NAME}][{self.server_id}] RCON 连接失败 "
+                    f"[{PLUGIN_NAME}][{self.server_name}] RCON 连接失败 "
                     f"({self.config.rcon_host}:{self.config.rcon_port}): {exc}"
                 )
                 self._client = None
@@ -82,7 +82,7 @@ class RconClient:
             self._client = client
             self._connected = True
             logger.info(
-                f"[{PLUGIN_NAME}][{self.server_id}] RCON 已连接 "
+                f"[{PLUGIN_NAME}][{self.server_name}] RCON 已连接 "
                 f"{self.config.rcon_host}:{self.config.rcon_port}"
             )
             return True
@@ -103,7 +103,7 @@ class RconClient:
             async with self._lock:
                 response = await client.send_cmd(command)
         except Exception as exc:
-            logger.error(f"[{PLUGIN_NAME}][{self.server_id}] RCON 执行失败: {exc}")
+            logger.error(f"[{PLUGIN_NAME}][{self.server_name}] RCON 执行失败: {exc}")
             await self.close()
             return None
 

@@ -97,32 +97,33 @@ class MinecraftQueQiaoPlugin(Star):
                 continue
 
             config = ServerConfig.from_dict(entry)
-            if not config.server_id:
-                logger.warning(f"[{PLUGIN_NAME}] 跳过 server_id 为空的服务器配置")
+            if not config.server_name:
+                logger.warning(f"[{PLUGIN_NAME}] 跳过 server_name 为空的服务器配置")
                 continue
-            if config.server_id in self._configs:
+            if config.server_name in self._configs:
                 logger.warning(
-                    f"[{PLUGIN_NAME}] server_id 重复，后者被忽略: {config.server_id}"
+                    f"[{PLUGIN_NAME}] server_name 重复，后者被忽略: {config.server_name}"
                 )
+                await self._notify_duplicate_server(config)
                 continue
 
-            self._configs[config.server_id] = config
+            self._configs[config.server_name] = config
             self.message_bridge.register_server(config)
             self.server_manager.add(
                 config,
-                on_event=self._make_event_handler(config.server_id),
-                on_connect=self._make_connect_handler(config.server_id),
-                on_disconnect=self._make_disconnect_handler(config.server_id),
+                on_event=self._make_event_handler(config.server_name),
+                on_connect=self._make_connect_handler(config.server_name),
+                on_disconnect=self._make_disconnect_handler(config.server_name),
             )
 
             if config.custom_cmd_list:
                 self.command_handler.register_custom_commands(
-                    config.server_id, config.custom_cmd_list
+                    config.server_name, config.custom_cmd_list
                 )
 
             any_text2image = any_text2image or config.text2image
             logger.info(
-                f"[{PLUGIN_NAME}] 已配置服务器: {config.server_id} "
+                f"[{PLUGIN_NAME}] 已配置服务器: {config.server_name} "
                 f"({'反向' if config.is_reverse else '正向'})"
             )
             self._warn_prefix_conflict(config)
@@ -245,47 +246,82 @@ class MinecraftQueQiaoPlugin(Star):
         """两个前缀互相包含时告警，提示用户在配置中改开。"""
         if config.prefixes_conflict:
             logger.warning(
-                f"[{PLUGIN_NAME}][{config.server_id}] 互通前缀 "
+                f"[{PLUGIN_NAME}][{config.server_name}] 互通前缀 "
                 f"`{config.auto_forward_prefix}` 与 AI 前缀 "
                 f"`{config.ai_chat_prefix}` 相互包含，消息归属可能产生歧义，"
                 f"建议改为互不相同的两个前缀"
             )
 
+    async def _notify_duplicate_server(self, config: ServerConfig) -> None:
+        """server_name 重复被忽略时，把告警发到该配置的目标会话。
+
+        仅日志告警容易被忽略；把「配置被忽略」直接发进目标会话，
+        让用户知道这台服务器没有启用以及原因。发送失败只告警不中断。
+        """
+        if not config.target_sessions:
+            return
+        try:
+            from astrbot.api.event import MessageChain
+            from astrbot.api.message_components import Plain
+
+            chain = MessageChain(
+                chain=[
+                    Plain(
+                        text=(
+                            f"⚠️ 配置告警：server_name「{config.server_name}」"
+                            "与已有服务器重复，本服务器的配置已被忽略、未启用。"
+                            "请修改本服务器的 server_name（需与鹊桥 config.yml 的 "
+                            "server_name 一致），否则本服务器不会启用。"
+                        )
+                    )
+                ]
+            )
+            for umo in config.target_sessions:
+                try:
+                    await self.context.send_message(umo, chain)
+                except Exception:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}] 向 {umo} 发送重复配置告警失败",
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.warning(f"[{PLUGIN_NAME}] 发送重复配置告警失败", exc_info=True)
+
     # ---- 事件回调构造 ----
 
-    def _make_event_handler(self, server_id: str):
+    def _make_event_handler(self, server_name: str):
         async def _handler(event: QueQiaoEvent) -> None:
-            await self._on_queqiao_event(server_id, event)
+            await self._on_queqiao_event(server_name, event)
 
         return _handler
 
-    def _make_connect_handler(self, server_id: str):
+    def _make_connect_handler(self, server_name: str):
         async def _handler() -> None:
-            logger.info(f"[{PLUGIN_NAME}][{server_id}] 连接就绪")
+            logger.info(f"[{PLUGIN_NAME}][{server_name}] 连接就绪")
 
         return _handler
 
-    def _make_disconnect_handler(self, server_id: str):
+    def _make_disconnect_handler(self, server_name: str):
         async def _handler(reason: str) -> None:
-            logger.warning(f"[{PLUGIN_NAME}][{server_id}] 连接断开: {reason}")
+            logger.warning(f"[{PLUGIN_NAME}][{server_name}] 连接断开: {reason}")
 
         return _handler
 
     # ---- MC 事件处理 ----
 
-    async def _on_queqiao_event(self, server_id: str, event: QueQiaoEvent) -> None:
+    async def _on_queqiao_event(self, server_name: str, event: QueQiaoEvent) -> None:
         """处理来自鹊桥的事件：转发到会话，并识别 AI 聊天触发。"""
-        config = self._configs.get(server_id)
+        config = self._configs.get(server_name)
         if config is None:
             return
 
         # AI 与互通互斥：命中 AI 前缀即交给 LLM，不再转发到会话
         question = self._resolve_ai_question(config, event)
         if question is not None:
-            await self._handle_ai_chat(server_id, config, event, question)
+            await self._handle_ai_chat(server_name, config, event, question)
             return
 
-        await self.message_bridge.forward_event(server_id, config, event)
+        await self.message_bridge.forward_event(server_name, config, event)
 
     @staticmethod
     def _match_ai_prefix(config: ServerConfig, event: QueQiaoEvent) -> bool:
@@ -318,7 +354,7 @@ class MinecraftQueQiaoPlugin(Star):
         return question or None
 
     async def _handle_ai_chat(
-        self, server_id: str, config: ServerConfig, event: QueQiaoEvent, question: str
+        self, server_name: str, config: ServerConfig, event: QueQiaoEvent, question: str
     ) -> None:
         """把游戏内 AI 提问交给 LLM，并把回复私聊回玩家。
 
@@ -326,14 +362,14 @@ class MinecraftQueQiaoPlugin(Star):
         """
         player = event.player
         logger.info(
-            f"[{PLUGIN_NAME}][{server_id}] AI 提问来自 {player.display_name}: {question}"
+            f"[{PLUGIN_NAME}][{server_name}] AI 提问来自 {player.display_name}: {question}"
         )
 
         reply = await self._ask_llm(event, question)
         if not reply:
             return
 
-        instance = self.server_manager.get(server_id)
+        instance = self.server_manager.get(server_name)
         if instance is None:
             return
 
@@ -346,14 +382,14 @@ class MinecraftQueQiaoPlugin(Star):
             # 超时 = 结果未知：WS 发送已成功，私聊大概率已送达游戏内。
             # 此时若再广播一遍，玩家会收到两份回复（实测发生过），因此不重发
             logger.warning(
-                f"[{PLUGIN_NAME}][{server_id}] 私聊回复响应超时"
+                f"[{PLUGIN_NAME}][{server_name}] 私聊回复响应超时"
                 "（消息可能已送达游戏内，不重复发送）"
             )
             return
         if not sent:
             # 仅「确定失败」（未连接 / 鹊桥明确报错）才改用广播
             logger.warning(
-                f"[{PLUGIN_NAME}][{server_id}] 私聊回复失败，改用广播"
+                f"[{PLUGIN_NAME}][{server_name}] 私聊回复失败，改用广播"
             )
             await instance.client.broadcast(
                 f"@{player.display_name} {reply}", config.broadcast_color
@@ -395,7 +431,7 @@ class MinecraftQueQiaoPlugin(Star):
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
-        yield event.plain_result(await self.command_handler.handle_status(event, server.server_id))
+        yield event.plain_result(await self.command_handler.handle_status(event, server.server_name))
 
     @mc_group.command("list")
     async def cmd_list(self, event: AstrMessageEvent, target: str = ""):
@@ -404,7 +440,7 @@ class MinecraftQueQiaoPlugin(Star):
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
-        yield event.plain_result(await self.command_handler.handle_list(event, server.server_id))
+        yield event.plain_result(await self.command_handler.handle_list(event, server.server_name))
 
     @mc_group.command("player")
     async def cmd_player(self, event: AstrMessageEvent, player_id=GreedyStr):
@@ -424,7 +460,7 @@ class MinecraftQueQiaoPlugin(Star):
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_player(event, server.server_id, rest)
+            await self.command_handler.handle_player(event, server.server_name, rest)
         )
 
     @mc_group.command("cmd")
@@ -446,7 +482,7 @@ class MinecraftQueQiaoPlugin(Star):
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_cmd(event, server.server_id, rest)
+            await self.command_handler.handle_cmd(event, server.server_name, rest)
         )
 
     @mc_group.command("say")
@@ -468,7 +504,7 @@ class MinecraftQueQiaoPlugin(Star):
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
             return
         yield event.plain_result(
-            await self.command_handler.handle_say(event, server.server_id, rest)
+            await self.command_handler.handle_say(event, server.server_name, rest)
         )
 
     @mc_group.command("bind")
@@ -504,10 +540,10 @@ class MinecraftQueQiaoPlugin(Star):
 
         # 自定义指令：仅在会话绑定的服务器上匹配（按文本匹配，图片不参与）
         if text:
-            for server_id, config in self.message_bridge.servers_for_session(umo):
-                actual = self.command_handler.match_custom_command(server_id, text)
+            for server_name, config in self.message_bridge.servers_for_session(umo):
+                actual = self.command_handler.match_custom_command(server_name, text)
                 if actual:
-                    instance = self.server_manager.get(server_id)
+                    instance = self.server_manager.get(server_name)
                     if instance is None:
                         continue
                     output = await instance.execute_command(actual)
@@ -572,14 +608,14 @@ class MinecraftQueQiaoPlugin(Star):
         sender = event.get_sender_name() or event.get_sender_id()
         platform = event.get_platform_name() or "未知"
 
-        for server_id, config in targets:
+        for server_name, config in targets:
             if not self.message_bridge.should_relay(config, text):
                 continue
 
-            instance = self.server_manager.get(server_id)
+            instance = self.server_manager.get(server_name)
             if instance is None or not instance.connected:
                 logger.debug(
-                    f"[{PLUGIN_NAME}][{server_id}] 服务器未连接，跳过该消息的转发"
+                    f"[{PLUGIN_NAME}][{server_name}] 服务器未连接，跳过该消息的转发"
                 )
                 continue
 
@@ -609,14 +645,14 @@ class MinecraftQueQiaoPlugin(Star):
                 # 默认关闭：多数服务器未装 ChatImage，开箱不应外溢；
                 # 但用户排查时这里必须有可见日志，否则图片静默丢失无从查起
                 logger.info(
-                    f"[{PLUGIN_NAME}][{server_id}] 消息含 {len(images)} 张图片，"
+                    f"[{PLUGIN_NAME}][{server_name}] 消息含 {len(images)} 张图片，"
                     "但未开启 forward_image_to_mc，图片未转发"
                 )
 
             if not content and not image_codes:
                 if skipped_images:
                     logger.warning(
-                        f"[{PLUGIN_NAME}][{server_id}] 消息中的图片均无可访问"
+                        f"[{PLUGIN_NAME}][{server_name}] 消息中的图片均无可访问"
                         f"的公开 URL（{skipped_images} 张），已跳过。"
                         f"图片组件: {self._describe_image(skipped_sample)}；"
                         f"兜底状态: {self.image_bed.status_text}；"
@@ -634,15 +670,15 @@ class MinecraftQueQiaoPlugin(Star):
                 platform=config.platform_display_name(platform),
                 sender=sender,
                 message=message,
-                # {server} 取显示名称（留空用默认值，默认 MC）；{server_id} 始终为原始 ID
-                server=config.server_label,
-                server_id=server_id,
+                # {display_name} 取显示名称（留空用默认值，默认 MC）；{server_name} 始终为原始 ID
+                display_name=config.server_label,
+                server_name=server_name,
             )
             if await instance.client.broadcast(formatted, config.broadcast_color):
                 # 记录以防止该消息从游戏回传时形成回声。
                 # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
                 # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
-                self.message_bridge.mark_forwarded(server_id, content)
+                self.message_bridge.mark_forwarded(server_name, content)
                 relayed = True
                 if image_codes:
                     extra = (
@@ -651,7 +687,7 @@ class MinecraftQueQiaoPlugin(Star):
                         else ""
                     )
                     logger.info(
-                        f"[{PLUGIN_NAME}][{server_id}] 已转发 {len(image_codes)} "
+                        f"[{PLUGIN_NAME}][{server_name}] 已转发 {len(image_codes)} "
                         f"张图片到游戏内{extra}"
                     )
                 # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）

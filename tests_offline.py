@@ -9,10 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 astrbot = types.ModuleType("astrbot"); api = types.ModuleType("astrbot.api")
 class _L:
-    def info(self,*a): pass
-    def warning(self,*a): pass
-    def error(self,*a): pass
-    def debug(self,*a): pass
+    def info(self,*a,**k): pass
+    def warning(self,*a,**k): pass
+    def error(self,*a,**k): pass
+    def debug(self,*a,**k): pass
 api.logger=_L(); api.AstrBotConfig=dict
 # 注意：真实 `astrbot.api` **不导出** Context（它在 astrbot.api.star）。
 # 桩必须忠实反映这一点，否则会掩盖 "cannot import name 'Context'" 这类错误。
@@ -132,7 +132,7 @@ print("=== 8. 回声抑制 + 转发判定 ===")
 class _Ctx:
     async def send_message(self,*a,**k): return True
 br = MessageBridge(_Ctx())
-cfg = ServerConfig.from_dict({"server":{"server_id":"S"},
+cfg = ServerConfig.from_dict({"server":{"server_name":"S"},
     "message":{"target_sessions":["umo:GroupMessage:1"],"auto_forward_prefix":"*",
                "forward_chat_to_astrbot":True,"forward_join_leave_to_astrbot":False}})
 br.register_server(cfg)
@@ -141,7 +141,7 @@ assert br.should_relay(cfg,"*hello") is True
 assert br.should_relay(cfg,"no prefix") is False
 assert br.strip_relay_prefix(cfg,"*hello") == "hello"
 # 转发前缀留空 = 全部转发（与 AI 前缀「留空即不触发」语义相反，属刻意设计）
-cfg_empty_prefix = ServerConfig.from_dict({"server":{"server_id":"S2"},
+cfg_empty_prefix = ServerConfig.from_dict({"server":{"server_name":"S2"},
     "message":{"target_sessions":["umo:GroupMessage:1"]}})
 assert cfg_empty_prefix.auto_forward_prefix == ""
 assert br.should_relay(cfg_empty_prefix,"no prefix") is True
@@ -167,7 +167,7 @@ b3 = BindingService(d); b3.load(); assert b3.get("umo1")==""
 print("OK  绑定写入/重新加载/解绑 正确，utf-8 明文 JSON")
 
 print("=== 10. 命令黑白名单 + 配置解析 ===")
-c = ServerConfig.from_dict({"server":{"server_id":"T","ws_mode":"reverse","reverse_port":"9090",
+c = ServerConfig.from_dict({"server":{"server_name":"T","ws_mode":"reverse","reverse_port":"9090",
      "access_token":"tok"},"message":{"target_sessions":'["a:b:1"]'},
      "cmd":{"cmd_list":"say, list","rcon_fallback":{"enabled":"true","port":"25575"}}})
 assert c.is_reverse and c.reverse_port==9090 and c.target_sessions==["a:b:1"]
@@ -192,7 +192,7 @@ class _Ctx2:
     async def send_message(self, umo, chain):
         sent.append((umo, chain.chain[0].text)); return True
 br2 = MessageBridge(_Ctx2())
-cfg2 = ServerConfig.from_dict({"server":{"server_id":"Srv"},
+cfg2 = ServerConfig.from_dict({"server":{"server_name":"Srv"},
   "message":{"target_sessions":["aiocqhttp:GroupMessage:123"],"forward_chat_to_astrbot":True,
              "forward_join_leave_to_astrbot":True,"forward_death_to_astrbot":True,
              "forward_chat_format":"<{player}> {message}"}})
@@ -210,9 +210,9 @@ async def _run():
 asyncio.run(_run())
 for umo, text in sent: print("   ->", umo, "|", text)
 assert sent[0][1] == "<Steve> 大家好", sent[0][1]
-assert "🟢 Alex 加入了服务器" == sent[1][1]
+assert "🟢 Alex 加入了服务器[MC]" == sent[1][1]
 assert sent[2][1] == "💀 Steve was slain by Zombie"
-print("OK  聊天(富文本剥离)/加入/死亡 三类事件均正确转发")
+print("OK  聊天(富文本剥离)/加入/死亡 三类事件均正确转发（加入消息带服务器显示名称 [MC]）")
 
 print("=== 12. main.py 可导入 ===")
 import astrbot_plugin_minecraft_queqiao.main as m
@@ -231,7 +231,7 @@ assert d.ai_chat_prefix == "ai" and d.auto_forward_prefix == ""
 assert d.prefixes_conflict is False, "默认前缀不应冲突"
 
 # 命中 AI 前缀 -> 走 AI，不转发
-cfg_ai = SC.from_dict({"server":{"server_id":"S"},"ai_chat_prefix":"ai"})
+cfg_ai = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":"ai"})
 chat_ai = QueQiaoEvent.from_dict({"event_name":"PlayerChatEvent",
     "message":"ai 你好","player":{"nickname":"A"}})
 chat_bare = QueQiaoEvent.from_dict({"event_name":"PlayerChatEvent",
@@ -255,18 +255,18 @@ assert P._strip_ai_prefix(cfg_ai, "ai 你好") == "你好"
 assert P._strip_ai_prefix(cfg_ai, "AI 你好") == "你好"
 
 # 前缀以非字母数字结尾时（如 `!`）无需分隔符即可命中
-cfg_bang = SC.from_dict({"server":{"server_id":"S"},"ai_chat_prefix":"!"})
+cfg_bang = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":"!"})
 assert P._match_ai_prefix(cfg_bang, QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"!你好"})) is True
 # 以字母结尾的前缀（如 `#ai`）同样要求词边界
-cfg_hash = SC.from_dict({"server":{"server_id":"S"},"ai_chat_prefix":"#ai"})
+cfg_hash = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":"#ai"})
 assert P._match_ai_prefix(cfg_hash, QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"#aihi"})) is False
 assert P._match_ai_prefix(cfg_hash, QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"#ai 你好"})) is True
 
 # AI 前缀留空 -> 不触发（避免全量投喂 LLM）
-cfg_empty = SC.from_dict({"server":{"server_id":"S"},"ai_chat_prefix":""})
+cfg_empty = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":""})
 assert P._match_ai_prefix(cfg_empty, chat_norm) is False
 
 # 前缀冲突检测：互相包含即告警
@@ -282,7 +282,7 @@ class _Ctx3:
         sent2.append(chain.chain[0].text); return True
 import astrbot_plugin_minecraft_queqiao.services.message_bridge as mb_mod
 br3 = mb_mod.MessageBridge(_Ctx3())
-cfg3 = SC.from_dict({"server":{"server_id":"Srv2"},"ai_chat_prefix":"#ai",
+cfg3 = SC.from_dict({"server":{"server_name":"Srv2"},"ai_chat_prefix":"#ai",
     "message":{"target_sessions":["umo:GroupMessage:9"],"forward_chat_to_astrbot":True}})
 br3.register_server(cfg3)
 async def _run3():
@@ -290,7 +290,7 @@ async def _run3():
     await br3.forward_event("Srv2", cfg3, chat_norm)
     # AI 消息 -> 在 main 层就被拦截，不会到达 bridge
 asyncio.run(_run3())
-# 默认格式 [{server}]{player}: {message}：{server} 留空时取显示名称默认值 MC
+# 默认格式 [{display_name}]{player}: {message}：{display_name} 留空时取显示名称默认值 MC
 assert sent2 == ["[MC]A: 大家好"], sent2
 print("OK  普通聊天转发到群:", sent2)
 
@@ -308,7 +308,7 @@ assert not hasattr(d2, "resolved_ai_command"), "不应残留 resolved_ai_command
 import astrbot_plugin_minecraft_queqiao.core.constants as _c
 assert not hasattr(_c, "match_ai_command"), "不应残留 match_ai_command"
 
-cfg = SC.from_dict({"server":{"server_id":"S"},"ai_chat_prefix":"ai"})
+cfg = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":"ai"})
 ev_chat = QueQiaoEvent.from_dict({"post_type":"message","event_name":"PlayerChatEvent",
     "message":"ai 你好","player":{"nickname":"A"}})
 # 以 / 开头的聊天内容同样不触发
@@ -327,7 +327,7 @@ assert P._resolve_ai_question(cfg, ev_join) is None
 assert P._resolve_ai_question(cfg, QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"ai"})) is None
 # 关掉总开关后不触发
-cfg_off = SC.from_dict({"server":{"server_id":"S"},"enable_ai_chat":False})
+cfg_off = SC.from_dict({"server":{"server_name":"S"},"enable_ai_chat":False})
 assert P._resolve_ai_question(cfg_off, ev_chat) is None
 print("OK  仅聊天前缀触发、指令事件不触发、旧配置项已彻底移除")
 
@@ -564,7 +564,7 @@ for _bad in (None, [], "str", 42, {"display": "not-a-dict"}, {"display": {"title
 print("OK  translate.text / text / display.title / key 四级降级，畸形输入安全")
 
 # (h) 端到端：转发文案不得再出现无信息量的「达成成就」
-_bcfg = _S2.from_dict({"server": {"server_id": "S"},
+_bcfg = _S2.from_dict({"server": {"server_name": "S"},
                        "message": {"target_sessions": ["umo:GroupMessage:1"],
                                    "forward_achievement_to_astrbot": True}})
 _br = _MB(context=None)
@@ -607,7 +607,7 @@ assert _tr == "🏆 Steve has made the advancement [Hot Stuff]", _tr
 assert _tr.count("Steve") == 1, _tr   # 关键：不重复
 
 # should_forward 仍受开关控制（关闭时不转发，避免兜底文案掩盖配置问题）
-_off = _S2.from_dict({"server": {"server_id": "S"},
+_off = _S2.from_dict({"server": {"server_name": "S"},
                       "message": {"target_sessions": ["umo:GroupMessage:1"],
                                   "forward_achievement_to_astrbot": False}})
 assert _br.should_forward(_off, _ev_ach) is False
@@ -623,139 +623,154 @@ from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as 
 from astrbot_plugin_minecraft_queqiao.services.message_bridge import MessageBridge as _MB3
 
 # (a) 取值链必须区分开：
-#     server_label  <- 消息格式 {server}：server_name → server_name_default（默认 MC）→ 空串
-#     display_name  <- 状态/列表文案：同链再回退 server_id / 未知
-_sn = _S3.from_dict({"server": {"server_id": "survival", "server_name": "生存服"}})
-assert _sn.server_name == "生存服"
-assert _sn.server_label == "生存服" and _sn.display_name == "生存服"
-# server_name 优先级最高，永远压过默认值
-assert _S3.from_dict({"server": {"server_id": "s", "server_name": "生存服",
-    "server_name_default": "MC2"}}).server_label == "生存服"
-# 什么都不填：{server} 用默认值 MC（线上反馈的期望效果），状态/列表同链取 MC
-_sn2 = _S3.from_dict({"server": {"server_id": "survival"}})
-assert _sn2.server_name == ""
+#     server_label  <- 消息格式 {display_name}：display_name → display_name_default（默认 MC）→ 空串
+#     display_name  <- 状态/列表文案：同链再回退 server_name / 未知
+_sn = _S3.from_dict({"server": {"server_name": "survival", "display_name": "生存服"}})
+assert _sn.display_name == "生存服"
+assert _sn.server_label == "生存服" and _sn.display_label == "生存服"
+# display_name 优先级最高，永远压过默认值
+assert _S3.from_dict({"server": {"server_name": "s", "display_name": "生存服",
+    "display_name_default": "MC2"}}).server_label == "生存服"
+# 什么都不填：{display_name} 用默认值 MC（线上反馈的期望效果），状态/列表同链取 MC
+_sn2 = _S3.from_dict({"server": {"server_name": "survival"}})
+assert _sn2.display_name == ""
 assert _sn2.server_label == "MC", f"留空应取默认值 MC，实际 {_sn2.server_label!r}"
-assert _sn2.display_name == "MC"
+assert _sn2.display_label == "MC"
 # 默认值可自定义
-assert _S3.from_dict({"server": {"server_id": "s", "server_name_default": "本服"}})\
+assert _S3.from_dict({"server": {"server_name": "s", "display_name_default": "本服"}})\
     .server_label == "本服"
-# 显式清空默认值（server_name_default=""）才输出空串——唯一的无前缀途径
-_sn3 = _S3.from_dict({"server": {"server_id": "s", "server_name_default": ""}})
+# 显式清空默认值（display_name_default=""）才输出空串——唯一的无前缀途径
+_sn3 = _S3.from_dict({"server": {"server_name": "s", "display_name_default": ""}})
 assert _sn3.server_label == ""
-assert _sn3.display_name == "s"  # label 空时孤立文案回退 server_id
-# 默认配置与 conf 模板对齐（server_id 缺省回落 Server）；
-# 「未知」仅在 label 与 server_id 全空时出现（该配置会被 main 层跳过并告警）
-assert _S3.from_dict({}).server_label == "MC" and _S3.from_dict({}).display_name == "MC"
-assert _S3.from_dict({"server": {"server_id": "", "server_name_default": ""}})\
-    .display_name == "未知"
-# 显示名称只影响展示，不得污染握手 Header（x-self-name 必须仍是 server_id）
+assert _sn3.display_label == "s"  # label 空时孤立文案回退 server_name
+# 默认配置与 conf 模板对齐（server_name 缺省回落 Server）；
+# 「未知」仅在 label 与 server_name 全空时出现（该配置会被 main 层跳过并告警）
+assert _S3.from_dict({}).server_label == "MC" and _S3.from_dict({}).display_label == "MC"
+assert _S3.from_dict({"server": {"server_name": "", "display_name_default": ""}})\
+    .display_label == "未知"
+# 显示名称只影响展示，不得污染握手 Header（x-self-name 必须仍是 server_name）
 assert _sn.forward_headers["x-self-name"] == "survival", _sn.forward_headers
-# 纯空白的 server_name 视为未填写 -> 走默认值
-assert _S3.from_dict({"server": {"server_id": "s", "server_name": "   "}}).server_label == "MC"
+# 纯空白的 display_name 视为未填写 -> 走默认值
+assert _S3.from_dict({"server": {"server_name": "s", "display_name": "   "}}).server_label == "MC"
 # 纯空白的默认值视为已清空 -> 空串
-assert _S3.from_dict({"server": {"server_id": "s", "server_name_default": "  "}})\
+assert _S3.from_dict({"server": {"server_name": "s", "display_name_default": "  "}})\
     .server_label == ""
 # 非字符串形态（WebUI 误填数字）也要安全收敛
-assert _S3.from_dict({"server": {"server_id": "s", "server_name": 123}}).server_label == "123"
-assert _S3.from_dict({"server": {"server_id": "s", "server_name_default": 66}})\
+assert _S3.from_dict({"server": {"server_name": "s", "display_name": 123}}).server_label == "123"
+assert _S3.from_dict({"server": {"server_name": "s", "display_name_default": 66}})\
     .server_label == "66"
 
-# (b) MC → 外部：{server} 取显示名称（中文可直接渲染）
+# (b) MC → 外部：{display_name} 取显示名称（中文可直接渲染）
 _sent3 = []
 class _Ctx4:
     async def send_message(self, umo, chain):
         _sent3.append(chain.chain[0].text); return True
 _br4 = _MB3(_Ctx4())
-_cfg4 = _S3.from_dict({"server": {"server_id": "survival", "server_name": "生存服"},
+_cfg4 = _S3.from_dict({"server": {"server_name": "survival", "display_name": "生存服"},
     "message": {"target_sessions": ["umo:GroupMessage:9"], "forward_chat_to_astrbot": True,
-                "forward_chat_format": "[{server}] <{player}> {message}"}})
+                "forward_chat_format": "[{display_name}] <{player}> {message}"}})
 _ev4 = QueQiaoEvent.from_dict({"event_name": "PlayerChatEvent", "message": "大家好",
                                "player": {"nickname": "Steve"}})
 assert _br4.format_event(_cfg4, _ev4) == "[生存服] <Steve> 大家好", \
     _br4.format_event(_cfg4, _ev4)
 # 未填显示名称时用默认值 MC（线上反馈期望：[MC]<玩家名> 消息），
-# 而不是回退英文 server_id
-_cfg4b = _S3.from_dict({"server": {"server_id": "survival"},
-    "message": {"forward_chat_format": "[{server}]<{player}> {message}"}})
+# 而不是回退英文 server_name
+_cfg4b = _S3.from_dict({"server": {"server_name": "survival"},
+    "message": {"forward_chat_format": "[{display_name}]<{player}> {message}"}})
 assert _br4.format_event(_cfg4b, _ev4) == "[MC]<Steve> 大家好", \
     _br4.format_event(_cfg4b, _ev4)
 # 显式清空默认值才输出空串（无前缀效果）
-_cfg4c = _S3.from_dict({"server": {"server_id": "survival", "server_name_default": ""},
-    "message": {"forward_chat_format": "{server}<{player}> {message}"}})
+_cfg4c = _S3.from_dict({"server": {"server_name": "survival", "display_name_default": ""},
+    "message": {"forward_chat_format": "{display_name}<{player}> {message}"}})
 assert _br4.format_event(_cfg4c, _ev4) == "<Steve> 大家好"
 # 只用 {player}/{message} 的旧格式必须继续可用（向后兼容，显式配置即生效）
 _cfg_old = _S3.from_dict({"message": {"forward_chat_format": "<{player}> {message}"}})
 assert _br4.format_event(_cfg_old, _ev4) == "<Steve> 大家好"
-# 新默认格式与 conf 模板对齐：[{server}]{player}: {message}
-# （什么都不填时 {server} = 默认值 MC，开箱即显示 [MC]Steve: 大家好）
-assert _S3.from_dict({}).forward_chat_format == "[{server}]{player}: {message}"
+# 新默认格式与 conf 模板对齐：[{display_name}]{player}: {message}
+# （什么都不填时 {display_name} = 默认值 MC，开箱即显示 [MC]Steve: 大家好）
+assert _S3.from_dict({}).forward_chat_format == "[{display_name}]{player}: {message}"
 assert _br4.format_event(_S3.from_dict({}), _ev4) == "[MC]Steve: 大家好"
 
-# (c) 外部 → MC：{server} 走取值链、{server_id} 始终为原始 ID
+# (c) 外部 → MC：{display_name} 走取值链、{server_name} 始终为原始 ID
 _fmt = _cfg4.broadcast_format
 _rendered = _fmt.format(platform="aiocqhttp", sender="群友A",
-                        message="你好", server=_cfg4.server_label,
-                        server_id="survival")
+                        message="你好", display_name=_cfg4.server_label,
+                        server_name="survival")
 assert _rendered == "[aiocqhttp]群友A: 你好", _rendered  # 默认格式与 conf 模板一致
-_rendered2 = "[{server}/{server_id}] {sender}: {message}".format(
+_rendered2 = "[{display_name}/{server_name}] {sender}: {message}".format(
     platform="aiocqhttp", sender="群友A", message="你好",
-    server=_cfg4.server_label, server_id="survival")
+    display_name=_cfg4.server_label, server_name="survival")
 assert _rendered2 == "[生存服/survival] 群友A: 你好", _rendered2
-# 留空名称时 {server} 为默认值 MC，而 {server_id} 仍能取到原始 ID（排障兜底手段）
-_rendered3 = "[{server}|{server_id}] {sender}: {message}".format(
+# 留空名称时 {display_name} 为默认值 MC，而 {server_name} 仍能取到原始 ID（排障兜底手段）
+_rendered3 = "[{display_name}|{server_name}] {sender}: {message}".format(
     platform="aiocqhttp", sender="群友A", message="你好",
-    server=_sn2.server_label, server_id="survival")
+    display_name=_sn2.server_label, server_name="survival")
 assert _rendered3 == "[MC|survival] 群友A: 你好", _rendered3
 
-# (d) schema 守卫：server_name / server_name_default 必须在 server 子对象内、
-#     紧邻排列，且两个格式串的 hint 都要提到 {server}，否则 WebUI 里用户无从得知
+# (d) schema 守卫：display_name / display_name_default 必须在 server 子对象内、
+#     紧邻排列，且两个格式串的 hint 都要提到 {display_name}，否则 WebUI 里用户无从得知
 import json as _json3
 _sh = _json3.loads(_pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8"))
 _sitems = _sh["mc_servers"]["templates"]["server"]["items"]["server"]["items"]
 _sk = list(_sitems.keys())
-assert "server_name" in _sitems, "server 子对象缺少 server_name"
-assert _sk.index("server_name") == _sk.index("server_id") + 1, \
-    f"server_name 必须紧跟 server_id，实际顺序: {_sk}"
-assert _sitems["server_name"]["default"] == ""
-assert "server_name_default" in _sitems, "server 子对象缺少 server_name_default"
-assert _sk.index("server_name_default") == _sk.index("server_name") + 1, \
-    f"server_name_default 必须紧跟 server_name，实际顺序: {_sk}"
-assert _sitems["server_name_default"]["default"] == "MC", \
+assert "display_name" in _sitems, "server 子对象缺少 display_name"
+assert _sk.index("display_name") == _sk.index("server_name") + 1, \
+    f"display_name 必须紧跟 server_name，实际顺序: {_sk}"
+assert _sitems["display_name"]["default"] == ""
+assert "display_name_default" in _sitems, "server 子对象缺少 display_name_default"
+assert _sk.index("display_name_default") == _sk.index("display_name") + 1, \
+    f"display_name_default 必须紧跟 display_name，实际顺序: {_sk}"
+assert _sitems["display_name_default"]["default"] == "MC", \
     "显示名称默认值必须与代码默认一致（MC）"
 _mitems = _sh["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
-assert "{server}" in _mitems["forward_chat_format"]["hint"], \
-    "forward_chat_format 的 hint 必须说明 {server}"
-assert "{server}" in _mitems["broadcast_format"]["hint"], \
-    "broadcast_format 的 hint 必须说明 {server}"
-print("OK  取值链 server_name→默认值(MC)→空串 可测、不污染握手 Header、旧格式向后兼容")
-print("OK  两个方向的 {server} 均走取值链，{server_id} 保留原始 ID，schema 已同步")
+assert "{display_name}" in _mitems["forward_chat_format"]["hint"], \
+    "forward_chat_format 的 hint 必须说明 {display_name}"
+assert "{display_name}" in _mitems["broadcast_format"]["hint"], \
+    "broadcast_format 的 hint 必须说明 {display_name}"
+print("OK  取值链 display_name→默认值(MC)→空串 可测、不污染握手 Header、旧格式向后兼容")
+print("OK  两个方向的 {display_name} 均走取值链，{server_name} 保留原始 ID，schema 已同步")
 
-# (e) 复现线上反馈：什么都不填 + `[{server}]<{player}> {message}`
-#     期望显示 [MC]<Steve> 测试空服务器（默认值 MC，而非英文 server_id）
-_live = _S3.from_dict({"server": {"server_id": "Server", "server_name": ""},
-    "message": {"forward_chat_format": "[{server}]<{player}> {message}"}})
+# (e) 复现线上反馈：什么都不填 + `[{display_name}]<{player}> {message}`
+#     期望显示 [MC]<Steve> 测试空服务器（默认值 MC，而非英文 server_name）
+_live = _S3.from_dict({"server": {"server_name": "Server", "display_name": ""},
+    "message": {"forward_chat_format": "[{display_name}]<{player}> {message}"}})
 _ev_live = QueQiaoEvent.from_dict({"event_name": "PlayerChatEvent",
     "message": "测试空服务器", "player": {"nickname": "Steve"}})
 _live_out = _br4.format_event(_live, _ev_live)
 assert _live_out == "[MC]<Steve> 测试空服务器", _live_out
-assert "Server" not in _live_out, f"未填显示名称时不应回退成 server_id: {_live_out}"
+assert "Server" not in _live_out, f"未填显示名称时不应回退成 server_name: {_live_out}"
 # 不带字面量方括号时直接得到 [MC] 前缀以外的形态（默认值原样参与格式化）
-_live_clean = _S3.from_dict({"server": {"server_id": "Server", "server_name": ""},
-    "message": {"forward_chat_format": "{server}<{player}> {message}"}})
+_live_clean = _S3.from_dict({"server": {"server_name": "Server", "display_name": ""},
+    "message": {"forward_chat_format": "{display_name}<{player}> {message}"}})
 assert _br4.format_event(_live_clean, _ev_live) == "MC<Steve> 测试空服务器"
 # 默认值可自定义（如改成本服）
-_live_dft = _S3.from_dict({"server": {"server_id": "Server", "server_name_default": "本服"},
-    "message": {"forward_chat_format": "[{server}]<{player}> {message}"}})
+_live_dft = _S3.from_dict({"server": {"server_name": "Server", "display_name_default": "本服"},
+    "message": {"forward_chat_format": "[{display_name}]<{player}> {message}"}})
 assert _br4.format_event(_live_dft, _ev_live) == "[本服]<Steve> 测试空服务器"
 # 想要无前缀：把默认值也显式清空（格式串里的字面量方括号仍由用户自己掌控）
-_live_nopfx = _S3.from_dict({"server": {"server_id": "Server", "server_name_default": ""},
-    "message": {"forward_chat_format": "{server}<{player}> {message}"}})
+_live_nopfx = _S3.from_dict({"server": {"server_name": "Server", "display_name_default": ""},
+    "message": {"forward_chat_format": "{display_name}<{player}> {message}"}})
 assert _br4.format_event(_live_nopfx, _ev_live) == "<Steve> 测试空服务器"
 # 填上显示名称后同一条格式串正常带前缀
-_live_named = _S3.from_dict({"server": {"server_id": "Server", "server_name": "生存服"},
-    "message": {"forward_chat_format": "[{server}]<{player}> {message}"}})
+_live_named = _S3.from_dict({"server": {"server_name": "Server", "display_name": "生存服"},
+    "message": {"forward_chat_format": "[{display_name}]<{player}> {message}"}})
 assert _br4.format_event(_live_named, _ev_live) == "[生存服]<Steve> 测试空服务器"
 print("OK  什么都不填显示 [MC]（线上用例）、默认值可自定义、清空才无前缀")
+
+# (f) 进出消息必须在「服务器」后附上展示名称（display_name → 默认值 → server_name），
+#     多台服务器指向同一会话时能区分来源
+_ev_j = QueQiaoEvent.from_dict({"event_name": "PlayerJoinEvent", "player": {"nickname": "Alex"}})
+_ev_q = QueQiaoEvent.from_dict({"event_name": "PlayerQuitEvent", "player": {"nickname": "Alex"}})
+assert _br4.format_event(_live_named, _ev_j) == "🟢 Alex 加入了服务器[生存服]"
+assert _br4.format_event(_live_named, _ev_q) == "🔴 Alex 离开了服务器[生存服]"
+# 未填 display_name：走默认值 MC
+assert _br4.format_event(_live, _ev_j) == "🟢 Alex 加入了服务器[MC]"
+assert _br4.format_event(_live, _ev_q) == "🔴 Alex 离开了服务器[MC]"
+# 显示名称与默认值都清空：回退 server_name（仍能标识来源，不会退化回无标识）
+_live_nolabel = _S3.from_dict({"server": {"server_name": "survival",
+    "display_name_default": ""}})
+assert _br4.format_event(_live_nolabel, _ev_j) == "🟢 Alex 加入了服务器[survival]"
+print("OK  进出消息附服务器显示名称且保持同一条取值链")
 
 print("\n全部离线逻辑校验通过 ✅（含服务器显示名称）")
 
@@ -763,7 +778,7 @@ print("=== 21. 状态/玩家列表使用显示名称 ===")
 from astrbot_plugin_minecraft_queqiao.services.renderer import InfoRenderer as _IR
 from astrbot_plugin_minecraft_queqiao.core.models import ServerStatus as _SS
 
-# 未传 label -> 沿用 server_id（旧调用行为不变）
+# 未传 label -> 沿用 server_name（旧调用行为不变）
 assert "服务器 svr1 状态获取失败" in _IR.format_status("svr1", None)
 assert "👥 服务器 svr1 当前没有玩家在线" == _IR.format_player_list("svr1", [])
 assert "无法获取服务器 svr1 的玩家列表" in _IR.format_player_list("svr1", None)
@@ -773,12 +788,12 @@ _st = _SS.from_dict({"server_type": "Fabric", "server_version": "1.20.1",
                      "players": {"online": 2, "max": 20}})
 _out = _IR.format_status("svr1", _st, "生存服")
 assert "📊 服务器状态：生存服" in _out, _out
-assert "svr1" not in _out, f"展示文案不应再出现裸 server_id: {_out}"
+assert "svr1" not in _out, f"展示文案不应再出现裸 server_name: {_out}"
 assert "👥 服务器 生存服 在线 1 人：\nSteve" == _IR.format_player_list("svr1", ["Steve"], "生存服")
 assert "无法获取服务器 生存服 的玩家列表" in _IR.format_player_list("svr1", None, "生存服")
 # 失败提示同样走显示名称
 assert "服务器 生存服 状态获取失败" in _IR.format_status("svr1", None, "生存服")
-print("OK  状态/列表/失败提示均优先显示中文名称，缺省仍回退 server_id")
+print("OK  状态/列表/失败提示均优先显示中文名称，缺省仍回退 server_name")
 
 print("\n全部离线逻辑校验通过 ✅（含状态/列表显示名称）")
 
@@ -833,11 +848,11 @@ from astrbot_plugin_minecraft_queqiao.core.constants import (
     DEFAULT_BROADCAST_FORMAT as _DBF4,
     DEFAULT_CHAT_FORMAT as _DCF4,
 )
-assert _DCF4 == "[{server}]{player}: {message}", _DCF4
+assert _DCF4 == "[{display_name}]{player}: {message}", _DCF4
 assert _DBF4 == "[{platform}]{sender}: {message}", _DBF4
-assert _S2.from_dict({}).server_id == "Server"
+assert _S2.from_dict({}).server_name == "Server"
 print("OK  conf 模板与代码默认值逐项核对一致"
-      "（forward_chat_format / broadcast_format / server_id 等全部对齐）")
+      "（forward_chat_format / broadcast_format / server_name 等全部对齐）")
 
 print("\n全部离线逻辑校验通过 ✅（含 conf↔代码默认值守卫）")
 
@@ -870,7 +885,7 @@ class _FakeWS5:
             await self.client._dispatch(_json5.dumps(resp))
         asyncio.get_running_loop().create_task(_reply())
 
-_cfg5 = _S2.from_dict({"server": {"server_id": "S"}})
+_cfg5 = _S2.from_dict({"server": {"server_name": "S"}})
 _cli5 = _QC5(_cfg5)
 
 # (a) 未连接 → 直接 None（确定未投递，不抛超时）
@@ -986,7 +1001,7 @@ assert _S6.from_dict({"message": {"platform_names": []}})\
 _out6 = "[{platform}]{sender}: {message}".format(
     platform=_cfg6b.platform_display_name("aiocqhttp"),
     sender="群友A", message="你好",
-    server=_cfg6b.server_label, server_id="S",
+    display_name=_cfg6b.server_label, server_name="S",
 )
 assert _out6 == "[QQ]群友A: 你好", _out6
 
@@ -1186,7 +1201,7 @@ def _run26(coro): return asyncio.new_event_loop().run_until_complete(coro)
 
 # d1) 图片-only 消息 + 开启转发 → 广播 ChatImage 代码（默认名「图片」）
 _pi26 = _P26(_Ctx26(), {})
-_cfgI26 = SC.from_dict({"server": {"server_id": "IMG"},
+_cfgI26 = SC.from_dict({"server": {"server_name": "IMG"},
     "message": {"target_sessions": ["umo:GroupMessage:9"], "forward_image_to_mc": True}})
 _pi26.message_bridge.register_server(_cfgI26)
 _instI26 = _Inst26()
@@ -1200,7 +1215,7 @@ assert _instI26.client.sent == [
 
 # d2) 关闭转发 → 图片不进入游戏（纯文本消息照常）
 _pi26b = _P26(_Ctx26(), {})
-_cfgI26b = SC.from_dict({"server": {"server_id": "IMG"},
+_cfgI26b = SC.from_dict({"server": {"server_name": "IMG"},
     "message": {"target_sessions": ["umo:GroupMessage:9"], "forward_image_to_mc": False}})
 _pi26b.message_bridge.register_server(_cfgI26b)
 _instI26b = _Inst26()
@@ -1224,7 +1239,7 @@ assert _instI26c.client.sent == [
 ], _instI26c.client.sent
 
 # d4) 前缀过滤对图片同样生效：配置了转发前缀后，无文本的裸图片不转发
-_cfgI26d = SC.from_dict({"server": {"server_id": "IMG"},
+_cfgI26d = SC.from_dict({"server": {"server_name": "IMG"},
     "message": {"target_sessions": ["umo:GroupMessage:9"],
                 "auto_forward_prefix": "*", "forward_image_to_mc": True}})
 _pi26d = _P26(_Ctx26(), {})
@@ -2182,7 +2197,7 @@ class _Ctx29:
     async def send_message(self, umo, chain):
         _sent29.append((umo, list(chain.chain))); return True
 
-_cfg29 = ServerConfig.from_dict({"server": {"server_id": "S29"},
+_cfg29 = ServerConfig.from_dict({"server": {"server_name": "S29"},
     "message": {"target_sessions": ["umo:GroupMessage:29"],
                 "forward_image_from_mc": True,
                 "forward_chat_format": "{player}: {message}"}})
@@ -2217,7 +2232,7 @@ assert "[[CICode,url=file:///nonexistent/zz.png]]" in _sent29[0][1][0].text, \
     "下载失败应保留原始 CICode 文本: " + _sent29[0][1][0].text
 
 # 关闭开关 → 纯文本原样转发、无图片组件
-_cfg29off = ServerConfig.from_dict({"server": {"server_id": "S29"},
+_cfg29off = ServerConfig.from_dict({"server": {"server_name": "S29"},
     "message": {"target_sessions": ["umo:GroupMessage:29"],
                 "forward_image_from_mc": False,
                 "forward_chat_format": "{player}: {message}"}})
@@ -2330,7 +2345,7 @@ class _Rcon30:
         self.calls.append(cmd); return self._out
 
 def _mk_inst30(client, rcon=None):
-    _i = _SI30(_S30.from_dict({"server": {"server_id": "S30"}}))
+    _i = _SI30(_S30.from_dict({"server": {"server_name": "S30"}}))
     _i.client = client; _i.rcon = rcon or _Rcon30()
     return _i
 
@@ -2394,11 +2409,11 @@ import astrbot_plugin_minecraft_queqiao.core.constants as _c31
 class _Inst31:
     """服务器实例桩：含 _resolve_target/_ambiguous_hint 关心的字段。"""
     def __init__(self, sid, name=None, connected=True):
-        self.server_id = sid
+        self.server_name = sid
         self.connected = connected
-        cfg = {"server": {"server_id": sid}}
+        cfg = {"server": {"server_name": sid}}
         if name:
-            cfg["server"]["server_name"] = name
+            cfg["server"]["display_name"] = name
         self.config = _SC31.from_dict(cfg)
 
 
@@ -2408,7 +2423,7 @@ class _SM31:
         self._insts = list(insts)
     def get(self, sid):
         for i in self._insts:
-            if i.server_id == sid:
+            if i.server_name == sid:
                 return i
         return None
     def all(self):
@@ -2448,10 +2463,10 @@ assert _h2._split_optional_target("   ") == (None, "")
 
 # (c) 单服：省略编号自动命中那台（核心需求：只有一个服务器时能省略）
 _srv, _hint = _h1._resolve_target(_Ev31(), "")
-assert _srv is not None and _srv.server_id == "s1" and _hint is None, (_srv, _hint)
+assert _srv is not None and _srv.server_name == "s1" and _hint is None, (_srv, _hint)
 # 单服写编号 1 也行（1 = 那台）
 _srv, _hint = _h1._resolve_target(_Ev31(), "1")
-assert _srv.server_id == "s1" and _hint is None
+assert _srv.server_name == "s1" and _hint is None
 # 单服写超出范围的编号（2）→ 提示超出范围
 _srv, _hint = _h1._resolve_target(_Ev31(), "2")
 assert _srv is None and "2" in _hint and "1-1" in _hint, _hint
@@ -2463,8 +2478,8 @@ assert "1." in _hint and "生存服" in _hint, _hint
 assert "2." in _hint and "创造服" in _hint, _hint
 assert "mc cmd 1" in _hint, _hint
 # 多服编号 1/2 命中对应那台（核心需求：两台 MC 接一个群能分开下指令）
-_srv, _ = _h2._resolve_target(_Ev31(), "1"); assert _srv.server_id == "survival"
-_srv, _ = _h2._resolve_target(_Ev31(), "2"); assert _srv.server_id == "creative"
+_srv, _ = _h2._resolve_target(_Ev31(), "1"); assert _srv.server_name == "survival"
+_srv, _ = _h2._resolve_target(_Ev31(), "2"); assert _srv.server_name == "creative"
 # 多服编号超出范围 → 提示可用范围
 _srv, _hint = _h2._resolve_target(_Ev31(), "3")
 assert _srv is None and "3" in _hint and "1-2" in _hint, _hint
@@ -2487,3 +2502,85 @@ assert "mc player [编号] <玩家ID>" in _help
 assert "数字编号" in _help, "help 应说明多服加编号/单服省略规则"
 print("OK  数字编号拆分(仅多服) / 单服省略自动命中 / 多服提示含编号列表 / "
       "死代码已移除 / help 已同步")
+
+print("\n=== 32. 重复 server_name 告警发送到目标会话 ===")
+from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P32
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC32
+import asyncio as _asyncio32
+
+
+class _Ctx32:
+    """context 桩：记录 send_message 调用。"""
+    def __init__(self):
+        self.sent = []
+    async def send_message(self, umo, chain):
+        self.sent.append((umo, chain))
+
+
+class _Self32:
+    """插件桩 self：仅含 context。"""
+    def __init__(self, ctx):
+        self.context = ctx
+
+
+# (a) 有目标会话：告警发到每个 target_session，文本包含重复的 server_name
+_ctx32 = _Ctx32()
+_cfg_dup = _SC32.from_dict({
+    "server": {"server_name": "survival"},
+    "target_sessions": ["aiocqhttp:GroupMessage:111", "telegram:GroupMessage:222"],
+})
+_asyncio32.run(_P32._notify_duplicate_server(_Self32(_ctx32), _cfg_dup))
+assert len(_ctx32.sent) == 2, _ctx32.sent
+assert [umo for umo, _ in _ctx32.sent] == [
+    "aiocqhttp:GroupMessage:111", "telegram:GroupMessage:222"]
+for _, chain in _ctx32.sent:
+    _text = chain.chain[0].text
+    assert "重复" in _text and "survival" in _text, _text
+
+# (b) 无目标会话：静默不发
+_ctx32b = _Ctx32()
+_cfg_no_target = _SC32.from_dict({"server": {"server_name": "survival"}})
+_asyncio32.run(_P32._notify_duplicate_server(_Self32(_ctx32b), _cfg_no_target))
+assert _ctx32b.sent == [], "无 target_sessions 不应发送告警"
+
+# (c) 发送失败（平台不可用）不中断启动
+class _CtxFail32:
+    async def send_message(self, umo, chain):
+        raise RuntimeError("平台不可用")
+_fail32 = _Self32(_CtxFail32())
+_asyncio32.run(_P32._notify_duplicate_server(_fail32, _cfg_dup))  # 不应抛异常
+print("OK  重复告警发到目标会话 / 无会话不发 / 发送失败安全降级")
+
+print("\n=== 33. 服务器列表展示显示名称（handle_servers） ===")
+import asyncio as _asyncio33
+from astrbot_plugin_minecraft_queqiao.handlers.commands import CommandHandler as _CH33
+from astrbot_plugin_minecraft_queqiao.core.server_manager import ServerManager as _SM33
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC33
+
+_sm33 = _SM33()
+_cfg_s1 = _SC33.from_dict({
+    "server": {"server_name": "Server", "display_name": "方可梦"},
+})
+_cfg_s2 = _SC33.from_dict({
+    "server": {"server_name": "Server1", "display_name": "原版服"},
+})
+_cfg_s3 = _SC33.from_dict({
+    "server": {"server_name": "Server3", "display_name": ""},
+})
+_cfg_s4 = _SC33.from_dict({
+    "server": {"server_name": "Server4", "display_name": "Server4"},
+})
+_inst1 = _sm33.add(_cfg_s1)
+_inst2 = _sm33.add(_cfg_s2)
+_inst3 = _sm33.add(_cfg_s3)
+_inst4 = _sm33.add(_cfg_s4)
+
+_ch33 = _CH33(server_manager=_sm33, binding_service=None, renderer=None)
+_res33 = _asyncio33.run(_ch33.handle_servers(None))
+
+assert "- 方可梦 (Server)（正向）：🔴 未连接" in _res33, _res33
+assert "- 原版服 (Server1)（正向）：🔴 未连接" in _res33, _res33
+assert "- Server3（正向）：🔴 未连接" in _res33, _res33
+assert "- Server4（正向）：🔴 未连接" in _res33, _res33
+print("OK  有 display_name 显示「显示名称 (server_name)」、无 display_name 或与 server_name 相同时仅显示 server_name")
+

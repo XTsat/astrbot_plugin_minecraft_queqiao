@@ -18,13 +18,13 @@ class InfoRenderer:
 
     @staticmethod
     def format_status(
-        server_id: str, status: ServerStatus | None, label: str | None = None
+        server_name: str, status: ServerStatus | None, label: str | None = None
     ) -> str:
         """状态文本（渲染失败或未启用渲染时的输出）。
 
-        `label` 为展示用名称（`server_name`，可中文），缺省时回退 `server_id`。
+        `label` 为展示用名称（`display_name`，可中文），缺省时回退 `server_name`。
         """
-        name = label or server_id
+        name = label or server_name
         if status is None:
             return f"❌ 服务器 {name} 状态获取失败（需鹊桥 v0.5.0+ 且已连接）"
 
@@ -49,7 +49,7 @@ class InfoRenderer:
         return "\n".join(lines)
 
     async def render_status(
-        self, server_id: str, status: ServerStatus | None, label: str | None = None
+        self, server_name: str, status: ServerStatus | None, label: str | None = None
     ) -> str:
         """渲染状态图。
 
@@ -57,17 +57,17 @@ class InfoRenderer:
         使「渲染失败自动回退文本」的配置语义始终成立。
         """
         if not self.enabled:
-            return self.format_status(server_id, status, label)
+            return self.format_status(server_name, status, label)
 
         try:
-            return self.format_status(server_id, status, label)
+            return self.format_status(server_name, status, label)
         except Exception as exc:
-            logger.error(f"[{PLUGIN_NAME}][{server_id}] 状态渲染失败，回退文本: {exc}")
-            return self.format_status(server_id, None, label)
+            logger.error(f"[{PLUGIN_NAME}][{server_name}] 状态渲染失败，回退文本: {exc}")
+            return self.format_status(server_name, None, label)
 
     @staticmethod
     def format_player_list(
-        server_id: str,
+        server_name: str,
         players: "PlayerListResult | list[str] | None",
         label: str | None = None,
     ) -> str:
@@ -84,7 +84,7 @@ class InfoRenderer:
         本次实际取数方式：RCON 按 `rcon_channel` 标「鹊桥RCON / 直连RCON」，
         SLP 标「在线查询」。
         """
-        name = label or server_id
+        name = label or server_name
         if not isinstance(players, PlayerListResult):
             # 旧调用归一化：list[str] → rcon 完整名单，None → 失败
             players = PlayerListResult(

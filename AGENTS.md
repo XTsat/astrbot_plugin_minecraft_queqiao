@@ -22,7 +22,7 @@
 | 维度 | adapter | 本项目 |
 |---|---|---|
 | 传输协议 | 自家 MC 插件私有协议（`CONNECTION_ACK`/`CHAT_REQUEST` 等） | 鹊桥 V2（`{api,data,echo}` + 事件 `post_type`） |
-| 连接寻址 | `host` + `port` + URL 上的 `token` | `server_id`≡鹊桥 `server_name`，走 `x-self-name` Header |
+| 连接寻址 | `host` + `port` + URL 上的 `token` | `server_name`≡鹊桥 `server_name`，走 `x-self-name` Header |
 | 鉴权 | URL query token | `Authorization: Bearer <access_token>` Header |
 | 连接方向 | 仅正向 | 正向 + 反向（`ws_mode`） |
 | AI 聊天触发 | 私有 `CHAT_REQUEST` 事件 | 聊天前缀触发（`ai_chat_prefix`，无斜杠指令） |
@@ -67,7 +67,7 @@ astrbot_plugin_minecraft_queqiao/
 
 | Header | 必填 | 说明 |
 |---|---|---|
-| `x-self-name` | ✅ | 取 `server_id`，**必须与鹊桥 config.yml 的 `server_name` 一致** |
+| `x-self-name` | ✅ | 取 `server_name`，**必须与鹊桥 config.yml 的 `server_name` 一致** |
 | `Authorization` | 选填 | `Bearer <access_token>`，token 为空时不发送 |
 | `x-client-origin` | 建议 | 取 `client_origin`（默认 `astrbot`），用于防重复连接与自环 |
 
@@ -143,7 +143,7 @@ astrbot_plugin_minecraft_queqiao/
 
 ### 4.3 日志前缀
 
-统一 `[{PLUGIN_NAME}][{server_id}]` 二级前缀，便于多服务器排障。
+统一 `[{PLUGIN_NAME}][{server_name}]` 二级前缀，便于多服务器排障。
 
 ### 4.4 连接层约束
 
@@ -223,7 +223,7 @@ conf 模板↔代码默认值一致性守卫、API 超时语义「未知 ≠ 失
 
 - [ ] 新增/修改配置项已在 `_conf_schema.json` 与 `core/models_config.py` 同步
 - [ ] 事件名/API 名走 `core/constants.py` 常量，未硬编码
-- [ ] 日志带 `[{PLUGIN_NAME}][{server_id}]` 前缀，无空 `except: pass`
+- [ ] 日志带 `[{PLUGIN_NAME}][{server_name}]` 前缀，无空 `except: pass`
 - [ ] 连接层改动已考虑反向模式共享 Server 与 echo 关联时序
 - [ ] `python3 tests_offline.py` 通过
 - [ ] `README.md` / `README_en.md` / `CHANGELOG.md` 已同步，版本号一致

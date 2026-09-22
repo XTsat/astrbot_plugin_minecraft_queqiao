@@ -289,18 +289,18 @@ class MessageBridge:
     def __init__(self, context) -> None:
         self.context = context
         self._configs: dict[str, ServerConfig] = {}
-        # 会话 UMO -> [(server_id, config)]，用于外部消息反查目标服务器
+        # 会话 UMO -> [(server_name, config)]，用于外部消息反查目标服务器
         self._session_to_servers: dict[str, list[tuple[str, ServerConfig]]] = {}
-        # (server_id, content) -> 转发时间，用于回声抑制
+        # (server_name, content) -> 转发时间，用于回声抑制
         self._recently_forwarded: dict[tuple[str, str], float] = {}
 
     def register_server(self, config: ServerConfig) -> None:
         """注册服务器并建立目标会话的反向索引。"""
-        self._configs[config.server_id] = config
+        self._configs[config.server_name] = config
         for umo in config.target_sessions:
             entries = self._session_to_servers.setdefault(umo, [])
-            if all(sid != config.server_id for sid, _ in entries):
-                entries.append((config.server_id, config))
+            if all(sid != config.server_name for sid, _ in entries):
+                entries.append((config.server_name, config))
 
     def servers_for_session(self, umo: str) -> list[tuple[str, ServerConfig]]:
         """查询某会话绑定的服务器列表。"""
@@ -308,13 +308,13 @@ class MessageBridge:
 
     # ---- 回声抑制 ----
 
-    def mark_forwarded(self, server_id: str, content: str) -> None:
+    def mark_forwarded(self, server_name: str, content: str) -> None:
         """记录一条刚刚转发到 MC 的内容。"""
-        self._recently_forwarded[(server_id, content)] = time.time()
+        self._recently_forwarded[(server_name, content)] = time.time()
 
-    def _is_echo(self, server_id: str, content: str) -> bool:
+    def _is_echo(self, server_name: str, content: str) -> bool:
         """判断该内容是否为刚刚转发出去的回声。"""
-        key = (server_id, content)
+        key = (server_name, content)
         stamp = self._recently_forwarded.get(key)
         if stamp is None:
             return False
@@ -346,9 +346,11 @@ class MessageBridge:
             return self._format_chat(config, player, message)
 
         if event.is_join:
-            return f"🟢 {player} 加入了服务器"
+            # 多台服务器指向同一会话时，进出消息必须能区分来源：
+            # 在「服务器」后附上展示名称（display_name → 默认值 → server_name）
+            return f"🟢 {player} 加入了服务器[{config.display_label}]"
         if event.is_quit:
-            return f"🔴 {player} 离开了服务器"
+            return f"🔴 {player} 离开了服务器[{config.display_label}]"
         if event.is_death:
             text = event.death.text or "死亡"
             return f"💀 {text}"
@@ -371,11 +373,11 @@ class MessageBridge:
     def _format_chat(config: ServerConfig, player: str, message: str) -> str:
         """按聊天格式模板渲染。
 
-        {server} 取显示名称：server_name 留空时用 server_name_default（默认 MC），
-        两者都显式留空才输出空串（无前缀）；均不回退 server_id。
+        {display_name} 取显示名称：display_name 留空时用 display_name_default（默认 MC），
+        两者都显式留空才输出空串（无前缀）；均不回退 server_name。
         """
         return config.forward_chat_format.format(
-            player=player, message=message, server=config.server_label
+            player=player, message=message, display_name=config.server_label
         )
 
     async def _resolve_forward_images(
@@ -417,7 +419,7 @@ class MessageBridge:
         return self._format_chat(config, player, clean), images
 
     async def forward_event(
-        self, server_id: str, config: ServerConfig, event: QueQiaoEvent
+        self, server_name: str, config: ServerConfig, event: QueQiaoEvent
     ) -> bool:
         """把 MC 事件转发到该服务器配置的所有目标会话。"""
         if not self.should_forward(config, event):
@@ -428,8 +430,8 @@ class MessageBridge:
             return False
 
         # 聊天消息需先经过回声抑制：外部发到 MC 的内容会原样回传为聊天事件
-        if event.is_chat and self._is_echo(server_id, event.message.strip()):
-            logger.debug(f"[{PLUGIN_NAME}][{server_id}] 抑制回声消息: {event.message}")
+        if event.is_chat and self._is_echo(server_name, event.message.strip()):
+            logger.debug(f"[{PLUGIN_NAME}][{server_name}] 抑制回声消息: {event.message}")
             return False
 
         content = self.format_event(config, event)

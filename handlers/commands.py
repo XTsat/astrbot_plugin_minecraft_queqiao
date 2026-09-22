@@ -31,18 +31,18 @@ class CommandHandler:
         self.server_manager = server_manager
         self.binding = binding_service
         self.renderer = renderer
-        # server_id -> [(trigger_tokens, param_names, template)]
+        # server_name -> [(trigger_tokens, param_names, template)]
         self._custom: dict[str, list[tuple[list[str], list[str], str]]] = {}
 
     # ---- 自定义指令注册与匹配 ----
 
-    def register_custom_commands(self, server_id: str, entries: list[str]) -> None:
+    def register_custom_commands(self, server_name: str, entries: list[str]) -> None:
         """解析并注册自定义指令。"""
         parsed: list[tuple[list[str], list[str], str]] = []
         for entry in entries:
             left, sep, right = entry.partition(CUSTOM_CMD_SEPARATOR)
             if not sep or not left.strip() or not right.strip():
-                logger.warning(f"[{PLUGIN_NAME}][{server_id}] 自定义指令格式无效: {entry}")
+                logger.warning(f"[{PLUGIN_NAME}][{server_name}] 自定义指令格式无效: {entry}")
                 continue
 
             trigger_tokens = left.split()
@@ -51,13 +51,13 @@ class CommandHandler:
             ]
             parsed.append((trigger_tokens, param_names, right.strip()))
 
-        self._custom[server_id] = parsed
+        self._custom[server_name] = parsed
         if parsed:
-            logger.info(f"[{PLUGIN_NAME}][{server_id}] 已注册 {len(parsed)} 条自定义指令")
+            logger.info(f"[{PLUGIN_NAME}][{server_name}] 已注册 {len(parsed)} 条自定义指令")
 
-    def match_custom_command(self, server_id: str, text: str) -> str | None:
+    def match_custom_command(self, server_name: str, text: str) -> str | None:
         """把用户输入匹配为实际指令，未命中返回 None。"""
-        entries = self._custom.get(server_id)
+        entries = self._custom.get(server_name)
         if not entries:
             return None
 
@@ -92,9 +92,9 @@ class CommandHandler:
     def custom_command_help(self) -> list[str]:
         """汇总所有服务器的自定义指令触发词，用于 help 输出。"""
         lines: list[str] = []
-        for server_id, entries in self._custom.items():
+        for server_name, entries in self._custom.items():
             for trigger_tokens, _, _ in entries:
-                lines.append(f"- {server_id}: {' '.join(trigger_tokens)}")
+                lines.append(f"- {server_name}: {' '.join(trigger_tokens)}")
         return lines
 
     # ---- 目标服务器选择 ----
@@ -102,8 +102,8 @@ class CommandHandler:
     def _bound_servers(self, umo: str) -> list[ServerInstance]:
         """返回与该会话绑定的、且已配置启用的服务器实例。"""
         result: list[ServerInstance] = []
-        for server_id, _ in self.bridge_lookup(umo):
-            instance = self.server_manager.get(server_id)
+        for server_name, _ in self.bridge_lookup(umo):
+            instance = self.server_manager.get(server_name)
             if instance is not None:
                 result.append(instance)
         return result
@@ -113,7 +113,7 @@ class CommandHandler:
         if self._bridge is not None:
             return self._bridge.servers_for_session(umo)
         return [
-            (instance.server_id, instance.config)
+            (instance.server_name, instance.config)
             for instance in self.server_manager.all()
         ]
 
@@ -174,7 +174,7 @@ class CommandHandler:
         lines = ["⚠️ 当前有多台服务器，请在指令前加数字编号选择目标："]
         for index, instance in enumerate(servers, start=1):
             status = "🟢" if instance.connected else "🔴"
-            lines.append(f"{index}. {status} {instance.config.display_name}")
+            lines.append(f"{index}. {status} {instance.config.display_label}")
         lines.append("示例：mc cmd 1 <指令>  /  mc status 2")
         return "\n".join(lines)
 
@@ -224,33 +224,33 @@ class CommandHandler:
             lines.extend(custom)
         return "\n".join(lines)
 
-    async def handle_status(self, event: AstrMessageEvent, server_id: str) -> str:
-        instance = self.server_manager.get(server_id)
+    async def handle_status(self, event: AstrMessageEvent, server_name: str) -> str:
+        instance = self.server_manager.get(server_name)
         if instance is None:
-            return f"❌ 未找到服务器 {server_id}"
+            return f"❌ 未找到服务器 {server_name}"
 
-        # 展示用名称（server_name，可中文）；server_id 仍用于连接与排障
-        label = instance.config.display_name
+        # 展示用名称（display_name，可中文）；server_name 仍用于连接与排障
+        label = instance.config.display_label
         if not instance.connected:
             return f"❌ 服务器 {label} 未连接鹊桥"
 
         status = await instance.get_status_model()
-        return await self.renderer.render_status(server_id, status, label)
+        return await self.renderer.render_status(server_name, status, label)
 
-    async def handle_list(self, event: AstrMessageEvent, server_id: str) -> str:
-        instance = self.server_manager.get(server_id)
+    async def handle_list(self, event: AstrMessageEvent, server_name: str) -> str:
+        instance = self.server_manager.get(server_name)
         if instance is None:
-            return f"❌ 未找到服务器 {server_id}"
+            return f"❌ 未找到服务器 {server_name}"
 
         result = await instance.fetch_player_list()
         return self.renderer.format_player_list(
-            server_id, result, instance.config.display_name
+            server_name, result, instance.config.display_label
         )
 
-    async def handle_player(self, event: AstrMessageEvent, server_id: str, player_id: str) -> str:
-        instance = self.server_manager.get(server_id)
+    async def handle_player(self, event: AstrMessageEvent, server_name: str, player_id: str) -> str:
+        instance = self.server_manager.get(server_name)
         if instance is None:
-            return f"❌ 未找到服务器 {server_id}"
+            return f"❌ 未找到服务器 {server_name}"
 
         # 鹊桥没有玩家详情查询接口，只能借助 RCON 查询单玩家数据
         output = await instance.execute_command(f"data get entity {player_id}")
@@ -261,10 +261,10 @@ class CommandHandler:
             )
         return f"🧍 玩家 {player_id}：\n{output}"
 
-    async def handle_cmd(self, event: AstrMessageEvent, server_id: str, command: str) -> str:
-        instance = self.server_manager.get(server_id)
+    async def handle_cmd(self, event: AstrMessageEvent, server_name: str, command: str) -> str:
+        instance = self.server_manager.get(server_name)
         if instance is None:
-            return f"❌ 未找到服务器 {server_id}"
+            return f"❌ 未找到服务器 {server_name}"
 
         config = instance.config
         if not config.cmd_enabled:
@@ -278,13 +278,13 @@ class CommandHandler:
             return f"❌ 指令执行失败：{command}\n请确认鹊桥已开启 RCON 或已配置直连 RCON"
         return f"✅ 已执行：{command}\n{output}".rstrip()
 
-    async def handle_say(self, event: AstrMessageEvent, server_id: str, content: str) -> str:
-        instance = self.server_manager.get(server_id)
+    async def handle_say(self, event: AstrMessageEvent, server_name: str, content: str) -> str:
+        instance = self.server_manager.get(server_name)
         if instance is None:
-            return f"❌ 未找到服务器 {server_id}"
+            return f"❌ 未找到服务器 {server_name}"
 
         if not instance.connected:
-            return f"❌ 服务器 {server_id} 未连接鹊桥"
+            return f"❌ 服务器 {server_name} 未连接鹊桥"
 
         success = await instance.client.broadcast(content, instance.config.broadcast_color)
         return "✅ 已广播到游戏内" if success else "❌ 广播失败"
@@ -306,5 +306,9 @@ class CommandHandler:
         for instance in servers:
             status = "🟢 已连接" if instance.connected else "🔴 未连接"
             mode = "反向" if instance.config.is_reverse else "正向"
-            lines.append(f"- {instance.server_id}（{mode}）：{status}")
+            name_display = instance.server_name
+            disp = (instance.config.display_name or "").strip()
+            if disp and disp != instance.server_name:
+                name_display = f"{disp} ({instance.server_name})"
+            lines.append(f"- {name_display}（{mode}）：{status}")
         return "\n".join(lines)
