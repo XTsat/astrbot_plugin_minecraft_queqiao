@@ -26,7 +26,7 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 |---------|------------|-------------|
 | `/mc help` | Everyone | Show help and custom command list |
 | `/mc status` | Everyone | Show server status (incl. online count; player names too when the server exposes them) |
-| `/mc list` | Everyone | Show online players (RCON first; falls back to online query when RCON is off) |
+| `/mc list` | Everyone | Show online players (RCON first; falls back to online query when RCON is off; output labels the source used) |
 | `/mc player <id>` | Everyone | Show player info (requires RCON) |
 | `/mc cmd <command>` | Admin | Execute a server command, filtered by the allow/deny list |
 | `/mc say <text>` | Admin | Broadcast a message in-game |
@@ -440,6 +440,8 @@ subscribe_event:             # enable the events you need
 **Q: `mc cmd` returns nothing?** `mc cmd` depends on RCON. Set `rcon.enable: true` with a password in QueQiao's `config.yml`, or enable the plugin's "direct RCON fallback" and fill in the server's RCON details.
 
 **Q: Can `mc list` show player names without enabling RCON?** Yes. `mc list` now prefers RCON `list` (complete and authoritative); when RCON is off it falls back to the online query from QueQiao's `get_status` (SLP `players.sample`) — the same source motd-style query sites use, no RCON needed. The trade-off is that the SLP list may be incomplete (vanilla truncates it; anti-bot plugins may leave it empty or stuff it with fake names); when only the count is available it still shows "online N/M". For a 100% complete list you still need RCON enabled.
+
+The output labels the source used after the count: an RCON hit shows either "QueQiao RCON" (via `send_rcon_command`) or "Direct RCON" (falling back to the direct RCON when QueQiao is unavailable), and an online-query (SLP) hit shows "online query".
 
 **Q: Why am I not receiving death, achievement or command events?** These events are **unsupported on Vanilla and Velocity** servers; this is an upstream limitation.
 

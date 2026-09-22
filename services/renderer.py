@@ -80,7 +80,9 @@ class InfoRenderer:
 
         三层取数语义见 `ServerInstance.fetch_player_list`：RCON `list`
         完整权威；未开 RCON 时用鹊桥 `get_status` 的 SLP `players.sample`
-        兜底（免 RCON，但可能不全/被服务端伪造）。
+        兜底（免 RCON，但可能不全/被服务端伪造）。命中名单时在人数后括注
+        本次实际取数方式：RCON 按 `rcon_channel` 标「鹊桥RCON / 直连RCON」，
+        SLP 标「在线查询」。
         """
         name = label or server_id
         if not isinstance(players, PlayerListResult):
@@ -113,7 +115,20 @@ class InfoRenderer:
             # RCON 成功但无人 → 确实没人在线
             return f"👥 服务器 {name} 当前没有玩家在线"
 
-        note = "（在线查询，可能不全）" if players.source == "slp" else ""
+        # 标注本次取数方式：RCON 细分鹊桥/直连通道，SLP 为在线查询（免 RCON，
+        # 可能不全）；旧调用归一化（source="rcon" 未带 channel）不标注，保持
+        # 第 21 组契约「在线 N 人」无括注
+        if players.source == "slp":
+            note = "（在线查询）"
+        elif players.source == "rcon":
+            if players.rcon_channel == "queqiao":
+                note = "（鹊桥RCON）"
+            elif players.rcon_channel == "direct":
+                note = "（直连RCON）"
+            else:
+                note = ""
+        else:
+            note = ""
         return (
             f"👥 服务器 {name} 在线 {len(players.names)} 人{note}：\n"
             + "、".join(players.names)

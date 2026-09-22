@@ -430,9 +430,16 @@ class PlayerListResult:
       但可能不全或被服务端伪造
     - ``"count"``：sample 为空，仅拿到 ``online``/``max`` 人数
     - ``"none"``：两条通道都失败
+
+    ``rcon_channel`` 仅在 ``source == "rcon"`` 时有意义，用于细分名单的实际
+    取数通道（供渲染层标注「鹊桥RCON / 直连RCON」）：
+    - ``"queqiao"``：经鹊桥 ``send_rcon_command`` 执行 ``list``
+    - ``"direct"``：鹊桥通道不可用时回退到直连 RCON
+    - ``""``：未指定（旧调用归一化 / 手动构造），渲染层按「不标注通道」处理
     """
 
     names: list[str] = field(default_factory=list)
     online: int = 0
     max: int = 0
     source: str = ""
+    rcon_channel: str = ""

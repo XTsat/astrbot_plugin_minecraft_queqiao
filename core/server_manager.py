@@ -85,6 +85,25 @@ class ServerInstance:
 
         鹊桥超时 = 结果未知（指令可能已执行），此时**不走** RCON 兜底，
         避免同一条指令被执行两遍；仅确定失败（未连接 / 明确报错）才兜底。
+
+        本方法是 ``execute_command_with_channel`` 的薄包装，丢弃通道信息；
+        需要区分「鹊桥RCON / 直连RCON」时直接调 ``execute_command_with_channel``。
+        """
+        output, _ = await self.execute_command_with_channel(command)
+        return output
+
+    async def execute_command_with_channel(
+        self, command: str
+    ) -> tuple[str | None, str]:
+        """执行服务器指令，返回 ``(output, channel)``；两条通道都失败返回 ``(None, "")``。
+
+        鹊桥超时 = 结果未知（指令可能已执行），此时**不走** RCON 兜底，
+        避免同一条指令被执行两遍；仅确定失败（未连接 / 明确报错）才兜底。
+
+        ``channel`` 取值（供渲染层标注实际取数通道）：
+        - ``"queqiao"``：经鹊桥 ``send_rcon_command`` 执行成功
+        - ``"direct"``：鹊桥通道不可用时回退到直连 RCON 执行成功
+        - ``""``：未执行（未连接且未配直连 RCON）/ 鹊桥超时 / 全失败
         """
         if self.client.connected:
             try:
@@ -94,17 +113,19 @@ class ServerInstance:
                     f"[{PLUGIN_NAME}][{self.server_id}] 鹊桥执行指令响应超时"
                     "（指令可能已执行，不再走 RCON 兜底，避免重复执行）"
                 )
-                return None
+                return None, ""
             if output is not None:
-                return output
+                return output, "queqiao"
 
         if self.rcon.enabled:
             logger.info(
                 f"[{PLUGIN_NAME}][{self.server_id}] 鹊桥通道不可用，回退直连 RCON"
             )
-            return await self.rcon.execute(command)
+            output = await self.rcon.execute(command)
+            if output is not None:
+                return output, "direct"
 
-        return None
+        return None, ""
 
     async def fetch_player_list(self) -> PlayerListResult:
         """获取在线玩家，三层兜底（RCON list → SLP sample → 人数）：
@@ -119,12 +140,14 @@ class ServerInstance:
         RCON 重发（同一条指令会执行两遍）；此时降级到 SLP sample 属**不同
         查询**（SLP ping），不构成重发，符合「超时 ≠ 失败，禁止重发」约定。
         """
-        # ① RCON list（完整权威）
-        output = await self.execute_command("list")
+        # ① RCON list（完整权威）：鹊桥 send_rcon_command → 直连 RCON 兜底
+        #    记录实际通道（queqiao / direct），供渲染层标注取数方式
+        output, channel = await self.execute_command_with_channel("list")
         if output is not None:
             return PlayerListResult(
                 names=RconClient.parse_player_list(output),
                 source="rcon",
+                rcon_channel=channel,
             )
 
         # ② 鹊桥 get_status 的 SLP sample（免 RCON）

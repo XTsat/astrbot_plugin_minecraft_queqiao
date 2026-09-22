@@ -2272,13 +2272,25 @@ assert _SS30.from_dict({}).online_player_names == []
 assert _SS30.from_dict("not-a-dict").online_player_names == []
 
 # (b) 渲染：四种 source 分支
-# rcon 完整名单（无「可能不全」备注）
+# rcon 完整名单（未带 channel 不标注，兼容旧调用归一化）
 assert _IR30.format_player_list("S", _PLR30(names=["A", "B"], source="rcon"), "生存服") \
     == "👥 服务器 生存服 在线 2 人：\nA、B"
-# slp 来源必须带「可能不全」提示
+# rcon 按 rcon_channel 细分标注本次实际取数通道
+assert _IR30.format_player_list("S", _PLR30(
+    names=["A", "B"], source="rcon", rcon_channel="queqiao"), "生存服") \
+    == "👥 服务器 生存服 在线 2 人（鹊桥RCON）：\nA、B"
+assert _IR30.format_player_list("S", _PLR30(
+    names=["A", "B"], source="rcon", rcon_channel="direct")) \
+    == "👥 服务器 S 在线 2 人（直连RCON）：\nA、B"
+# rcon 未带 channel（旧调用归一化）不标注，保持无括注
+assert _IR30.format_player_list("S", _PLR30(
+    names=["A", "B"], source="rcon", rcon_channel="")) \
+    == "👥 服务器 S 在线 2 人：\nA、B"
+# slp 来源标「在线查询」（不再带「可能不全」）
 _slp_out = _IR30.format_player_list(
     "S", _PLR30(names=["A"], online=1, max=20, source="slp"))
-assert "在线 1 人" in _slp_out and "可能不全" in _slp_out and "A" in _slp_out, _slp_out
+assert "在线 1 人" in _slp_out and "在线查询" in _slp_out \
+    and "可能不全" not in _slp_out and "A" in _slp_out, _slp_out
 # count 来源：只有人数，提示未开 RCON 且在线查询未返回名
 _cnt_out = _IR30.format_player_list(
     "S", _PLR30(online=3, max=20, source="count"), "生存服")
@@ -2326,7 +2338,8 @@ def _mk_inst30(client, rcon=None):
 _i1 = _mk_inst30(_Cli30(connected=True,
     rcon_out="There are 2 of a max of 20 players online: A, B"))
 _r1 = asyncio.run(_i1.fetch_player_list())
-assert _r1.source == "rcon" and _r1.names == ["A", "B"], (_r1.source, _r1.names)
+assert _r1.source == "rcon" and _r1.rcon_channel == "queqiao" \
+    and _r1.names == ["A", "B"], (_r1.source, _r1.rcon_channel, _r1.names)
 assert _i1.client.rcon_calls == 1
 
 # c2) 鹊桥未开 RCON（send_rcon 返回 None）+ 直连 RCON 未配 → 退 SLP sample（免 RCON）
@@ -2365,7 +2378,8 @@ _i6 = _mk_inst30(_Cli30(connected=False),
     _Rcon30(enabled=True,
             out="There are 1 of a max of 20 players online: Steve"))
 _r6 = asyncio.run(_i6.fetch_player_list())
-assert _r6.source == "rcon" and _r6.names == ["Steve"], (_r6.source, _r6.names)
-print("OK  sample 解析(剥离§/跳畸形) / 渲染四分支 / 三层兜底顺序 / 超时不重发降级 SLP")
+assert _r6.source == "rcon" and _r6.rcon_channel == "direct" \
+    and _r6.names == ["Steve"], (_r6.source, _r6.rcon_channel, _r6.names)
+print("OK  sample 解析(剥离§/跳畸形) / 渲染含RCON通道细分 / 三层兜底顺序 / 超时不重发降级 SLP")
 
 print("\n全部离线逻辑校验通过 ✅（含在线玩家三层兜底）")
