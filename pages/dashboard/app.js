@@ -82,10 +82,12 @@ class DashboardApp {
     this.refreshInterval = null;
     this.isRefreshing = false;
     this.activeServerTab = 'all'; // 当前激活的服务器视图标签（'all' 或 server_name）
+    this.defaultServerIcon = './default-server-icon.png';
   }
 
   async init() {
     this.initThemeSync();
+    this.initDefaultIcon();
     this.bindEvents();
     this.bindTerminalActions();
 
@@ -107,6 +109,13 @@ class DashboardApp {
 
     await this.refreshAll();
     this.setupAutoRefresh(true);
+  }
+
+  initDefaultIcon() {
+    const preloadImg = document.getElementById('default-server-icon-preload');
+    if (preloadImg) {
+      this.defaultServerIcon = preloadImg.currentSrc || preloadImg.src || './default-server-icon.png';
+    }
   }
 
   initThemeSync() {
@@ -353,10 +362,11 @@ class DashboardApp {
     // favicon 即 base64 data URL）。鹊桥有时会回传需鉴权的代理 URL 或错误
     // JSON（如 {"status":"error","message":"未授权"}），这类无法作为 <img> 源，
     // 一律回退默认图标。
+    const defaultIcon = this.defaultServerIcon || './default-server-icon.png';
     const faviconRaw = status && status.favicon;
     const faviconSrc = (typeof faviconRaw === 'string' && faviconRaw.startsWith('data:image/'))
       ? faviconRaw
-      : './default-server-icon.png';
+      : defaultIcon;
 
     // 内存进度条
     let memoryHtml = '<span class="detail-val">--</span>';
@@ -465,7 +475,7 @@ class DashboardApp {
       <div class="server-card ${isConnected ? 'connected' : 'disconnected'}" id="server-card-${escapeHtml(server.server_name)}">
         <div class="server-card-header">
           <div class="server-title-group">
-            <img class="server-favicon" src="${escapeHtml(faviconSrc)}" alt="" onerror="this.onerror=null;this.src='./default-server-icon.png';">
+            <img class="server-favicon" src="${escapeHtml(faviconSrc)}" alt="" onerror="this.onerror=null;this.src='${escapeHtml(defaultIcon)}';">
             <div class="server-name-wrap">
               <div class="server-display-name">
                 ${escapeHtml(server.server_label || server.server_name)}

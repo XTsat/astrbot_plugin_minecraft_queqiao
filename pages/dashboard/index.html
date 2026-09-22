@@ -10,6 +10,9 @@
   <script src="/api/plugin/page/bridge-sdk.js"></script>
 </head>
 <body>
+  <!-- 预加载默认服务器图标以供动态渲染时解析正确路径 -->
+  <img id="default-server-icon-preload" src="./default-server-icon.png" style="display: none;" alt="" />
+
   <!-- 顶部导航与操作栏 -->
   <header class="dashboard-header">
     <div class="header-title-group">
