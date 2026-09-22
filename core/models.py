@@ -6,6 +6,7 @@ Velocity 仅有 nickname/uuid/is_op），因此所有解析一律走 `.get()` �
 缺失字段降级为空值而不抛异常。
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -84,6 +85,54 @@ def _strip_format_codes(value: str) -> str:
     if not value:
         return ""
     return _SECTION_RE.sub("", value).strip()
+
+
+def _component_text(value: object) -> str:
+    """把鹊桥可能返回的文本组件（str / dict / list）递归提取为纯文本。
+
+    部分服务端（如 Paper/Fabric）的 MOTD description 是 JSON 文本组件
+    （``{"text": "A Minecraft Server"}`` 或带 ``extra``/``with`` 的嵌套结构），
+    直接 ``str()`` 会得到 ``{'text': '...'}`` 的花括号形式，这里递归提取
+    可读文本。
+
+    同时兼容「字符串形式的 JSON 文本组件」（鹊桥某些版本会把组件整体当作
+    字符串回传）。鹊桥在鉴权失败等异常时可能把错误响应（``{"status":"error",
+    "message":"未授权"}``）直接塞进字段——这类 JSON 解析后没有 text 键，
+    自然降级为空串，不会被误当作展示文本。
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith(("{", "[", '"')):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return value
+            return _component_text(parsed)
+        return value
+    if isinstance(value, list):
+        return "".join(_component_text(item) for item in value)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        if "text" in value:
+            parts.append(str(value["text"]))
+        if "extra" in value:
+            parts.append(_component_text(value["extra"]))
+        if "with" in value:
+            parts.append(_component_text(value["with"]))
+        return "".join(parts)
+    return ""
+
+
+def _as_image_source(value: object) -> str:
+    """把字段安全转为可直接用于 ``<img>`` 的图片源。
+
+    仅接受 ``data:image/`` 开头的内联图标（标准 SLP favicon 即 base64 data
+    URL）。鹊桥可能回传需鉴权的代理 URL 或错误 JSON（如
+    ``{"status":"error","message":"未授权"}``），这类无法作为图片源，一律
+    返回空串，由前端回退默认图标。
+    """
+    text = _as_str(value).strip()
+    return text if text.startswith("data:image/") else ""
 
 
 @dataclass
@@ -374,18 +423,22 @@ class ServerStatus:
             for item in sample_raw:
                 if not isinstance(item, dict):
                     continue
-                name = _strip_format_codes(_as_str(item.get("name")))
+                # 走组件解析：既兼容 JSON 文本组件，也过滤鹊桥错误响应 JSON
+                name = _strip_format_codes(_component_text(item.get("name")))
                 if name:
                     player_sample.append((name, _as_str(item.get("id"))))
 
         return cls(
-            server_type=_as_str(data.get("server_type")),
-            server_version=_as_str(data.get("server_version"))
-            or _as_str(version.get("name")),
+            server_type=_component_text(data.get("server_type")),
+            server_version=_component_text(data.get("server_version"))
+            or _component_text(version.get("name")),
             online_players=_as_int(players.get("online")),
             max_players=_as_int(players.get("max")),
-            description=_as_str(ping.get("description")),
-            favicon=_as_str(ping.get("favicon")),
+            # description 可能是 JSON 文本组件（str/dict/list），递归提取为纯文本；
+            # 保留 § 格式码，由渲染层（renderMcText / 文本展示）各自处理
+            description=_component_text(ping.get("description")),
+            # favicon 仅接受 data:image 内联图标，错误 JSON/需鉴权 URL 一律置空
+            favicon=_as_image_source(ping.get("favicon")),
             host=_as_str(ping.get("host")),
             port=_as_int(ping.get("port")),
             cpu_cores=_as_int(cpu.get("cpu_cores")),
@@ -419,6 +472,30 @@ class ServerStatus:
         """SLP players.sample 的在线玩家名（已剥离格式码，可能不全/被伪造）。"""
         return [name for name, _ in self.player_sample]
 
+    def to_dict(self) -> dict[str, object]:
+        """转为字典，供 Web API 响应与序列化。"""
+        return {
+            "server_type": self.server_type,
+            "server_version": self.server_version,
+            "online_players": self.online_players,
+            "max_players": self.max_players,
+            "description": self.description,
+            "favicon": self.favicon,
+            "host": self.host,
+            "port": self.port,
+            "cpu_cores": self.cpu_cores,
+            "system_load": self.system_load,
+            "memory_total": self.memory_total,
+            "memory_used": self.memory_used,
+            "memory_percentage": self.memory_percentage,
+            "memory_usage_text": self.memory_usage_text,
+            "players_text": self.players_text,
+            "online_player_names": self.online_player_names,
+            "player_sample": [
+                {"name": name, "uuid": uuid} for name, uuid in self.player_sample
+            ],
+        }
+
 
 @dataclass
 class PlayerListResult:
@@ -443,3 +520,13 @@ class PlayerListResult:
     max: int = 0
     source: str = ""
     rcon_channel: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """转为字典，供 Web API 响应与序列化。"""
+        return {
+            "names": list(self.names),
+            "online": self.online if self.source != "rcon" else len(self.names),
+            "max": self.max,
+            "source": self.source,
+            "rcon_channel": self.rcon_channel,
+        }

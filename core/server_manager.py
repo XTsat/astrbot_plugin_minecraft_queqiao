@@ -1,6 +1,7 @@
 """服务器实例管理：把配置、鹊桥连接与 RCON 兜底聚合为可直接使用的运行时对象。"""
 
 import asyncio
+import time
 
 from astrbot.api import logger
 
@@ -23,11 +24,49 @@ class ServerInstance:
     ) -> None:
         self.config = config
         self.server_name = config.server_name
+        self.online_players: set[str] = set()
+        # 鹊桥 RCON（send_rcon_command）可用性：None=未确认，True=曾成功，
+        # False=鹊桥明确报错/未开启 RCON。仅 WS 连接成功不代表鹊桥 RCON 可用，
+        # 必须由真实指令执行结果确认（鹊桥侧未开启 RCON 时 send_rcon_command 报错）。
+        self.queqiao_rcon_ok: bool | None = None
+        # 本次连接建立时刻（None = 未连接），供仪表盘展示单服务器在线时长
+        self.connected_at: float | None = None
+
+        async def _wrapped_on_event(event) -> None:
+            if hasattr(event, "is_join") and event.is_join:
+                if getattr(event, "player_name", ""):
+                    self.online_players.add(event.player_name)
+            elif hasattr(event, "is_quit") and event.is_quit:
+                if getattr(event, "player_name", ""):
+                    self.online_players.discard(event.player_name)
+            if on_event:
+                res = on_event(event)
+                if asyncio.iscoroutine(res):
+                    await res
+
+        async def _wrapped_on_connect() -> None:
+            # 重连后 RCON 可用性未知，重新由指令执行结果确认
+            self.queqiao_rcon_ok = None
+            self.connected_at = time.time()
+            if on_connect:
+                res = on_connect()
+                if asyncio.iscoroutine(res):
+                    await res
+
+        async def _wrapped_on_disconnect(reason: str) -> None:
+            # 连接断开后鹊桥 RCON 必然不可用
+            self.queqiao_rcon_ok = False
+            self.connected_at = None
+            if on_disconnect:
+                res = on_disconnect(reason)
+                if asyncio.iscoroutine(res):
+                    await res
+
         self.client = QueQiaoClient(
             config,
-            on_event=on_event,
-            on_connect=on_connect,
-            on_disconnect=on_disconnect,
+            on_event=_wrapped_on_event,
+            on_connect=_wrapped_on_connect,
+            on_disconnect=_wrapped_on_disconnect,
         )
         self.rcon = RconClient(config)
         self._task: asyncio.Task | None = None
@@ -35,6 +74,13 @@ class ServerInstance:
     @property
     def connected(self) -> bool:
         return self.client.connected
+
+    @property
+    def connected_seconds(self) -> int:
+        """本次连接已持续的秒数；未连接（或尚未握手成功）返回 0。"""
+        if not self.connected or self.connected_at is None:
+            return 0
+        return max(0, int(time.time() - self.connected_at))
 
     def start(self) -> None:
         """启动连接任务并统一处理未捕获异常。"""
@@ -115,7 +161,11 @@ class ServerInstance:
                 )
                 return None, ""
             if output is not None:
+                # 鹊桥成功响应（有无输出均视为通道可用）
+                self.queqiao_rcon_ok = True
                 return output, "queqiao"
+            # 鹊桥明确报错（未开启 RCON / 指令被拒）：标记通道不可用
+            self.queqiao_rcon_ok = False
 
         if self.rcon.enabled:
             logger.info(
@@ -144,8 +194,10 @@ class ServerInstance:
         #    记录实际通道（queqiao / direct），供渲染层标注取数方式
         output, channel = await self.execute_command_with_channel("list")
         if output is not None:
+            parsed_names = RconClient.parse_player_list(output)
+            self.online_players = set(parsed_names)
             return PlayerListResult(
-                names=RconClient.parse_player_list(output),
+                names=parsed_names,
                 source="rcon",
                 rcon_channel=channel,
             )
@@ -155,20 +207,37 @@ class ServerInstance:
         if status is not None:
             names = status.online_player_names
             if names:
+                self.online_players.update(names)
                 return PlayerListResult(
                     names=names,
                     online=status.online_players,
                     max=status.max_players,
                     source="slp",
                 )
-            # ③ sample 空，退回人数
+            # ②.5 若 SLP sample 未返回玩家名，但事件追踪缓存有记录
+            if self.online_players:
+                return PlayerListResult(
+                    names=sorted(self.online_players),
+                    online=max(len(self.online_players), status.online_players),
+                    max=status.max_players,
+                    source="event_cache",
+                )
+            # ③ sample 空且无缓存，退回人数
             return PlayerListResult(
                 online=status.online_players,
                 max=status.max_players,
                 source="count",
             )
 
-        # ④ 全失败
+        # ④ 若 get_status 也失败，但事件追踪缓存有玩家
+        if self.online_players:
+            return PlayerListResult(
+                names=sorted(self.online_players),
+                online=len(self.online_players),
+                source="event_cache",
+            )
+
+        # ⑤ 全失败
         return PlayerListResult(source="none")
 
 

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Minecraft 鹊桥互通 · 服务器仪表盘</title>
+  <link rel="stylesheet" href="./style.css" />
+  <!-- 显式引入 AstrBot Plugin Page Bridge SDK，确保兼容 -->
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+</head>
+<body>
+  <!-- 顶部导航与操作栏 -->
+  <header class="dashboard-header">
+    <div class="header-title-group">
+      <img src="./logo.png" class="header-logo" alt="Minecraft 鹊桥互通" />
+      <div>
+        <h1 class="header-title">Minecraft 鹊桥互通</h1>
+        <div class="header-subtitle">多服务器状态监控与互通管理面板</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <label class="auto-refresh-toggle">
+        <input type="checkbox" id="auto-refresh-toggle" checked />
+        <span>自动刷新 (10s)</span>
+      </label>
+      <button class="btn btn-primary" id="btn-refresh" title="立即刷新数据">
+        <span>🔄 刷新</span>
+      </button>
+      <span style="font-size: 12px; color: var(--text-muted);">
+        更新于: <span id="last-refresh-time">--:--:--</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- 服务器标签切换栏：全局视图 + 每台服务器独立标签页 -->
+  <nav class="server-tabs-bar" aria-label="服务器视图切换">
+    <div class="server-tabs" id="server-tabs">
+      <button type="button" class="server-tab" data-view="all" disabled>
+        <span class="server-tab-spinner"></span> 加载中...
+      </button>
+    </div>
+  </nav>
+
+  <!-- 全局统计指标看板 -->
+  <section class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-icon green">🖥️</div>
+      <div class="stat-info">
+        <span class="stat-label" id="stat-servers-label">已连接 / 总服务器</span>
+        <span class="stat-value" id="stat-servers">-- / --</span>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon blue">👥</div>
+      <div class="stat-info">
+        <span class="stat-label" id="stat-players-label">全服在线玩家</span>
+        <span class="stat-value" id="stat-players">-- 人</span>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon yellow">⚡</div>
+      <div class="stat-info">
+        <span class="stat-label" id="stat-events-label">累计互通事件</span>
+        <span class="stat-value" id="stat-events">-- 条</span>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon purple">⏱️</div>
+      <div class="stat-info">
+        <span class="stat-label" id="stat-uptime-label">插件运行时间</span>
+        <span class="stat-value" id="stat-uptime">--</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 主体：服务器卡片网格 + 单服务器视图下的互通终端 -->
+  <main class="layout-main">
+    <section class="servers-panel">
+      <div class="servers-section-title" id="servers-section-title">
+        <span>🌐 服务器实例状态</span>
+      </div>
+      <div class="servers-container" id="servers-container">
+        <div class="loading-box">
+          <div class="spinner"></div>
+          <p>正在拉取服务器各项信息...</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="terminal-panel hidden" id="terminal-panel">
+      <div class="terminal-header">
+        <div class="terminal-title" id="terminal-title">互通终端</div>
+        <button id="terminal-clear" class="btn btn-sm" title="清空当前终端输出">清屏</button>
+      </div>
+      <div class="terminal-body" id="terminal-body"></div>
+      <div class="terminal-input-row">
+        <input
+          type="text"
+          id="terminal-input"
+          class="terminal-input"
+          placeholder="输入内容回车 = 广播；以 / 开头回车 = 执行指令 (如 /list)"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <select id="terminal-color" class="select-color" title="广播颜色">
+          <option value="white" selected>白</option>
+          <option value="gold">金</option>
+          <option value="green">绿</option>
+          <option value="aqua">青</option>
+          <option value="red">红</option>
+          <option value="light_purple">粉</option>
+        </select>
+        <button id="terminal-broadcast" class="btn btn-primary btn-sm">📢 广播</button>
+        <button id="terminal-cmd" class="btn btn-sm">⚡ 指令</button>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -2584,3 +2584,394 @@ assert "- Server3（正向）：🔴 未连接" in _res33, _res33
 assert "- Server4（正向）：🔴 未连接" in _res33, _res33
 print("OK  有 display_name 显示「显示名称 (server_name)」、无 display_name 或与 server_name 相同时仅显示 server_name")
 
+print("\n=== 34. Web API 控制器与 Metrics 指标系统 ===")
+import asyncio as _asyncio34
+from astrbot_plugin_minecraft_queqiao.services.metrics import MetricsCollector as _MC34
+from astrbot_plugin_minecraft_queqiao.services.web_api import WebApiController as _WAC34
+from astrbot_plugin_minecraft_queqiao.core.models import ServerStatus as _SS34, PlayerListResult as _PLR34
+
+# (a) ServerStatus.to_dict 与 PlayerListResult.to_dict 结构校验
+_ss34 = _SS34(
+    server_type="Paper",
+    server_version="1.20.4",
+    online_players=5,
+    max_players=100,
+    description="§aWelcome to Minecraft!",
+    cpu_cores=8,
+    system_load=1.23,
+    memory_total=1024 * 1024 * 1024 * 8,
+    memory_used=1024 * 1024 * 1024 * 2,
+    memory_percentage=25.0,
+    player_sample=[("Steve", "uuid-1"), ("Alex", "uuid-2")],
+)
+_ss_dict = _ss34.to_dict()
+assert _ss_dict["server_type"] == "Paper"
+assert _ss_dict["online_players"] == 5
+assert _ss_dict["online_player_names"] == ["Steve", "Alex"]
+assert len(_ss_dict["player_sample"]) == 2
+assert "25.0%" in _ss_dict["memory_usage_text"]
+
+_plr34 = _PLR34(names=["Steve", "Alex"], source="rcon", rcon_channel="queqiao")
+_plr_dict = _plr34.to_dict()
+assert _plr_dict["names"] == ["Steve", "Alex"]
+assert _plr_dict["source"] == "rcon"
+assert _plr_dict["rcon_channel"] == "queqiao"
+assert _plr_dict["online"] == 2
+
+# (b) MetricsCollector 计数与发布订阅
+_mc34 = _MC34(max_history=10)
+_q34 = _mc34.subscribe()
+_item34 = _mc34.record_event("chat", "srv1", "<Steve> hello", {"msg": "hello"})
+assert _item34.id == 1
+assert _mc34.events_by_type["chat"] == 1
+assert not _q34.empty()
+_msg34 = _q34.get_nowait()
+assert _msg34["summary"] == "<Steve> hello"
+_mc34.unsubscribe(_q34)
+
+_mc34.record_relay_to_ast("srv1", 2)
+_mc34.record_relay_to_mc("srv1", 3)
+_mc34.record_echo_suppressed("srv1", "test echo")
+_mc34.record_ai_chat("srv1", "Steve", "how are you?", True)
+_mc34.record_command_execution("srv1", "list", "queqiao")
+_mc34.record_command_execution("srv1", "tps", "direct")
+_mc34.record_command_execution("srv1", "stop", None)
+_mc34.record_image_relayed(1)
+
+_stats34 = _mc34.get_stats()
+assert _stats34["relayed_to_ast_total"] == 2
+assert _stats34["relayed_to_mc_total"] == 3
+assert _stats34["echo_suppressed_total"] == 1
+assert _stats34["ai_chat_total"] == 1
+assert _stats34["ai_chat_success_total"] == 1
+assert _stats34["cmd_executed_by_channel"] == {"queqiao": 1, "direct": 1, "failed": 1}
+assert _stats34["images_relayed_total"] == 1
+assert len(_mc34.get_history(limit=5)) >= 3
+# 累计互通事件 = 游戏 → 外部（事件类型计数，如上面 1 条 chat） + 外部 → 游戏（3 条群转发）
+assert _stats34["total_events"] == 4, _stats34["total_events"]
+# 网页广播（relay）也计入 total_events 与 events_by_type
+_mc34.record_event("relay", "srv1", "Web广播: hi", {"message": "hi"})
+assert _mc34.events_by_type["relay"] == 1
+assert _mc34.get_stats()["total_events"] == 5
+
+# (c) WebApiController 路由注册与接口逻辑
+class _MockContext34:
+    def __init__(self):
+        self.routes = []
+    def register_web_api(self, path, handler, methods, desc):
+        self.routes.append((path, handler, methods, desc))
+
+from pathlib import Path as _Path34
+_mock_ctx34 = _MockContext34()
+# configs 的 key 需与 server_manager 中的实例 server_name 对齐，get_servers 才能查到实例
+_configs34 = {
+    "Server": _cfg_s1,
+    "Server1": _cfg_s2,
+}
+# 持久化终端日志存储（临时目录），供仪表盘跨会话恢复历史
+from astrbot_plugin_minecraft_queqiao.services.terminal_log import TerminalLogStore as _TLS34
+_tls34 = _TLS34(_Path34("/tmp/queqiao_test_terminal"))
+_tls34.load()
+_wac34 = _WAC34(
+    context=_mock_ctx34,
+    server_manager=_sm33,
+    binding_service=BindingService(_Path34("/tmp")),
+    image_bed=None,
+    metrics=_mc34,
+    configs=_configs34,
+    terminal_logs=_tls34,
+)
+_wac34.register_routes()
+assert len(_mock_ctx34.routes) == 16, f"注册路由数不符: {len(_mock_ctx34.routes)}"
+_route_paths = [r[0] for r in _mock_ctx34.routes]
+assert "/astrbot_plugin_minecraft_queqiao/servers" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/stats" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/status" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/players" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/command" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/broadcast" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/terminal_logs" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/terminal_logs/clear" in _route_paths
+
+# 测试 get_servers 与 get_stats 响应格式
+_res_servers = _asyncio34.run(_wac34.get_servers())
+assert "servers" in _res_servers["data"]
+assert len(_res_servers["data"]["servers"]) == 2
+assert _res_servers["data"]["servers"][0]["server_name"] == "Server"
+# 未连接鹊桥且未连直连 RCON 时，rcon_channels 应为空（前端据此显示「未连接 RCON」并折叠控制台）
+assert _res_servers["data"]["servers"][0]["rcon_channels"] == []
+assert _res_servers["data"]["servers"][0]["rcon_connected"] is False
+assert _res_servers["data"]["servers"][0]["connected"] is False
+
+# (e) rcon_channels 语义：鹊桥 RCON 需真实执行确认（仅 WS 连接不算），直连 RCON 连接 → 追加 direct
+_mock_instance = _sm33.get("Server")
+assert _mock_instance is not None
+
+# ① 仅模拟 WS 连接成功、鹊桥 RCON 未确认：rcon_channels 不应含 queqiao
+_mock_instance.client._connected = True
+_mock_instance.queqiao_rcon_ok = None
+_res_servers2 = _asyncio34.run(_wac34.get_servers())
+_server_srv1 = next(
+    s for s in _res_servers2["data"]["servers"] if s["server_name"] == "Server"
+)
+# fetch_player_list 的 list 探测失败后 queqiao_rcon_ok 变为 False，通道不应出现
+assert "queqiao" not in _server_srv1["rcon_channels"]
+
+# ② 鹊桥 send_rcon_command 真实成功 → queqiao_rcon_ok=True，rcon_channels 含 queqiao
+async def _fake_queqiao_rcon(cmd: str) -> str:
+    return "There are 1 of a max of 20 players online: XTxiaotong"
+
+_mock_instance.client.send_rcon_command = _fake_queqiao_rcon  # type: ignore[method-assign]
+_res_servers3 = _asyncio34.run(_wac34.get_servers())
+_server_srv1 = next(
+    s for s in _res_servers3["data"]["servers"] if s["server_name"] == "Server"
+)
+assert "queqiao" in _server_srv1["rcon_channels"]
+assert _server_srv1["players"]["source"] == "rcon"
+assert _server_srv1["players"]["names"] == ["XTxiaotong"]
+del _mock_instance.client.send_rcon_command  # 还原真实方法
+_mock_instance.client._connected = False  # 复位
+_mock_instance.queqiao_rcon_ok = None
+_mock_instance.online_players.clear()  # 清空 (e) 期间被 list 探测填充的在线玩家缓存
+
+# (f) MOTD description 文本组件解析：{"text": "..."} 应提取为纯文本而非花括号字典
+_ss_motd = _SS34.from_dict({
+    "server_list_ping": {
+        "description": {
+            "text": "A Minecraft Server",
+            "extra": [{"text": " §aWelcome"}],
+        },
+        "players": {"online": 0, "max": 20},
+        "version": {"name": "1.21"},
+    },
+    "server_type": "paper",
+    "server_version": "1.21",
+})
+assert _ss_motd.description == "A Minecraft Server §aWelcome", _ss_motd.description
+# 纯字符串 description 保持原样；list 形态组件也能拼接
+_ss_motd2 = _SS34.from_dict({
+    "server_list_ping": {
+        "description": [{"text": "A"}, {"text": "B"}],
+        "players": {"online": 0, "max": 20},
+        "version": {"name": "1.21"},
+    },
+})
+assert _ss_motd2.description == "AB", _ss_motd2.description
+_ss_motd3 = _SS34.from_dict({
+    "server_list_ping": {"description": "plain motd", "players": {"online": 0, "max": 20}},
+})
+assert _ss_motd3.description == "plain motd", _ss_motd3.description
+
+# (f2) 鹊桥错误响应 JSON 被当作字符串塞进字段时，不得作为展示文本/图片源
+_ss_err = _SS34.from_dict({
+    "server_list_ping": {
+        "description": '{"status":"error","message":"未授权"}',
+        "favicon": '{"status":"error","message":"未授权"}',
+        "players": {"online": 0, "max": 20},
+    },
+    "server_type": '{"status":"error","message":"未授权"}',
+    "server_version": '{"status":"error","message":"未授权"}',
+})
+assert _ss_err.description == "", _ss_err.description
+assert _ss_err.favicon == "", _ss_err.favicon
+assert _ss_err.server_type == "", _ss_err.server_type
+assert _ss_err.server_version == "", _ss_err.server_version
+# 字符串形式的 JSON 文本组件也要能正确解析
+_ss_str_component = _SS34.from_dict({
+    "server_list_ping": {"description": '{"text":"A Minecraft Server"}'},
+})
+assert _ss_str_component.description == "A Minecraft Server", _ss_str_component.description
+# favicon 仅接受 data:image 内联图标；需鉴权 URL / 其它一律置空
+_ss_fav = _SS34.from_dict({
+    "server_list_ping": {"favicon": "data:image/png;base64,AAAA"},
+})
+assert _ss_fav.favicon == "data:image/png;base64,AAAA", _ss_fav.favicon
+_ss_fav2 = _SS34.from_dict({
+    "server_list_ping": {"favicon": "http://127.0.0.1:2333/api/icon?server=x"},
+})
+assert _ss_fav2.favicon == "", _ss_fav2.favicon
+
+_res_stats = _asyncio34.run(_wac34.get_stats())
+assert _res_stats["data"]["total_servers"] == 4  # _sm33 有 4 个实例
+assert _res_stats["data"]["relayed_to_ast_total"] == 2
+
+# 测试 get_server_status 错误处理（不存在返回 404，未连接返回 503）
+_res_404 = _asyncio34.run(_wac34.get_server_status("not_exist"))
+assert _res_404["status_code"] == 404
+_res_503 = _asyncio34.run(_wac34.get_server_status("Server"))
+assert _res_503["status_code"] == 503
+
+# (d) 在线玩家事件追踪与 event_cache 兜底
+from astrbot_plugin_minecraft_queqiao.core.models import QueQiaoEvent as _QE34, QueQiaoPlayer as _QP34
+_inst_tracker = _sm33.get("Server")
+assert _inst_tracker is not None
+# 触发玩家加入事件
+_join_ev = _QE34(event_name="PlayerJoinEvent", post_type="notice", player=_QP34(nickname="PlayerA"))
+_asyncio34.run(_inst_tracker.client.on_event(_join_ev))
+assert "PlayerA" in _inst_tracker.online_players
+# 触发玩家离开事件
+_quit_ev = _QE34(event_name="PlayerQuitEvent", post_type="notice", player=_QP34(nickname="PlayerA"))
+_asyncio34.run(_inst_tracker.client.on_event(_quit_ev))
+assert "PlayerA" not in _inst_tracker.online_players
+
+# 测试在无 RCON 且 SLP sample 为空时，通过事件缓存兜底玩家列表
+_join_ev2 = _QE34(event_name="PlayerJoinEvent", post_type="notice", player=_QP34(nickname="PlayerB"))
+_asyncio34.run(_inst_tracker.client.on_event(_join_ev2))
+_plr_cached = _asyncio34.run(_inst_tracker.fetch_player_list())
+assert _plr_cached.source == "event_cache"
+assert _plr_cached.names == ["PlayerB"]
+assert _plr_cached.online == 1
+
+# (g) 仪表盘「单服务器标签页」数据：按服务器拆分的事件计数 + 连接时长
+_mc34.record_event("chat", "Server", "<Steve> hi")
+_mc34.record_relay_to_mc("Server", 2)
+assert _mc34.get_server_event_count("Server") == 3
+assert _mc34.get_server_event_count("never-configured") == 0
+# echo / ai 等辅助事件不计入「累计互通事件」（与全局 total_events 同口径）
+_mc34.record_echo_suppressed("Server", "loop")
+_mc34.record_ai_chat("Server", "Steve", "hi", True)
+assert _mc34.get_server_event_count("Server") == 3, _mc34.get_server_event_count("Server")
+assert _mc34.get_stats()["events_by_server"]["Server"] == 3
+assert _mc34.get_stats()["events_by_server"]["srv1"] == 5  # chat 1 + relay 1 + 群转发 3
+
+_res_srv_tab = _asyncio34.run(_wac34.get_servers())
+_srv_tab = next(s for s in _res_srv_tab["data"]["servers"] if s["server_name"] == "Server")
+assert _srv_tab["events_total"] == 3
+assert _srv_tab["connected_seconds"] == 0  # 未握手成功不计时
+
+# 连接时长仅在握手回调后开始计时，断开后归零
+_inst_dur = _sm33.get("Server")
+_inst_dur.client._connected = True
+assert _inst_dur.connected_seconds == 0
+_asyncio34.run(_inst_dur.client.on_connect())
+assert _inst_dur.connected_at is not None
+assert _inst_dur.connected_seconds >= 0
+_res_srv_tab2 = _asyncio34.run(_wac34.get_servers())
+_srv_tab2 = next(s for s in _res_srv_tab2["data"]["servers"] if s["server_name"] == "Server")
+assert _srv_tab2["connected"] is True
+assert 0 <= _srv_tab2["connected_seconds"] <= 5
+_asyncio34.run(_inst_dur.client.on_disconnect("test"))
+assert _inst_dur.connected_at is None
+assert _inst_dur.connected_seconds == 0
+_inst_dur.client._connected = False  # 复位
+
+# (h) 持久化终端日志：按天分片、落盘、跨实例恢复、环形上限、清屏删除、损坏容错、保留期清理、旧版迁移
+import shutil as _shutil34
+from datetime import date as _date34, timedelta as _td34
+_tls_dir = _Path34("/tmp/queqiao_test_terminal")
+if _tls_dir.exists():
+    _shutil34.rmtree(_tls_dir)
+_tls_dir.mkdir(parents=True, exist_ok=True)
+_tls34.load()  # 重置到干净状态
+_tls = _TLS34(_tls_dir)
+_tls.load()
+_tls.append("Server", "chat", "<Steve> hello")
+_tls.append("Server", "chat", "<Alex> hi")
+_tls.append("Server1", "broadcast", "欢迎")
+assert len(_tls.get("Server")) == 2
+assert _tls.get("Server")[0]["message"] == "<Steve> hello"
+assert _tls.get("Server1")[0]["type"] == "broadcast"
+assert _tls.get("never") == []
+# 按天分片：当天数据落在 terminal_logs/YYYY-MM-DD.json，而非单一大文件
+_today_key = _date34.today().strftime("%Y-%m-%d")
+assert (_tls_dir / "terminal_logs" / f"{_today_key}.json").exists(), "日志应写入当天分片文件"
+assert not (_tls_dir / "terminal_logs.json").exists(), "不再使用旧版单文件"
+assert len(list((_tls_dir / "terminal_logs").glob("*.json"))) == 1, "只生成一个当天分片"
+
+# 环形上限：同一天超出丢弃最旧
+for _i in range(310):
+    _tls.append("Server", "system", f"line-{_i}")
+assert len(_tls.get("Server")) == 300, len(_tls.get("Server"))
+assert _tls.get("Server")[0]["message"] == "line-10"  # line-0..9 被丢弃
+assert _tls.get("Server")[-1]["message"] == "line-309"
+
+# 跨天合并：昨天分片 + 今天分片，按日期旧 → 新
+_yesterday_key = (_date34.today() - _td34(days=1)).strftime("%Y-%m-%d")
+(_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").write_text(
+    json.dumps(
+        {"Server": [{"time": "xx", "type": "join", "message": "昨天加入"}]}
+    ),
+    encoding="utf-8",
+)
+_tls_b = _TLS34(_tls_dir)
+_tls_b.load()
+_logs_b = _tls_b.get("Server")
+assert _logs_b[0]["message"] == "昨天加入", "昨天分片在前"
+assert _logs_b[-1]["message"] == "line-309", "今天分片在后"
+
+# 损坏分片容错：坏文件被忽略、不抛异常，其它分片不受影响
+(_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").write_text(
+    "{broken json", encoding="utf-8"
+)
+_tls_c = _TLS34(_tls_dir)
+_tls_c.load()
+assert _tls_c.get("Server")[0]["message"] == "line-10", "坏昨天分片被忽略，今天分片仍在"
+# 移除损坏文件，避免影响后续步骤
+(_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").unlink(missing_ok=True)
+
+# 保留期清理：超过 TERMINAL_KEEP_DAYS 的旧分片在 load 时被删除
+_old_key = (_date34.today() - _td34(days=31)).strftime("%Y-%m-%d")
+(_tls_dir / "terminal_logs" / f"{_old_key}.json").write_text(
+    json.dumps({"Server": [{"time": "xx", "type": "chat", "message": "过期"}]}),
+    encoding="utf-8",
+)
+_tls_e = _TLS34(_tls_dir)
+_tls_e.load()
+assert not (_tls_dir / "terminal_logs" / f"{_old_key}.json").exists(), "超期分片被清理"
+
+# 旧版单文件迁移：并入当天分片，原文件备份为 .bak
+(_tls_dir / "terminal_logs.json").write_text(
+    json.dumps({"Server": [{"time": "xx", "type": "chat", "message": "旧版数据"}]}),
+    encoding="utf-8",
+)
+_tls_f = _TLS34(_tls_dir)
+_tls_f.load()
+assert (_tls_dir / "terminal_logs.json.bak").exists(), "旧版文件已备份为 .bak"
+assert (_tls_dir / "terminal_logs" / f"{_today_key}.json").exists(), "旧数据并入当天分片"
+assert any(e["message"] == "旧版数据" for e in _tls_f.get("Server")), "旧数据可查询"
+assert len(_tls_f.get("Server1")) == 1, "迁移不得覆盖当天已有内容"
+
+# 清屏：跨全部分片删除对应服务器；清空的分片文件被删除；不影响其它服务器
+(_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").write_text(
+    json.dumps({"Server": [{"time": "xx", "type": "chat", "message": "昨天只属Server"}]}),
+    encoding="utf-8",
+)
+_tls_g = _TLS34(_tls_dir)
+_tls_g.load()
+_tls_g.clear("Server")
+assert _tls_g.get("Server") == []
+assert len(_tls_g.get("Server1")) == 1
+assert not (_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").exists(), "清空后的分片文件被删除"
+assert (_tls_dir / "terminal_logs" / f"{_today_key}.json").exists(), "仍有内容的当天分片保留"
+
+# Web API：GET 拉取与 POST 清屏
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wa_module34
+# 缺少 server 参数 → 400
+_wa_module34.request.query = {}
+_res_tl_bad = _asyncio34.run(_wac34.get_terminal_logs())
+assert _res_tl_bad["status_code"] == 400
+# 带 server 参数 → 返回该服日志（跨分片）
+_wa_module34.request.query = {"server": "Server"}
+_tls34.append("Server", "chat", "API 测试")
+_res_tl_ok = _asyncio34.run(_wac34.get_terminal_logs())
+assert _res_tl_ok["data"]["server"] == "Server"
+assert _res_tl_ok["data"]["logs"][-1]["message"] == "API 测试"
+# POST 清屏 → 后端记录被删除
+_orig_json34 = _wa_module34.request.json
+async def _fake_json34(default=None):
+    return {"server": "Server"}
+_wa_module34.request.json = _fake_json34
+_res_clear34 = _asyncio34.run(_wac34.clear_terminal_logs())
+_wa_module34.request.json = _orig_json34
+assert _res_clear34["data"]["success"] is True
+assert _tls34.get("Server") == []
+# 清屏缺 server → 400
+async def _fake_json_bad34(default=None):
+    return {}
+_wa_module34.request.json = _fake_json_bad34
+_res_clear_bad34 = _asyncio34.run(_wac34.clear_terminal_logs())
+_wa_module34.request.json = _orig_json34
+assert _res_clear_bad34["status_code"] == 400
+
+print("OK  ServerStatus/PlayerListResult to_dict / Metrics 收集发布 / WebApiController 路由注册与逻辑 / 在线玩家事件追踪 / 单服务器标签页指标 / 按天分片持久化终端日志")
+

@@ -120,6 +120,8 @@ class InfoRenderer:
         # 第 21 组契约「在线 N 人」无括注
         if players.source == "slp":
             note = "（在线查询）"
+        elif players.source == "event_cache":
+            note = "（事件追踪）"
         elif players.source == "rcon":
             if players.rcon_channel == "queqiao":
                 note = "（鹊桥RCON）"

@@ -38,7 +38,10 @@ from .services.message_bridge import (
     build_chatimage_code,
     resolve_image_url,
 )
+from .services.metrics import MetricsCollector
 from .services.renderer import InfoRenderer
+from .services.terminal_log import TerminalLogStore
+from .services.web_api import WebApiController
 
 DEFAULT_TIMEOUT = 30
 
@@ -62,18 +65,31 @@ class MinecraftQueQiaoPlugin(Star):
 
         data_dir = Path(StarTools.get_data_dir(PLUGIN_DATA_DIR))
         data_dir.mkdir(parents=True, exist_ok=True)
+        self._data_dir = data_dir
 
         self.server_manager = ServerManager()
         self.binding_service = BindingService(data_dir)
         self.message_bridge = MessageBridge(context)
         self.renderer = InfoRenderer()
         self.image_bed = ImageBedUploaderGroup()
+        self.metrics = MetricsCollector()
+        self.terminal_logs = TerminalLogStore(data_dir)
         self.command_handler = CommandHandler(
             self.server_manager, self.binding_service, self.renderer
         )
         self.command_handler.attach_bridge(self.message_bridge)
 
         self._configs: dict[str, ServerConfig] = {}
+        self.web_api = WebApiController(
+            context,
+            self.server_manager,
+            self.binding_service,
+            self.image_bed,
+            self.metrics,
+            self._configs,
+            self.terminal_logs,
+        )
+        self.web_api.register_routes()
         self._init_task: asyncio.Task | None = None
 
     # ---- 生命周期 ----
@@ -85,6 +101,10 @@ class MinecraftQueQiaoPlugin(Star):
             return
 
         self.binding_service.load()
+        self.terminal_logs.load()
+        logger.info(
+            f"[{PLUGIN_NAME}] 终端日志目录: {self._data_dir / 'terminal_logs'}"
+        )
 
         raw_servers = self.config.get("mc_servers", []) or []
         if not isinstance(raw_servers, list) or not raw_servers:
@@ -315,13 +335,80 @@ class MinecraftQueQiaoPlugin(Star):
         if config is None:
             return
 
+        # 记录事件指标与持久化终端日志（网页未打开期间同样记录）
+        if event.is_chat:
+            self.metrics.record_event(
+                "chat",
+                server_name,
+                f"<{event.player_name}> {event.message}",
+                {"player": event.player_name, "message": event.message},
+            )
+            self.terminal_logs.append(
+                server_name, "chat", f"<{event.player_name}> {event.message}"
+            )
+        elif event.is_join:
+            self.metrics.record_event(
+                "join",
+                server_name,
+                f"玩家 {event.player_name} 加入了游戏",
+                {"player": event.player_name},
+            )
+            self.terminal_logs.append(
+                server_name, "join", f"玩家 {event.player_name} 加入了游戏"
+            )
+        elif event.is_quit:
+            self.metrics.record_event(
+                "quit",
+                server_name,
+                f"玩家 {event.player_name} 离开了游戏",
+                {"player": event.player_name},
+            )
+            self.terminal_logs.append(
+                server_name, "quit", f"玩家 {event.player_name} 离开了游戏"
+            )
+        elif event.is_death:
+            death_text = event.death.as_text() or "死亡"
+            self.metrics.record_event(
+                "death",
+                server_name,
+                f"玩家 {event.player_name} {death_text}",
+                {"player": event.player_name, "death": death_text},
+            )
+            self.terminal_logs.append(
+                server_name, "death", f"玩家 {event.player_name} {death_text}"
+            )
+        elif event.is_achievement:
+            ach_text = event.achievement.as_text() or "达成成就"
+            self.metrics.record_event(
+                "achievement",
+                server_name,
+                f"玩家 {event.player_name} 达成了成就 {ach_text}",
+                {"player": event.player_name, "achievement": ach_text},
+            )
+            self.terminal_logs.append(
+                server_name,
+                "achievement",
+                f"玩家 {event.player_name} 达成了成就 {ach_text}",
+            )
+        elif event.is_command:
+            self.metrics.record_event(
+                "command",
+                server_name,
+                f"<{event.player_name}> 执行指令: {event.command}",
+                {"player": event.player_name, "command": event.command},
+            )
+            self.terminal_logs.append(
+                server_name, "command", f"<{event.player_name}> 执行指令: {event.command}"
+            )
+
         # AI 与互通互斥：命中 AI 前缀即交给 LLM，不再转发到会话
         question = self._resolve_ai_question(config, event)
         if question is not None:
             await self._handle_ai_chat(server_name, config, event, question)
             return
 
-        await self.message_bridge.forward_event(server_name, config, event)
+        if await self.message_bridge.forward_event(server_name, config, event):
+            self.metrics.record_relay_to_ast(server_name)
 
     @staticmethod
     def _match_ai_prefix(config: ServerConfig, event: QueQiaoEvent) -> bool:
@@ -366,6 +453,9 @@ class MinecraftQueQiaoPlugin(Star):
         )
 
         reply = await self._ask_llm(event, question)
+        self.metrics.record_ai_chat(
+            server_name, player.display_name, question, bool(reply)
+        )
         if not reply:
             return
 
@@ -679,8 +769,10 @@ class MinecraftQueQiaoPlugin(Star):
                 # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
                 # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
                 self.message_bridge.mark_forwarded(server_name, content)
+                self.metrics.record_relay_to_mc(server_name)
                 relayed = True
                 if image_codes:
+                    self.metrics.record_image_relayed(len(image_codes))
                     extra = (
                         f"，另 {skipped_images} 张无公开 URL 已跳过"
                         if skipped_images
