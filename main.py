@@ -26,7 +26,7 @@ from .core.models import QueQiaoEvent
 from .core.models_config import ServerConfig, _to_bool, _to_int, _to_str
 from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
-from .handlers.commands import CommandHandler
+from .handlers.commands import CommandHandler, parse_direct_address
 from .services.binding import BindingService
 from .services.image_bed import (
     BuiltinHttpUploader,
@@ -40,6 +40,7 @@ from .services.message_bridge import (
 )
 from .services.metrics import MetricsCollector
 from .services.monitor import MonitorCollector
+from .services.panel_prefs import PanelPrefsStore
 from .services.renderer import InfoRenderer
 from .services.terminal_log import TerminalLogStore
 from .services.web_api import WebApiController
@@ -76,6 +77,7 @@ class MinecraftQueQiaoPlugin(Star):
         self.metrics = MetricsCollector()
         self.terminal_logs = TerminalLogStore(data_dir)
         self.monitor = MonitorCollector(data_dir, self.server_manager)
+        self.panel_prefs = PanelPrefsStore(data_dir)
         self.command_handler = CommandHandler(
             self.server_manager, self.binding_service, self.renderer
         )
@@ -92,6 +94,7 @@ class MinecraftQueQiaoPlugin(Star):
             self._configs,
             self.terminal_logs,
             self.monitor,
+            self.panel_prefs,
         )
         self.web_api.register_routes()
         self._init_task: asyncio.Task | None = None
@@ -543,7 +546,19 @@ class MinecraftQueQiaoPlugin(Star):
 
     @mc_group.command("status")
     async def cmd_status(self, event: AstrMessageEvent, target: str = ""):
-        """查看服务器状态"""
+        """查看服务器状态（可指定数字编号或 host:port 地址直连查询）"""
+        if target and not target.isdigit():
+            addr = parse_direct_address(target)
+            if addr is None:
+                yield event.plain_result(
+                    "❌ 目标格式无效：应为数字编号（如 1）或服务器地址"
+                    "（如 127.0.0.1:25565）"
+                )
+                return
+            yield event.plain_result(
+                await self.command_handler.handle_direct_status(*addr)
+            )
+            return
         server, hint = self.command_handler._resolve_target(event, target)
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")
@@ -552,7 +567,19 @@ class MinecraftQueQiaoPlugin(Star):
 
     @mc_group.command("list")
     async def cmd_list(self, event: AstrMessageEvent, target: str = ""):
-        """查看在线玩家列表"""
+        """查看在线玩家列表（可指定数字编号或 host:port 地址直连查询）"""
+        if target and not target.isdigit():
+            addr = parse_direct_address(target)
+            if addr is None:
+                yield event.plain_result(
+                    "❌ 目标格式无效：应为数字编号（如 1）或服务器地址"
+                    "（如 127.0.0.1:25565）"
+                )
+                return
+            yield event.plain_result(
+                await self.command_handler.handle_direct_list(*addr)
+            )
+            return
         server, hint = self.command_handler._resolve_target(event, target)
         if server is None:
             yield event.plain_result(hint or "❌ 无法确定目标服务器")

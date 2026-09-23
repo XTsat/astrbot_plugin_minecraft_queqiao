@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # 握手协议版本：-1 表示"未知"，服务端按当前版本兼容处理（免维护版本表）
 _PROTOCOL_VERSION = -1
@@ -31,16 +32,33 @@ _PROTOCOL_VERSION = -1
 _NEXT_STATE_STATUS = 1
 _STATUS_PACKET_ID = 0x00
 
+# § 后跟一位格式/颜色代码（如 §a、§6、§r）。SLP players.sample 的名字在
+# 部分服务端会被塞入这类彩色/广告文本，直连查询展示前剥离成可读纯文本。
+_SECTION_RE = re.compile(r"§.")
+
 
 @dataclass
 class McPingResult:
-    """一次 SLP ping 的结果（rtt 为往返耗时毫秒）。"""
+    """一次 SLP ping 的结果（rtt 为往返耗时毫秒）。
+
+    `player_names` 取自状态响应的 ``players.sample``（在线玩家名样本，
+    已剥离 § 格式码）：可能不全或被服务端伪造/留空，与鹊桥 `get_status`
+    的 sample 同源同语义。
+    """
 
     rtt_ms: float
     version_name: str = ""
     online: int = 0
     max_players: int = 0
     description: str = ""
+    player_names: list[str] = field(default_factory=list)
+
+
+def _strip_format_codes(value: str) -> str:
+    """去掉 Minecraft 文本格式码（§ 后跟一位代码）与首尾空白。"""
+    if not value:
+        return ""
+    return _SECTION_RE.sub("", value).strip()
 
 
 def _encode_varint(value: int) -> bytes:
@@ -178,12 +196,24 @@ async def mc_ping(
 
     version = payload.get("version") or {}
     players = payload.get("players") or {}
+    # players.sample：在线玩家名样本（可能不全/被伪造/留空）；name 可能是
+    # 文本组件（str/dict/list），与 MOTD 同源处理
+    player_names: list[str] = []
+    sample_raw = players.get("sample")
+    if isinstance(sample_raw, list):
+        for item in sample_raw:
+            if not isinstance(item, dict):
+                continue
+            name = _strip_format_codes(_component_text(item.get("name")))
+            if name:
+                player_names.append(name)
     return McPingResult(
         rtt_ms=rtt_ms,
         version_name=str(version.get("name") or ""),
         online=int(players.get("online") or 0),
         max_players=int(players.get("max") or 0),
         description=_component_text(payload.get("description", "")),
+        player_names=player_names,
     )
 
 

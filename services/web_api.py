@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from .binding import BindingService
     from .image_bed import ImageBedUploaderGroup
     from .monitor import MonitorCollector
+    from .panel_prefs import PanelPrefsStore
     from .terminal_log import TerminalLogStore
 
 
@@ -66,6 +67,7 @@ class WebApiController:
         configs: dict[str, ServerConfig],
         terminal_logs: TerminalLogStore | None = None,
         monitor: "MonitorCollector | None" = None,
+        panel_prefs: "PanelPrefsStore | None" = None,
     ) -> None:
         self.context = context
         self.server_manager = server_manager
@@ -75,6 +77,7 @@ class WebApiController:
         self.configs = configs
         self.terminal_logs = terminal_logs
         self.monitor = monitor
+        self.panel_prefs = panel_prefs
 
     def register_routes(self) -> None:
         """向 AstrBot Context 注册所有 Web API 路由。"""
@@ -124,6 +127,8 @@ class WebApiController:
             ("/terminal_logs/clear", self.clear_terminal_logs, ["POST"], "清空某台服务器的持久化终端日志"),
             ("/image_bed/status", self.get_image_bed_status, ["GET"], "获取图床服务状态"),
             ("/config", self.get_config_overview, ["GET"], "获取插件配置概览"),
+            ("/panel/prefs", self.get_panel_prefs, ["GET"], "获取面板级偏好（长期存储）"),
+            ("/panel/prefs", self.set_panel_prefs, ["POST"], "保存面板级偏好（长期存储）"),
         ]
         # 性能监控（TPS/延迟）路由：未注入 MonitorCollector 时（如旧测试桩）不注册
         if self.monitor is not None:
@@ -152,6 +157,12 @@ class WebApiController:
                         self.sample_monitor,
                         ["POST"],
                         "立即对某台服务器执行一次采样（不等下一个采集间隔）",
+                    ),
+                    (
+                        "/monitor/<server_name>/clear",
+                        self.clear_monitor_data,
+                        ["POST"],
+                        "清空某台服务器的性能监控采样数据（不可恢复）",
                     ),
                 ]
             )
@@ -588,6 +599,40 @@ class WebApiController:
             )
         return json_response({"servers": servers})
 
+    def get_panel_prefs(self) -> Any:
+        """获取面板级偏好（互通终端加载天数等，长期存储在后端）。
+
+        前端 localStorage 在受限 iframe 下可能被沙箱禁止、清缓存/换设备
+        即丢失——面板偏好的权威数据落盘到 ``data_dir/panel_prefs.json``，
+        浏览器端只作启动缓存。
+        """
+        if self.panel_prefs is None:
+            return json_response({"prefs": {}})
+        return json_response({"prefs": self.panel_prefs.all()})
+
+    async def set_panel_prefs(self) -> Any:
+        """保存面板级偏好（合并写入并原子落盘）。
+
+        当前支持字段：``terminal_days``（互通终端加载天数，0~30，0=全部）。
+        """
+        if self.panel_prefs is None:
+            return error_response("面板偏好存储未接入", status_code=503)
+        raw = await request.json(default={}) or {}
+        fields: dict[str, Any] = {}
+        if "terminal_days" in raw:
+            terminal_days = raw["terminal_days"]
+            if isinstance(terminal_days, bool) or not isinstance(terminal_days, (int, str)):
+                return error_response("terminal_days 需为数字", status_code=400)
+            try:
+                value = int(terminal_days)
+            except (TypeError, ValueError):
+                return error_response("terminal_days 需为数字", status_code=400)
+            fields["terminal_days"] = max(0, min(30, value))
+        if not fields:
+            return json_response({"prefs": self.panel_prefs.all()})
+        self.panel_prefs.update(fields)
+        return json_response({"prefs": self.panel_prefs.all()})
+
     # ---- 性能监控（TPS / 延迟） ----
 
     async def get_monitor_status(self) -> Any:
@@ -614,7 +659,13 @@ class WebApiController:
 
         range_hours, bucket_seconds = self._parse_monitor_window()
         since_ts = time.time() - range_hours * 3600
-        series = self.monitor.store.series(server_name, since_ts, bucket_seconds)
+        # 实时 1 分钟窗口每秒 1 点：边界处样本数可为 60 或 61，按窗口秒数
+        # 截断到最近 N 个点，统计卡与曲线稳定显示 60（正常长窗口采样数远
+        # 小于上限，永不触发截断）
+        cap_seconds = max(1, int(range_hours * 3600))
+        series = self.monitor.store.series(
+            server_name, since_ts, bucket_seconds, cap_seconds=cap_seconds
+        )
         return json_response(
             {
                 "server": server_name,
@@ -672,7 +723,9 @@ class WebApiController:
         if raw_bucket:
             try:
                 if raw_bucket.endswith("s"):
-                    bucket_seconds = max(5, int(float(raw_bucket[:-1])))
+                    # 实时模式桶宽跟随采样频率（realtime_interval 可到 1 秒），
+                    # 下限放开到 1s：1s 采样 → 1s 桶 → 60 秒窗口 60 个点
+                    bucket_seconds = max(1, int(float(raw_bucket[:-1])))
                 elif raw_bucket.endswith("m") and not raw_bucket.endswith("h"):
                     bucket_seconds = max(60, int(float(raw_bucket[:-1]) * 60))
                 elif raw_bucket.endswith("h"):
@@ -738,3 +791,17 @@ class WebApiController:
         if status is None:
             return error_response(f"服务器不存在: {server_name}", status_code=404)
         return json_response({"server": server_name, "status": status})
+
+    async def clear_monitor_data(self, server_name: str) -> Any:
+        """清空某台服务器的性能监控采样数据（JSONL 分片 + 内存计数）。
+
+        仅清数据，不触碰监控设置/保留天数；采集任务继续运行，下一轮采样
+        从零重新累计。由仪表盘设置弹窗「🗑 清除采集数据」按钮调用
+        （前端二次确认，操作不可恢复）。
+        """
+        if self.monitor is None:
+            return error_response("性能监控未接入", status_code=503)
+        if server_name not in self.configs and self.server_manager.get(server_name) is None:
+            return error_response(f"服务器不存在: {server_name}", status_code=404)
+        removed = self.monitor.clear_data(server_name)
+        return json_response({"success": True, "server": server_name, "removed": removed})

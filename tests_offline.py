@@ -2537,10 +2537,12 @@ assert _srv is None and "尚未配置" in _hint, "无服时给编号也应提示
 
 # (f) help 文案已带编号说明
 _help = _h2.help_text()
-assert "mc status [编号]" in _help
+assert "mc status [编号|地址]" in _help, "status 支持编号或地址直连"
+assert "mc list [编号|地址]" in _help, "list 支持编号或地址直连"
 assert "mc cmd [编号] <指令>" in _help
 assert "mc player [编号] <玩家ID>" in _help
 assert "数字编号" in _help, "help 应说明多服加编号/单服省略规则"
+assert "127.0.0.1:25565" in _help, "help 应示例地址直连语法"
 print("OK  数字编号拆分(仅多服) / 单服省略自动命中 / 多服提示含编号列表 / "
       "死代码已移除 / help 已同步")
 
@@ -2723,7 +2725,7 @@ _wac34 = _WAC34(
     terminal_logs=_tls34,
 )
 _wac34.register_routes()
-assert len(_mock_ctx34.routes) == 16, f"注册路由数不符: {len(_mock_ctx34.routes)}"
+assert len(_mock_ctx34.routes) == 18, f"注册路由数不符: {len(_mock_ctx34.routes)}"
 _route_paths = [r[0] for r in _mock_ctx34.routes]
 assert "/astrbot_plugin_minecraft_queqiao/servers" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/stats" in _route_paths
@@ -3164,7 +3166,11 @@ async def _fake_mc_server35(reader, writer):
         await reader.readexactly(2)  # 状态请求（len=1, id=0）
         body = json.dumps({
             "version": {"name": "forge 1.20.1", "protocol": 765},
-            "players": {"max": 20, "online": 3},
+            "players": {"max": 20, "online": 3, "sample": [
+                {"name": "Steve", "id": "uuid-1"},
+                {"name": "§cAlex", "id": "uuid-2"},  # 带格式码的名字应被剥离
+                {"name": {"text": "Notch"}, "id": "uuid-3"},  # 组件形态名字
+            ]},
             "description": {"text": "A Forge Server"},
         }).encode("utf-8")
         payload = b"\x00" + _mc_varint_enc35(len(body)) + body
@@ -3197,6 +3203,8 @@ async def _slp_e2e35():
     assert ping is not None and ping.rtt_ms is not None, "直连 SLP ping 应返回 RTT"
     assert ping.online == 3 and ping.max_players == 20
     assert ping.version_name == "forge 1.20.1"
+    assert ping.player_names == ["Steve", "Alex", "Notch"], \
+        "SLP sample 名字应解析且剥离 § 格式码、兼容文本组件"
     assert _brand35(ping.version_name, ping.description) == "forge"
     # 非 MC 端口（无监听）：返回 None 而非抛异常
     assert await _mc_ping35("127.0.0.1", 1, timeout=1.0) is None
@@ -3486,12 +3494,14 @@ _ctx35 = _MockCtx35()
 _wac35 = _WAC35(_ctx35, _sm35, None, None, None,
                 {"Srv": _cfg35_on, "Srv2": _SC35.from_dict({})}, None, _col35)
 _wac35.register_routes()
-assert len(_ctx35.routes) == 20, f"监控注入后应注册 20 条路由, 实际 {len(_ctx35.routes)}"
+assert len(_ctx35.routes) == 23, f"监控注入后应注册 23 条路由, 实际 {len(_ctx35.routes)}"
 _rp35 = [r[0] for r in _ctx35.routes]
 assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/settings" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/sample" in _rp35
+assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/clear" in _rp35, "清除数据路由应注册"
+assert "/astrbot_plugin_minecraft_queqiao/panel/prefs" in _rp35, "面板偏好路由应注册"
 # monitor/status：每台服务器一份状态（默认开启）
 _res_mstat35 = _asyncio35.run(_wac35.get_monitor_status())
 _mons35 = _res_mstat35["data"]["monitors"]
@@ -3520,6 +3530,10 @@ assert _asyncio35.run(_wac35.get_monitor_series("Srv2"))["status_code"] == 404
 _wa35.request.query = {"range": "1m", "bucket": "10s"}
 _h35, _b35 = _wac35._parse_monitor_window()
 assert abs(_h35 - 1 / 60) < 1e-9 and _b35 == 10, "1m 窗口 + 10s 桶（实时模式）"
+# 实时模式桶宽跟随采样频率：1s 频率 → 1s 桶（下限放开到 1s，此前钳制 5s）
+_wa35.request.query = {"range": "1m", "bucket": "1s"}
+_h35, _b35 = _wac35._parse_monitor_window()
+assert _b35 == 1, "1s 桶（realtime_interval=1 的实时曲线）"
 _wa35.request.query = {"range": "30s"}
 _h35, _b35 = _wac35._parse_monitor_window()
 assert abs(_h35 - 30 / 3600) < 1e-9 and _b35 == 60, "30s 窗口自动 60s 桶"
@@ -3580,3 +3594,357 @@ assert _ghost_smp35["status_code"] == 404, "未知服务器 → 404"
 
 print("OK  TPS 解析 / 监控配置与 schema 守卫(不进 conf) / 时序存储(落盘·聚合·P95·坏行·跨天·清理) / "
       "采集器(并行采样·未连接跳过·动态设置即时生效·持久化恢复) / Web API 路由与响应")
+
+print("\n=== 36. 直连 host:port 状态/玩家查询（mc status/list <地址>） ===")
+import asyncio as _asyncio36
+from astrbot_plugin_minecraft_queqiao.handlers.commands import (
+    CommandHandler as _CH36,
+    parse_direct_address as _parse_addr36,
+)
+from astrbot_plugin_minecraft_queqiao.services.renderer import InfoRenderer as _IR36
+from astrbot_plugin_minecraft_queqiao.services.slp_ping import McPingResult as _MPR36
+import astrbot_plugin_minecraft_queqiao.handlers.commands as _cmd_mod36
+
+# (a) 地址解析：host[:port] 各形态 / 编号不误判 / 非法输入
+assert _parse_addr36("127.0.0.1:25565") == ("127.0.0.1", 25565)
+assert _parse_addr36("127.0.0.1") == ("127.0.0.1", 25565), "缺省端口 25565"
+assert _parse_addr36("play.example.com:19132") == ("play.example.com", 19132)
+assert _parse_addr36("localhost") == ("localhost", 25565), "域名/主机名允许"
+assert _parse_addr36("[::1]:25566") == ("::1", 25566)
+assert _parse_addr36("::1") == ("::1", 25565), "裸 IPv6 缺省端口"
+assert _parse_addr36("1:2") == ("1", 2), "host:port 形态（非纯数字）"
+# 纯数字 = 配置内编号，绝不当作地址
+assert _parse_addr36("1") is None and _parse_addr36("") is None
+# 非法端口 / 空 host / 含空白 / 路径分隔符
+assert _parse_addr36("127.0.0.1:abc") is None
+assert _parse_addr36("127.0.0.1:0") is None and _parse_addr36("127.0.0.1:65536") is None
+assert _parse_addr36("127.0.0.1:") is None
+assert _parse_addr36(":25565") is None
+assert _parse_addr36("host with space") is None
+assert _parse_addr36("http://x") is None
+assert _parse_addr36("[::1") is None and _parse_addr36("[::1]:abc") is None
+
+# (b) SLP 直连端到端：本地伪造 MC 状态服务端（带 sample），真实走协议
+def _mc_varint_enc36(value):
+    out = bytearray()
+    while True:
+        if value & ~0x7F == 0:
+            out.append(value)
+            return bytes(out)
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+
+
+async def _fake_mc_server36(reader, writer):
+    try:
+        length = 0
+        shift = 0
+        while True:
+            b = (await reader.readexactly(1))[0]
+            length |= (b & 0x7F) << shift
+            shift += 7
+            if b & 0x80 == 0:
+                break
+        await reader.readexactly(length)
+        await reader.readexactly(2)
+        body = json.dumps({
+            "version": {"name": "Paper 1.20.4", "protocol": 765},
+            "players": {"max": 100, "online": 2, "sample": [
+                {"name": "Steve", "id": "u1"}, {"name": "Alex", "id": "u2"},
+            ]},
+            "description": {"text": {"text": "直连测试服"}},
+        }).encode("utf-8")
+        payload = b"\x00" + _mc_varint_enc36(len(body)) + body
+        writer.write(_mc_varint_enc36(len(payload)) + payload)
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+
+async def _fake_mc_server_nosample36(reader, writer):
+    """sample 留空但 online>0：验证按「仅人数」降级渲染。"""
+    try:
+        length = 0
+        shift = 0
+        while True:
+            b = (await reader.readexactly(1))[0]
+            length |= (b & 0x7F) << shift
+            shift += 7
+            if b & 0x80 == 0:
+                break
+        await reader.readexactly(length)
+        await reader.readexactly(2)
+        body = json.dumps({
+            "version": {"name": "Paper 1.20.4", "protocol": 765},
+            "players": {"max": 100, "online": 5},
+            "description": {"text": ""},
+        }).encode("utf-8")
+        payload = b"\x00" + _mc_varint_enc36(len(body)) + body
+        writer.write(_mc_varint_enc36(len(payload)) + payload)
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+
+async def _direct_e2e36():
+    server = await _asyncio36.start_server(_fake_mc_server36, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        _h36 = _CH36(None, None, _IR36())
+        out = await _h36.handle_direct_status("127.0.0.1", port)
+        assert "127.0.0.1:%d" % port in out and "Paper 1.20.4" in out, out
+        assert "2/100" in out and "直连测试服" in out and "ms" in out, out
+        assert "Steve" in out and "Alex" in out, out
+        out = await _h36.handle_direct_list("127.0.0.1", port)
+        assert "在线查询" in out and "2 人" in out and "Steve" in out, out
+        # 直连列表与配置内渲染同一套取数语义：source=slp 标注（在线查询）
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    # sample 为空 + online>0 → 降级「仅人数」，不谎报名单
+    server2 = await _asyncio36.start_server(_fake_mc_server_nosample36, "127.0.0.1", 0)
+    port2 = server2.sockets[0].getsockname()[1]
+    try:
+        _h36b = _CH36(None, None, _IR36())
+        out = await _h36b.handle_direct_list("127.0.0.1", port2)
+        assert "5/100" in out and "未返回玩家名" in out, out
+        out = await _h36b.handle_direct_status("127.0.0.1", port2)
+        assert "5/100" in out and "玩家" not in out, "sample 空时状态不展示玩家行"
+    finally:
+        server2.close()
+        await server2.wait_closed()
+
+    # 无法连接 → 明确报错（不走配置内服务器）
+    out = await _h36.handle_direct_status("127.0.0.1", 1)
+    assert "无法连接服务器 127.0.0.1:1" in out, out
+    out = await _h36.handle_direct_list("127.0.0.1", 1)
+    assert "无法获取服务器 127.0.0.1:1" in out, out
+_asyncio36.run(_direct_e2e36())
+
+print("OK  地址解析(IPv4/域名/端口/IPv6/编号不误判) / 直连状态与玩家列表渲染(带 sample) / "
+      "sample 空降级仅人数 / 连接失败明确报错")
+
+print("\n=== 37. 实时采样互斥：sample_now 与正常周期不并发（跳过堆积） ===")
+import asyncio as _asyncio37
+from astrbot_plugin_minecraft_queqiao.services.monitor import MonitorCollector as _MC37
+
+_mdir37 = pathlib.Path("/tmp/queqiao_test_monitor37")
+if _mdir37.exists():
+    _shutil35.rmtree(_mdir37)
+_mdir37.mkdir(parents=True, exist_ok=True)
+_sm37 = _SM35()
+_sm37.add("Srv", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_col37 = _MC37(_mdir37, _sm37)
+_col37._ping = _fake_ping_ok35
+
+
+async def _mutex37():
+    # 以 enabled=False 启动：_loop 空转（sleep 60），采样轮次完全由
+    # sample_now 手动控制，排除后台任务并发干扰（sample_now 不检查 enabled）
+    _col37.start({"Srv": _SC35.from_dict(
+        {"monitor": {"enabled": False}})})
+    _col37.apply_settings("Srv", {"ping_host": "mc.example.com", "realtime_interval": 1})
+    # (a) 锁空闲：sample_now 正常采样一次
+    st = await _col37.sample_now("Srv")
+    assert st is not None and st["sample_count"] == 1, st
+    assert st["realtime_interval"] == 1, "设置里的实时频率应透传"
+    # (b) 锁被占用（模拟上一轮采样未完成 / 正常周期正在采）：跳过本次、
+    #     快速返回当前状态，sample_count 不得增加——实时高频不堆积
+    lock = _col37._lock_for("Srv")
+    await lock.acquire()
+    try:
+        st2 = await _col37.sample_now("Srv")
+        assert st2 is not None and st2["sample_count"] == 1, \
+            "锁占用时跳过采样，sample_count 不得增加"
+    finally:
+        lock.release()
+    # (c) 释放后恢复采样
+    st3 = await _col37.sample_now("Srv")
+    assert st3["sample_count"] == 2, st3
+_asyncio37.run(_mutex37())
+print("OK  锁空闲正常采样 / 锁占用跳过不堆积 / 释放后恢复 / 实时频率设置透传")
+
+print("\n=== 38. 实时采样后端常驻任务（与正常周期同架构） ===")
+import asyncio as _asyncio38
+from astrbot_plugin_minecraft_queqiao.services.monitor import MonitorCollector as _MC38
+from astrbot_plugin_minecraft_queqiao.services.monitor import MonitorSample as _MS38
+import time as _time38
+
+_mdir38 = pathlib.Path("/tmp/queqiao_test_monitor38")
+if _mdir38.exists():
+    _shutil35.rmtree(_mdir38)
+_mdir38.mkdir(parents=True, exist_ok=True)
+_sm38 = _SM35()
+_sm38.add("Srv", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_col38 = _MC38(_mdir38, _sm38)
+_col38._ping = _fake_ping_ok35
+
+
+async def _rt38():
+    # enabled=False 启动：实时任务常驻但空转（与 _loop 同架构）
+    _col38.start({"Srv": _SC35.from_dict({"monitor": {"enabled": False}})})
+    assert "Srv" in _col38._realtime_tasks and not _col38._realtime_tasks["Srv"].done(), \
+        "实时采样任务应随 start 常驻"
+    # 与正常周期共用同一把互斥锁（严格串行）
+    assert _col38._lock_for("Srv") is _col38._lock_for("Srv")
+    # realtime_interval 改动即时生效（任务循环内实时读取）
+    _col38.apply_settings("Srv", {"enabled": True, "ping_host": "mc.example.com",
+                                  "realtime_interval": 3})
+    assert _col38.status("Srv")["realtime_interval"] == 3
+    # 等后端实时任务自动采样（3s 间隔，最多等 7s）——不依赖任何前端循环
+    for _ in range(7):
+        await asyncio.sleep(1)
+        if _col38.store.sample_count("Srv") > 0:
+            break
+    assert _col38.store.sample_count("Srv") > 0, "后端实时任务应在开启后自动采样"
+    # 固定间隔调度：采样耗时被单调时钟补偿，相邻样本间隔 ≈ realtime_interval
+    # （此前「采样+等待」的实际周期 = 采样耗时 + interval，60 秒窗口样本数
+    # 永远到不了周期数，如 1s 设置 → 1.18s 实际周期 → 窗口约 51 个样本）
+    _col38.apply_settings("Srv", {"realtime_interval": 1})
+    _before38 = _col38.store.sample_count("Srv")
+    for _ in range(8):
+        await asyncio.sleep(1)
+        if _col38.store.sample_count("Srv") >= _before38 + 4:
+            break
+    _recent38 = _col38.store._read_since("Srv", _time38.time() - 30)
+    _gaps38 = [b.ts - a.ts for a, b in zip(_recent38, _recent38[1:])]
+    _med38 = sorted(_gaps38)[len(_gaps38) // 2] if _gaps38 else 0.0
+    assert 0.6 < _med38 < 1.2, \
+        f"固定间隔调度应≈1s（旧行为≈1.18s），实际中位间隔 {_med38:.2f}s"
+    # 尾部扫描（高频采样优化）：只返回 since_ts 之后的样本且保持旧→新
+    _srv_dir = _mdir38 / "Srv"
+    _srv_dir.mkdir(parents=True, exist_ok=True)
+    _p38 = _srv_dir / (_time38.strftime("%Y-%m-%d") + ".jsonl")
+    _base38 = _time38.time()
+    with open(_p38, "a", encoding="utf-8") as _h38:
+        for _i in range(2000):
+            _h38.write(json.dumps({"ts": round(_base38 - 120 + _i * 0.06, 3),
+                                   "online": 1, "tps1": 20.0, "tps5": None,
+                                   "tps15": None, "latency_ms": 50.0}) + "\n")
+    _since38 = _base38 - 60
+    _tail38 = _col38.store._iter_tail_since(_p38, _since38)
+    assert len(_tail38) > 0 and all(s.ts >= _since38 for s in _tail38), \
+        "尾部扫描应只返回窗口内样本"
+    assert _tail38 == sorted(_tail38, key=lambda s: s.ts), "尾部扫描输出应为旧→新"
+    # 关停：正常 + 实时任务全部取消
+    await _col38.stop()
+    assert not _col38._realtime_tasks and not _col38._tasks
+
+
+_asyncio38.run(_rt38())
+print("OK  实时任务随 start 常驻 / 与正常周期同锁串行 / 设置即时生效 / 自动采样 / 尾部扫描窗口过滤与排序 / stop 全量取消")
+
+print("\n=== 39. 面板级偏好长期存储（后端 panel_prefs.json） ===")
+from astrbot_plugin_minecraft_queqiao.services.panel_prefs import PanelPrefsStore as _PP39
+
+_mdir39 = pathlib.Path("/tmp/queqiao_test_prefs39")
+if _mdir39.exists():
+    _shutil35.rmtree(_mdir39)
+_mdir39.mkdir(parents=True, exist_ok=True)
+_pp39 = _PP39(_mdir39)
+_pp39.update({"terminal_days": 5})
+assert _pp39.get("terminal_days") == 5
+assert _pp39.all() == {"terminal_days": 5}
+# 重新加载（模拟插件重启）后仍在：权威数据落盘，不依赖浏览器 localStorage
+_pp39b = _PP39(_mdir39)
+assert _pp39b.get("terminal_days") == 5, "面板偏好应持久化到磁盘"
+
+# Web API：注入 panel_prefs 的控制器提供 /panel/prefs 读写
+_wac39 = _WAC35(_ctx35, _sm35, None, None, None,
+                {"Srv": _cfg35_on}, None, None, _pp39b)
+_res_prefs39 = _wac39.get_panel_prefs()  # 同步方法，直接调用
+assert _res_prefs39["data"]["prefs"]["terminal_days"] == 5
+# 合并写入 + 钳制：-1 → 0，99 → 30
+_orig_json39 = _wa35.request.json
+async def _fake_json_prefs39_a(default=None): return {"terminal_days": -1}
+_wa35.request.json = _fake_json_prefs39_a
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["terminal_days"] == 0
+async def _fake_json_prefs39_b(default=None): return {"terminal_days": 99}
+_wa35.request.json = _fake_json_prefs39_b
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["terminal_days"] == 30
+async def _fake_json_prefs39_c(default=None): return {"terminal_days": "abc"}
+_wa35.request.json = _fake_json_prefs39_c
+assert _asyncio35.run(_wac39.set_panel_prefs())["status_code"] == 400
+async def _fake_json_prefs39_d(default=None): return {}
+_wa35.request.json = _fake_json_prefs39_d
+# 空字段：返回现有偏好不落盘
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["terminal_days"] == 30
+_wa35.request.json = _orig_json39
+# 重启后仍为最后一次合法值
+assert _PP39(_mdir39).get("terminal_days") == 30
+print("OK  存储落盘重启可读 / GET 合并写入 / terminal_days 钳制与非法拒绝 / 空字段不落盘")
+
+print("\n=== 40. 清除监控采集数据（store.clear + Web API） ===")
+_mdir40 = pathlib.Path("/tmp/queqiao_test_monitor40")
+if _mdir40.exists():
+    _shutil35.rmtree(_mdir40)
+_mdir40.mkdir(parents=True, exist_ok=True)
+_sm40 = _SM35()
+_sm40.add("Srv", _FakeInst35(
+    connected=True, rcon_out="TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"))
+_col40 = _MC38(_mdir40, _sm40)
+_col40._ping = _fake_ping_ok35
+# 直接写 6 条采样（绕开任务竞争），验证 clear 计数与文件删除
+for _i in range(6):
+    _col40.store.append("Srv", _MS38(
+        ts=_time38.time() - 60 + _i, online=1, tps1=19.0, tps5=None,
+        tps15=None, latency_ms=50.0))
+assert _col40.store.sample_count("Srv") == 6
+_removed40 = _col40.clear_data("Srv")
+assert _removed40 == 6, f"clear 应返回删除条数 6, 实际 {_removed40}"
+assert _col40.store.sample_count("Srv") == 0, "清除后计数归零"
+assert _col40.store.latest("Srv") is None, "清除后最新采样清空"
+_srv_dir40 = _mdir40 / "monitor" / "Srv"
+assert not list(_srv_dir40.glob("*.jsonl")), "清除后分片文件应删除"
+assert _col40.status("Srv")["last_error"] is None, "清除后最近错误重置"
+# 采集任务继续：再写一条，计数从 1 重新累计（模拟下一轮采样）
+_col40.store.append("Srv", _MS38(
+    ts=_time38.time(), online=1, tps1=20.0, tps5=None, tps15=None, latency_ms=51.0))
+assert _col40.store.sample_count("Srv") == 1, "清除后从零重新累计"
+
+# Web API 路由
+_wac40 = _WAC35(_ctx35, _sm35, None, None, None,
+                {"Srv": _cfg35_on}, None, _col40)
+_res_clear40 = _asyncio35.run(_wac40.clear_monitor_data("Srv"))
+assert _res_clear40["data"]["success"] is True
+assert _res_clear40["data"]["removed"] == 1, "Web API 返回本次删除条数"
+assert _asyncio35.run(_wac40.clear_monitor_data("ghost"))["status_code"] == 404
+print("OK  计数/最新值/分片全清 / 错误重置 / 删除后从零重采 / Web API 返回删除条数与 404 校验")
+
+print("\n=== 41. 实时窗口样本数稳定（60 秒窗口 = 最近 60 个点） ===")
+_mdir41 = pathlib.Path("/tmp/queqiao_test_monitor41")
+if _mdir41.exists():
+    _shutil35.rmtree(_mdir41)
+_mdir41.mkdir(parents=True, exist_ok=True)
+_col41 = _MC38(_mdir41, _SM35())
+_base41 = _time38.time()
+# 61 个每秒点落在 60 秒窗口（含边界）：cap=60 后稳定 60
+for _i in range(61):
+    _col41.store.append("Srv", _MS38(
+        ts=_base41 - 60 + _i, online=1, tps1=20.0, tps5=None,
+        tps15=None, latency_ms=50.0))
+_s41 = _col41.store.series("Srv", _base41 - 60, 1, cap_seconds=60)
+assert _s41["latency"]["summary"]["count"] == 60, "60 秒窗口应稳定 60 个点"
+assert len(_s41["latency"]["points"]) == 60, "曲线应 60 个桶"
+assert _s41["latency"]["points"][0]["ts"] == int(_base41 - 60) + 1, "截断应保留最近 60 个点"
+# 不足上限（采样慢/刚启动）时不截断：30 个样本（首条恰等于 since 边界，
+# 应被 >= 语义包含）
+_col41.store.clear("Srv")
+for _i in range(30):
+    _col41.store.append("Srv", _MS38(
+        ts=_base41 - 30 + _i, online=1, tps1=19.0, tps5=None,
+        tps15=None, latency_ms=49.0))
+_raw41b = _col41.store._read_since("Srv", _base41 - 30)
+assert len(_raw41b) == 30, "read_since 应含边界样本 30 条, 实际 %d" % len(_raw41b)
+_s41b = _col41.store.series("Srv", _base41 - 30, 1, cap_seconds=60)
+assert _s41b["latency"]["summary"]["count"] == 30, "样本不足上限时不截断"
+# 正常长窗口（24h、cap=86400）不受影响
+assert _col41.store.series("Srv", _base41 - 3600, 600, cap_seconds=86400)["latency"]["summary"]["count"] == 30
+print("OK  61→稳定60 / 不足上限不截断 / 长窗口cap不误伤")

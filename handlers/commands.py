@@ -11,12 +11,63 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from ..core.constants import PLUGIN_NAME
+from ..core.models import PlayerListResult
 from ..core.models_config import ServerConfig
 from ..core.server_manager import ServerInstance, ServerManager
 from ..services.binding import BindingService
 from ..services.renderer import InfoRenderer
+from ..services.slp_ping import mc_ping
 
 CUSTOM_CMD_SEPARATOR = "<<>>"
+# 直连地址缺省端口（与 MC 服务端默认端口一致）
+DEFAULT_DIRECT_PORT = 25565
+
+
+def parse_direct_address(target: str) -> tuple[str, int] | None:
+    """把 ``host[:port]`` 形态解析为 ``(host, port)``；不是合法地址返回 None。
+
+    供 `mc status/list [地址]` 直连查询使用：地址形态（含 `.` / `:` / 域名）
+    与数字编号（纯整数）天然区分，编号语义不受影响。支持：
+    - ``127.0.0.1`` / ``play.example.com`` → 缺省端口 25565
+    - ``127.0.0.1:25565`` / ``mc.example.com:19132`` → 显式端口
+    - ``[::1]:25566`` / ``::1`` → IPv6（后者缺省端口）
+
+    纯数字（编号）、空串、含空白/路径分隔符、端口非法（非 1-65535 整数）
+    一律返回 None。
+    """
+    text = (target or "").strip()
+    if not text or text.isdigit():
+        return None
+
+    host: str
+    port: int = DEFAULT_DIRECT_PORT
+    if text.startswith("["):
+        # [ipv6] 或 [ipv6]:port
+        end = text.find("]")
+        if end <= 0:
+            return None
+        host = text[1:end]
+        rest = text[end + 1 :]
+        if rest:
+            if not rest.startswith(":") or not rest[1:].isdigit():
+                return None
+            port = int(rest[1:])
+    elif text.count(":") == 1:
+        host, _, port_raw = text.partition(":")
+        if not port_raw.isdigit():
+            return None
+        port = int(port_raw)
+    elif ":" in text:
+        # 裸 IPv6 地址（无端口）
+        host = text
+    else:
+        host = text
+
+    if not host or any(ch.isspace() for ch in host) or "/" in host:
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    return host, port
 
 
 class CommandHandler:
@@ -213,8 +264,8 @@ class CommandHandler:
             "📖 Minecraft 鹊桥互通 帮助",
             "",
             "mc help — 显示本帮助",
-            "mc status [编号] — 查看服务器状态",
-            "mc list [编号] — 查看在线玩家列表",
+            "mc status [编号|地址] — 查看服务器状态",
+            "mc list [编号|地址] — 查看在线玩家列表",
             "mc player [编号] <玩家ID> — 查看玩家信息",
             "mc cmd [编号] <指令> — 远程执行服务器指令（管理员）",
             "mc say [编号] <内容> — 向游戏内广播消息（管理员）",
@@ -223,6 +274,7 @@ class CommandHandler:
             "mc servers — 查看服务器与连接状态",
             "",
             "多台服务器时在指令前加数字编号选择目标（mc servers 可查看编号）；仅一台时可直接省略",
+            "地址形式可直连任意服务器查询（不经鹊桥，SLP 协议）：如 mc status 127.0.0.1:25565、mc list play.example.com",
         ]
         custom = self.custom_command_help()
         if custom:
@@ -264,6 +316,66 @@ class CommandHandler:
         return self.renderer.format_player_list(
             server_name, result, instance.config.display_label
         )
+
+    # ---- 直连 host:port 查询（不经鹊桥，SLP 协议直查任意服务器） ----
+
+    async def handle_direct_status(self, host: str, port: int) -> str:
+        """直连查询任意服务器状态（`mc status <地址>`，SLP ping）。
+
+        与配置内服务器的 `handle_status` 相互独立：不依赖鹊桥连接，
+        只返回 SLP 能提供的版本/人数/MOTD/延迟/在线玩家名样本。
+        """
+        result = await mc_ping(host, port)
+        if result is None:
+            return (
+                f"❌ 无法连接服务器 {host}:{port}\n"
+                f"请确认地址与端口正确（直连 SLP 查询，不走鹊桥）"
+            )
+
+        label = f"{host}:{port}"
+        lines = [
+            f"📊 服务器状态：{label}",
+            f"版本：{result.version_name or '未知'}",
+            f"在线：{result.online}/{result.max_players}",
+            f"延迟：{result.rtt_ms:.0f}ms",
+        ]
+        if result.description:
+            lines.append(f"描述：{result.description}")
+        names = result.player_names
+        if names:
+            shown = "、".join(names[:8])
+            more = f" 等 {len(names)} 人" if len(names) > 8 else ""
+            lines.append(f"玩家：{shown}{more}")
+        return "\n".join(lines)
+
+    async def handle_direct_list(self, host: str, port: int) -> str:
+        """直连查询任意服务器在线玩家（`mc list <地址>`，SLP ping）。
+
+        玩家名单仅来自 SLP ``players.sample``：免 RCON 即可得，但可能不全
+        或被服务端伪造/留空；sample 为空时按「仅人数」降级渲染，与配置内
+        服务器的取数语义保持一致。
+        """
+        result = await mc_ping(host, port)
+        if result is None:
+            return (
+                f"❌ 无法获取服务器 {host}:{port} 的玩家列表\n"
+                f"请确认地址与端口正确（直连 SLP 查询，不走鹊桥）"
+            )
+
+        if not result.player_names and result.online > 0:
+            players = PlayerListResult(
+                online=result.online,
+                max=result.max_players,
+                source="count",
+            )
+        else:
+            players = PlayerListResult(
+                names=result.player_names,
+                online=result.online,
+                max=result.max_players,
+                source="slp",
+            )
+        return self.renderer.format_player_list(f"{host}:{port}", players)
 
     async def handle_player(self, event: AstrMessageEvent, server_name: str, player_id: str) -> str:
         instance = self.server_manager.get(server_name)

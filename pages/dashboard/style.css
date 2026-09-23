@@ -358,6 +358,19 @@ body {
   color: #ffffff;
 }
 
+/* 危险操作（清除监控数据等不可恢复动作）：红色基调，与主按钮区分 */
+.btn-danger {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.4);
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: transparent;
+}
+
 .btn-sm {
   padding: 5px 10px;
   font-size: 12px;
@@ -555,13 +568,14 @@ body {
 
 .layout-main {
   /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控（各占一半，
-     紧贴排列），第 3 行终端通栏。行内 grid item 默认 stretch → 两面板
-     严格等高（顶部/底部都对齐） */
+     紧贴排列），第 3 行终端通栏。align-items: start → 服务器面板按内容
+     自然高度排布（玩家进出时如实变高）；监控面板由 JS 显式 height 跟随
+     服务器面板（双向等高、底部对齐），见 app.js syncMonitorPanelHeight */
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-rows: auto auto auto;
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .servers-panel {
@@ -587,8 +601,8 @@ body {
 .servers-container {
   display: grid;
   /* auto-fit + 1fr：多台服务器横向并排、平分面板宽度（占满一排），
-     不留未填充的空列；flex 填满面板剩余高度 → 卡片随面板纵向拉伸，
-     与右侧性能监控面板等高（align-items 默认 stretch 确保卡片填满行高） */
+     不留未填充的空列；面板高度由卡片内容自然决定（align-items: start
+     不拉伸），卡片不再被右侧监控面板撑高 */
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   flex: 1 1 auto;
   gap: 20px;
@@ -1181,8 +1195,9 @@ body {
 .monitor-panel {
   grid-column: 2;
   grid-row: 2;
-  /* 高度由 grid 行 stretch 保证与左侧服务器面板严格等高（见 .layout-main）；
-     内部 flex 列布局：图表区吃掉剩余空间，面板底部无空白 */
+  /* 高度由 JS 与左侧服务器面板双向等高钳制（固定 height，见 app.js
+     syncMonitorPanelHeight）；内部 flex 列布局：图表区吃掉剩余空间，
+     面板底部无空白 */
   display: flex;
   flex-direction: column;
   overflow-y: auto;

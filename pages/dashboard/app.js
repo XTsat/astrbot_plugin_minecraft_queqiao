@@ -98,6 +98,10 @@ class DashboardApp {
     this.realtimeActive = false;
     this.realtimeTimer = null;
     this.realtimeInterval = 5;
+    // 实时链代次标记：每次 startRealtime/stopRealtime 递增；进行中的刷新
+    // await 完成后比较 round，不匹配即自然消亡——任何断链后重新切实时
+    // 按钮必启动新链，绝不因 realtimeActive 残留哑火
+    this._realtimeRound = 0;
     // 自动刷新轮询间隔（秒）：后端设置持久化（默认 10，10~3600）
     this.autoRefreshInterval = 10;
     this.chartState = null; // { canvas, opts } 供 resize/hover 重算
@@ -106,9 +110,10 @@ class DashboardApp {
     // 互通终端自动滚动：开启时新消息自动滚到底部；关闭时停在当前位置
     // 阅读历史（保持关闭，直到再次点击按钮）
     this.terminalAutoscroll = true;
-    // 互通终端加载天数（面板级偏好，localStorage 持久化）：
-    // 0=全部保留分片，1~30=最近 N 天；默认 2（今天+昨天）
-    // 注：插件页面运行在受限 iframe，localStorage 可能被沙箱禁止，
+    // 互通终端加载天数（面板级偏好）：0=全部保留分片，1~30=最近 N 天；
+    // 默认 2（今天+昨天）。权威数据在后端 panel_prefs.json（长期存储），
+    // 此处 localStorage 仅作首屏启动缓存，init 会异步拉取后端值覆盖。
+    // 插件页面运行在受限 iframe，localStorage 可能被沙箱禁止，
     // 一律 try/catch 兜底，失败时退回默认值，绝不阻断页面启动
     let savedDays = 2;
     try {
@@ -146,12 +151,14 @@ class DashboardApp {
     // 打开页面首次加载同样强制探测一次 RCON（与手动刷新一致）；
     // 之后的自动轮询不强制，避免向未开启 RCON 的鹊桥端反复发请求刷报错
     await this.refreshAll(false, true);
-    // 自动刷新间隔（秒）取第一台服务器的设置（面板级偏好，后端持久化）
-    const firstMon = this.servers && this.servers[0] && this.servers[0].monitor;
-    if (firstMon && Number.isFinite(firstMon.auto_refresh_interval)) {
-      this.autoRefreshInterval =
-        Math.max(10, Math.min(3600, firstMon.auto_refresh_interval));
-    }
+    // 自动刷新间隔 / 实时显示频率：长期存储在后端（每台服务器 settings.json），
+    // 前端按「当前激活服务器 → 第一台」读取；切换服务器视图时重新同步
+    // （activateServerTab）。此前用 localStorage 记录最后保存值，但受限
+    // iframe 沙箱可能禁止 localStorage、清缓存即丢——后端持久化才是真相
+    this.syncMonitorFreqFromBackend();
+    // 面板偏好（互通终端加载天数等）：权威数据在后端 panel_prefs.json，
+    // 异步拉取覆盖本地启动缓存（localStorage 仅加速首屏，以后端为准）
+    this.loadPanelPrefs();
     this.syncAutoRefreshLabel();
     // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；是否开启以开关为准
     this.setupAutoRefresh(
@@ -256,13 +263,25 @@ class DashboardApp {
     }
 
     try {
-      // 1. 获取服务器列表（包含附带的实时 status 与 players）
-      const serversData = await this.apiGet('servers', force ? { force: 1 } : {});
+      // 1. 获取服务器列表（带超时：后端/网络卡死时若 fetch 永不返回，
+      // isRefreshing 防重入锁会永久 true → 自动刷新与手动刷新双双哑火，
+      // 整页"静默冻住"——与实时模式此前的"fetch 挂起卡死链"同病）
+      const serversData = await Promise.race([
+        this.apiGet('servers', force ? { force: 1 } : {}),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('服务器列表请求超时')), 10000)
+        ),
+      ]);
       this.servers = serversData?.servers || [];
 
-      // 2. 获取统计数据
+      // 2. 获取统计数据（独立超时，失败不影响列表渲染）
       try {
-        this.stats = await this.apiGet('stats');
+        this.stats = await Promise.race([
+          this.apiGet('stats'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('统计请求超时')), 8000)
+          ),
+        ]);
       } catch (e) {
         console.warn('Failed to fetch stats:', e);
       }
@@ -301,6 +320,55 @@ class DashboardApp {
     const label = document.querySelector('.auto-refresh-toggle span');
     if (label) {
       label.textContent = `自动刷新 (${this.autoRefreshInterval}s)`;
+    }
+  }
+
+  // 自动刷新间隔 / 实时显示频率以后端设置（每台服务器 settings.json 持久化）
+  // 为准：当前激活服务器优先，全局视图回落第一台。此前曾用 localStorage
+  // 记录「最后保存值」，但受限 iframe 沙箱可能禁止 localStorage、清缓存即丢
+  syncMonitorFreqFromBackend() {
+    const server = this.activeServerObject() ||
+      (this.servers && this.servers[0]) || null;
+    const m = server && server.monitor;
+    if (m && Number.isFinite(m.auto_refresh_interval)) {
+      this.autoRefreshInterval =
+        Math.max(10, Math.min(3600, m.auto_refresh_interval));
+    }
+    if (m && Number.isFinite(m.realtime_interval)) {
+      this.realtimeInterval =
+        Math.max(1, Math.min(60, m.realtime_interval));
+    }
+    this.syncAutoRefreshLabel();
+  }
+
+  // 面板级偏好（互通终端加载天数等）：权威数据在后端 panel_prefs.json
+  // （长期存储），异步拉取并覆盖本地启动缓存；失败时保留现有值不阻断
+  async loadPanelPrefs() {
+    try {
+      const resp = await Promise.race([
+        this.apiGet('panel/prefs'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('面板偏好请求超时')), 5000)
+        ),
+      ]);
+      const prefs = (resp && resp.prefs) || {};
+      if (Number.isFinite(prefs.terminal_days) &&
+          prefs.terminal_days >= 0 && prefs.terminal_days <= 30) {
+        this.terminalDays = prefs.terminal_days;
+        // 已进入单服视图时按新天数重拉终端（内部已捕获异常）
+        const curKey = this.activeServerTab;
+        if (curKey && curKey !== 'all') {
+          const stream = this.ensureTerminalStream(curKey);
+          if (stream) {
+            stream.innerHTML = '';
+            stream.dataset.rendered = '0';
+            stream.dataset.lastDate = '';
+            this.loadTerminalLogs(curKey, stream);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('拉取面板偏好失败:', e);
     }
   }
 
@@ -412,6 +480,9 @@ class DashboardApp {
     const list = activeServer ? [activeServer] : this.servers;
     container.innerHTML = list.map(server => this.buildServerCardHtml(server)).join('');
     this.bindServerCardActions();
+    // 玩家进出/卡片高度变化后立即同步右侧监控面板高度（等一帧布局结算，
+    // 避免 innerHTML 重建后读到旧高度）
+    requestAnimationFrame(() => this.syncMonitorPanelHeight());
   }
 
   buildServerCardHtml(server) {
@@ -703,6 +774,9 @@ class DashboardApp {
       this.renderTerminal();
       this.renderMonitorPanel();
     }
+    // 自动刷新间隔/实时频率为每台服务器独立持久化的设置：切换视图后
+    // 重读该服（或回落第一台）的后端值，顶部按钮与状态行实时跟随
+    this.syncMonitorFreqFromBackend();
   }
 
   // 全局视图下对某台服务器执行操作时，切到该服视图以展示终端反馈
@@ -820,6 +894,8 @@ class DashboardApp {
     } catch (e) {
       console.warn('拉取终端日志失败:', e);
     }
+    // 追加完成后补滚一次（字体/布局稳定后 scrollHeight 才准确）
+    this.ensureTerminalScrolled();
   }
 
   // 获取（不存在则创建）某服务器对应的日志流容器
@@ -889,6 +965,18 @@ class DashboardApp {
     if (!this.terminalAutoscroll) return;
     const body = document.getElementById('terminal-body');
     if (body) body.scrollTop = body.scrollHeight;
+  }
+
+  // 确保首屏滚到真正的底部：append 循环里的同步滚动发生在等宽字体加
+  // 载/布局稳定之前，行高变化后 scrollHeight 会增长，需在稳定后再补滚。
+  // 双 rAF 等首帧布局，document.fonts.ready 等字体加载完成。
+  ensureTerminalScrolled() {
+    if (!this.terminalAutoscroll) return;
+    const scroll = () => this.scrollTerminalToBottom();
+    requestAnimationFrame(() => requestAnimationFrame(scroll));
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(scroll);
+    }
   }
 
   // 更新自动滚动按钮的 UI 状态
@@ -994,7 +1082,8 @@ class DashboardApp {
       metaHtml = `<span class="monitor-mini-meta">${m.sample_count ?? 0} 采样 · ${this.formatClock(latest.ts)}</span>`;
     } else {
       tpsHtml = '<span class="monitor-mini-badge">⚡ 采集中…</span>';
-      latHtml = '';
+      // 无采样数据（未连接/首次等待）时延迟徽章同样占位，保持摘要行结构稳定
+      latHtml = '<span class="monitor-mini-badge">📡 延迟 --</span>';
       metaHtml = m.last_error
         ? `<span class="monitor-mini-meta monitor-warning">⚠ ${escapeHtml(m.last_error)}</span>`
         : '<span class="monitor-mini-meta">等待首次采样…</span>';
@@ -1051,8 +1140,9 @@ class DashboardApp {
     // 打开页面时按「默认展示项」恢复子页面（HTML 初始为 TPS）
     this.setMonitorTab(this.monitorTab);
 
-    if (enabled) this.updateMonitorStatusLine(server);
-    // 右侧面板高度与左侧服务器面板动态同步（底部对齐）
+    if (this.realtimeActive) this._renderRealtimeStatus(server);
+    else if (enabled) this.updateMonitorStatusLine(server);
+    // 监控面板高度双向等高：与左侧服务器面板同高（服务器面板不被动拉伸）
     this.syncMonitorPanelHeight();
     if (this.monitorSeriesCache.has(server.server_name)) {
       this.renderMonitorCharts(
@@ -1149,14 +1239,23 @@ class DashboardApp {
     if (this.isMonitorLoading) return;
     this.isMonitorLoading = true;
     try {
-      // 实时模式：窗口 60 秒、10 秒桶（细粒度？实时曲线）；其余按小时窗口
+      // 实时模式：窗口 60 秒，桶宽跟随设置的采样频率（realtime_interval，
+      // 1~30 秒）——1s 频率 → 1s 桶 → 60 秒窗口 60 个点，曲线逐点滚动；
+      // 此前桶宽写死 10s，1s 采样被聚合进 10s 桶，曲线 10 秒才动一次
       const isRealtime = this.monitorRange === 'realtime';
-      const payload = await this.apiGet(
-        `monitor/${encodeURIComponent(serverName)}/series`,
-        isRealtime
-          ? { range: '1m', bucket: '10s' }
-          : { range: `${this.monitorRange}h` }
-      );
+      // 请求带超时保护：series 拉取挂起时不得卡死实时 tick 链（apiGet 的
+      // fetch 无超时，若不限制，个别慢响应会令实时模式停在某一轮）
+      const payload = await Promise.race([
+        this.apiGet(
+          `monitor/${encodeURIComponent(serverName)}/series`,
+          isRealtime
+            ? { range: '1m', bucket: `${Math.max(1, Math.min(30, this.realtimeInterval || 5))}s` }
+            : { range: `${this.monitorRange}h` }
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('监控数据请求超时')), 8000)
+        ),
+      ]);
       this.monitorSeriesCache.set(serverName, payload);
       // 拉取期间用户已切换视图，丢弃过期结果
       if (this.activeServerTab !== serverName) return;
@@ -1178,6 +1277,11 @@ class DashboardApp {
     this.renderMonitorSummary(payload, 'tps');
     this.renderMonitorSummary(payload, 'latency');
     const series = payload.series || {};
+    // 实时模式：x 轴窗口直接取**数据实际范围**（t0/t1 = 最小/最大桶）——
+    // 数据桶每秒 1 个、同秒合并后 59~60 桶，固定 60 格窗口永远比数据宽：
+    // 右端被「当前未完成秒」的桶顶死在右缘、左端空出起始秒（曲线整体
+    // 右移、最新点贴/冲出边缘）。数据范围窗口让曲线**铺满绘图区**，
+    // 左贴右贴无留白；数据每秒滚动时窗口同步跟随，等效实时滚动
     if (this.monitorTab !== 'latency') {
       const tpsCanvas = document.getElementById('monitor-chart-tps');
       if (tpsCanvas) {
@@ -1224,6 +1328,10 @@ class DashboardApp {
   formatTsLabel(ts, rangeHours) {
     const d = new Date(ts * 1000);
     const pad = n => String(n).padStart(2, '0');
+    // 短窗口（< 1 小时，实时模式 60 秒）：秒级刻度才跟得上逐秒滚动
+    if (rangeHours < 1) {
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
     if (rangeHours > 48) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
@@ -1276,11 +1384,16 @@ class DashboardApp {
     }
     if (yMin === yMax) yMax = yMin + 1;
 
-    // 时间范围（跨所有线）
+    // 时间范围（跨所有线）；fixedWindow 时 x 轴固定为该窗口（实时模式
+    // 滚动），窗口外的点坐标超出画布由 canvas 自动裁剪
     let t0 = Infinity, t1 = -Infinity;
-    for (const line of lines) {
-      t0 = Math.min(t0, line.points[0].ts);
-      t1 = Math.max(t1, line.points[line.points.length - 1].ts);
+    if (opts.fixedWindow) {
+      [t0, t1] = opts.fixedWindow;
+    } else {
+      for (const line of lines) {
+        t0 = Math.min(t0, line.points[0].ts);
+        t1 = Math.max(t1, line.points[line.points.length - 1].ts);
+      }
     }
     if (t1 <= t0) t1 = t0 + 1;
     const xAt = ts => pad.left + (ts - t0) / (t1 - t0) * plotW;
@@ -1315,8 +1428,15 @@ class DashboardApp {
       ctx.moveTo(xx, pad.top);
       ctx.lineTo(xx, H - pad.bottom);
       ctx.stroke();
+      const label = this.formatTsLabel(ts, opts.rangeHours || 24);
       ctx.fillStyle = textColor;
-      ctx.fillText(this.formatTsLabel(ts, opts.rangeHours || 24), xx, H - 8);
+      // 标签防裁剪：居中绘制，但左右边缘的标签（如最新时刻贴右缘）文本
+      // 超出画布会被切半——整体平移钳制到画布内
+      const labelW = ctx.measureText(label).width;
+      let lxx = xx;
+      if (lxx + labelW / 2 > W - 4) lxx = W - 4 - labelW / 2;
+      if (lxx - labelW / 2 < 2) lxx = 2 + labelW / 2;
+      ctx.fillText(label, lxx, H - 8);
     }
 
     // 各线：min~max 半透明带 + avg 折线 + 末端点
@@ -1479,6 +1599,7 @@ class DashboardApp {
     document.getElementById('ms-close')?.addEventListener('click', () => this.closeMonitorSettings());
     document.getElementById('ms-cancel')?.addEventListener('click', () => this.closeMonitorSettings());
     document.getElementById('ms-save')?.addEventListener('click', () => this.saveMonitorSettings());
+    document.getElementById('ms-clear-data')?.addEventListener('click', () => this.clearMonitorData());
     const overlay = document.getElementById('monitor-settings-modal');
     overlay?.addEventListener('click', (e) => {
       if (e.target === overlay) this.closeMonitorSettings();
@@ -1497,7 +1618,7 @@ class DashboardApp {
       this.hideChartTooltip();
     });
     // 高度随时跟随：任一面板尺寸变化（玩家列表/图表渲染/服务器卡增减）
-    // 都自动重新做等高钳制，避免异步渲染后只因一次同步就失效
+    // 都自动重新做监控面板等高钳制，避免异步渲染后只因一次同步就失效
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => this.syncMonitorPanelHeight());
       const sp = document.querySelector('.servers-panel');
@@ -1506,30 +1627,47 @@ class DashboardApp {
       if (mp) ro.observe(mp);
       this._panelResizeObserver = ro;
     }
+    // 玩家进出/卡片 innerHTML 重建等 DOM 变更即时触发跟随：MutationObserver
+    // 比尺寸变化更早感知（玩家 tag 增删可能发生在 ResizeObserver 结算前），
+    // 用 rAF 合并并等布局结算后读取真实高度
+    if (typeof MutationObserver !== 'undefined') {
+      const mo = new MutationObserver(() => {
+        if (this._panelSyncFrame) return;
+        this._panelSyncFrame = requestAnimationFrame(() => {
+          this._panelSyncFrame = 0;
+          this.syncMonitorPanelHeight();
+        });
+      });
+      const sc = document.getElementById('servers-container');
+      if (sc) mo.observe(sc, { childList: true, subtree: true });
+      this._panelMutationObserver = mo;
+    }
   }
 
-  // 左右面板等高：测量服务器面板与性能监控面板实际高度，取较大值，
-  // 同时给两边设 min-height 做「双向钳制」——无论内容是谁撑高，另一侧
-  // 都会被拉到同高、底部齐平；min-height（而非固定 height）保证内容
-  // 增加时面板能自然长高，下次钳制再跟上。
+  // 监控面板高度双向等高：面板高度跟随左侧服务器面板（服务器面板保持
+  // 内容自然高度；监控面板与之等高、底部对齐）。flex 列布局下图表区
+  // 吃掉剩余空间，监控内容超出时图表自动压缩，仍溢出则面板内滚动。
+  // 固定 height（而非 min-height）确保等高成立。
   syncMonitorPanelHeight() {
     const panel = document.getElementById('monitor-panel');
     const serversPanel = document.querySelector('.servers-panel');
     if (!panel || !serversPanel) return;
     if (window.innerWidth <= 900) {
-      // 单列布局：各面板自然高度，无需等高
+      // 单列布局：各面板自然高度，无需钳制
       panel.style.minHeight = '';
-      serversPanel.style.minHeight = '';
+      panel.style.height = '';
       return;
     }
     if (panel.classList.contains('hidden')) {
-      serversPanel.style.minHeight = '';
+      panel.style.minHeight = '';
+      panel.style.height = '';
       return;
     }
-    const h = Math.max(serversPanel.offsetHeight, panel.offsetHeight);
-    if (h > 0) {
-      if (serversPanel.style.minHeight !== h + 'px') serversPanel.style.minHeight = h + 'px';
-      if (panel.style.minHeight !== h + 'px') panel.style.minHeight = h + 'px';
+    // 双向等高：以左侧服务器面板高度为准（监控面板不再高于它）
+    const h = serversPanel.offsetHeight;
+    if (h > 0 && panel.style.height !== h + 'px') {
+      panel.style.minHeight = '';
+      panel.style.height = h + 'px';
     }
   }
 
@@ -1625,9 +1763,48 @@ class DashboardApp {
     document.getElementById('ms-auto-refresh').value =
       (m.auto_refresh_interval >= 10 && m.auto_refresh_interval <= 3600)
         ? m.auto_refresh_interval : 10;
-    // 互通终端加载天数：面板级偏好（localStorage），0=全部保留分片
+    // 互通终端加载天数：面板级偏好（后端 panel_prefs 长期存储 + localStorage 缓存），0=全部保留分片
     document.getElementById('ms-terminal-days').value = this.terminalDays;
+    // 清除按钮提示当前已采集条数，明确删除范围
+    const clearBtn = document.getElementById('ms-clear-data');
+    if (clearBtn) {
+      clearBtn.title =
+        `删除「${server.server_label || server.server_name}」已采集的 ${m.sample_count ?? 0} 条监控数据（不可恢复）`;
+    }
     document.getElementById('monitor-settings-modal').classList.remove('hidden');
+  }
+
+  // 清除当前服务器已采集的全部监控数据（设置弹窗「🗑 清除采集数据」）。
+  // 删除不可恢复：前端二次确认 + 后端返回删除条数，成功后整体刷新
+  async clearMonitorData() {
+    const server = this.activeServerObject();
+    if (!server) {
+      this.showToast('请先切换到具体服务器视图', 'error');
+      return;
+    }
+    const m = server.monitor || {};
+    const count = m.sample_count || 0;
+    const label = server.server_label || server.server_name;
+    if (!window.confirm(
+      `确定清除「${label}」已采集的全部 ${count} 条监控数据？\n` +
+      '此操作不可恢复（历史 TPS / 延迟曲线与统计将清空）；\n' +
+      '监控设置保留，采样任务会从零重新开始。'
+    )) return;
+    try {
+      const resp = await this.apiPost(
+        `monitor/${encodeURIComponent(server.server_name)}/clear`, {});
+      if (resp && resp.success) {
+        this.showToast(`已清除「${label}」${resp.removed ?? count} 条监控数据`, 'success');
+        this.monitorSeriesCache.delete(server.server_name);
+        // 关闭设置弹窗并整体刷新：卡片摘要 / 监控面板计数与曲线立即归零
+        this.closeMonitorSettings();
+        await this.refreshAll(true);
+      } else {
+        this.showToast('清除失败: ' + ((resp && resp.error) || '未知错误'), 'error');
+      }
+    } catch (e) {
+      this.showToast('清除失败: ' + (e.message || '网络错误'), 'error');
+    }
   }
 
   closeMonitorSettings() {
@@ -1699,16 +1876,24 @@ class DashboardApp {
           document.getElementById('auto-refresh-toggle')?.checked || false
         );
       }
+      // 自动刷新间隔 / 实时频率后端已按服务器持久化（settings.json），
+      // 无需 localStorage——刷新/换设备都以后端为准
       this.syncAutoRefreshLabel();
       // 互通终端加载天数：0=全部保留分片，1~30=最近 N 天；保存后立即重拉当前终端
       const terminalDays = parseInt(
         document.getElementById('ms-terminal-days').value, 10);
       if (Number.isFinite(terminalDays) && terminalDays >= 0 && terminalDays <= 30) {
         this.terminalDays = terminalDays;
+        // 长期存储在后端 panel_prefs.json（权威）；localStorage 仅作启动缓存
         try {
           localStorage.setItem('queqiao_terminal_days', String(terminalDays));
         } catch (e) {
           // 受限 iframe 下 localStorage 不可用时忽略（仅本次会话生效）
+        }
+        try {
+          await this.apiPost('panel/prefs', { terminal_days: terminalDays });
+        } catch (e) {
+          console.warn('保存面板偏好失败:', e);
         }
         const curKey = this.activeServerTab;
         if (curKey && curKey !== 'all') {
@@ -1748,20 +1933,36 @@ class DashboardApp {
     }
   }
 
-  // 实时模式：选中后每 5 秒对当前服务器连续采样一次，并刷新最近 60 秒曲线。
-  // 使用链式 setTimeout（上一轮完成后才排下一轮），采样慢也不会并发堆积；
-  // 状态行同时给出实时指示与最新采样值/错误，让连续采集过程可见
+  // 实时模式：采样循环由**后端常驻任务**驱动（与正常周期同架构，间隔取
+  // realtime_interval，1~60 秒——后端任务保证连续性，不依赖浏览器）。
+  // 前端只负责按同一频率拉取最近 60 秒 series 并重绘曲线；setInterval
+  // 周期刷新（拉取挂起时 loadMonitorSeries 自带 8s 超时与防重入锁，
+  // 下一轮照常执行，不堆积）
   startRealtime() {
-    if (this.realtimeActive) return;
+    // 代次递增：旧刷新链（若 await 挂起中）完成后因 round 不匹配自然退出，
+    // 新链从本轮开始——重切实时按钮永远能重启，避免哑火
+    this._realtimeRound = (this._realtimeRound || 0) + 1;
+    const round = this._realtimeRound;
+    // 刷新频率与后端采样频率一致（realtime_interval，1~60 秒）
+    const server = this.activeServerObject();
+    const ri = server && server.monitor && server.monitor.realtime_interval;
+    if (Number.isFinite(ri) && ri >= 1 && ri <= 60) {
+      this.realtimeInterval = ri;
+    }
     this.realtimeActive = true;
     this.monitorRange = 'realtime';
-    this.realtimeTick(); // 立即跑一轮，随后每轮结束自动排下一轮
+    this.realtimeRefresh(round); // 立即刷一轮
+    this.realtimeTimer = setInterval(
+      () => this.realtimeRefresh(round),
+      Math.max(500, this.realtimeInterval * 1000)
+    );
   }
 
   stopRealtime() {
     this.realtimeActive = false;
+    this._realtimeRound = (this._realtimeRound || 0) + 1; // 作废进行中的刷新链
     if (this.realtimeTimer) {
-      clearTimeout(this.realtimeTimer);
+      clearInterval(this.realtimeTimer);
       this.realtimeTimer = null;
     }
     // 恢复普通状态行（renderMonitorPanel 也会重刷，这里兜底切换 range 的场景）
@@ -1769,54 +1970,39 @@ class DashboardApp {
     if (server) this.updateMonitorStatusLine(server);
   }
 
-  async realtimeTick() {
-    // 先排下一轮：本 tick 无论快慢，完成后按配置频率（秒）必然续跑（除非被 stop）
-    if (this.realtimeActive) {
-      const delayMs = Math.max(1000, Math.min(60000, this.realtimeInterval || 5)) * 1000;
-      this.realtimeTimer = setTimeout(() => this.realtimeTick(), delayMs);
-    }
+  async realtimeRefresh(round = this._realtimeRound) {
+    if (round !== this._realtimeRound) return; // 已被 stop/重启，退出旧链
     const server = this.activeServerObject();
     if (!server || !(server.monitor && server.monitor.enabled)) {
-      // 当前无可采样的服务器（全局视图/监控关闭）：停止连续测试
+      // 当前无可刷新的服务器（全局视图/监控关闭）：停止实时展示
       if (this.realtimeActive) this.stopRealtime();
       return;
     }
-    try {
-      const resp = await this.apiPost(
-        `monitor/${encodeURIComponent(server.server_name)}/sample`, {});
-      const st = resp && resp.data && resp.data.status;
-      if (st) this._renderRealtimeStatus(server, st);
-      this.monitorSeriesCache.delete(server.server_name);
-      await this.loadMonitorSeries(server.server_name);
-    } catch (e) {
-      console.warn('实时采样失败:', e);
-      const line = document.getElementById('monitor-status-line');
-      if (line) {
-        line.innerHTML =
-          `<span class="monitor-err">⚠ 实时采样失败: ${escapeHtml(e.message || '网络错误')}</span>`;
-      }
-    }
+    this.monitorSeriesCache.delete(server.server_name);
+    await this.loadMonitorSeries(server.server_name); // 内部自带超时与 catch
+    if (round === this._realtimeRound) this._renderRealtimeStatus(server);
   }
 
-  // 实时模式状态行：🔴 指示 + 最近采样时间 + 最新 TPS/延迟（或错误）
-  _renderRealtimeStatus(server, st) {
+  // 实时模式状态行：🔴 指示 + 采样频率 + 最近采样时间（采样由后端任务
+  // 驱动，时间从最近一次 series 的最后点推断）
+  _renderRealtimeStatus(server) {
     const line = document.getElementById('monitor-status-line');
     if (!line) return;
     const parts = [];
     const freq = Math.max(1, Math.min(60, this.realtimeInterval || 5));
-    parts.push(`<span class="monitor-dot on"></span> 实时采集 每 ${freq} 秒一次`);
-    const ts = st.last_ts ? this.formatClock(st.last_ts) : '-';
-    if (st.last_error) {
-      const err = st.last_error;
-      const short = err.length > 28 ? err.slice(0, 28) + '…' : err;
-      parts.push(`最近采样 ${ts}`);
-      parts.push(`<span class="monitor-err" title="${escapeHtml(err)}">${escapeHtml(short)}</span>`);
-    } else {
-      parts.push(`最近采样 ${ts}`);
-      if (st.latest) {
-        if (st.latest.tps1 != null) parts.push(`TPS <b>${st.latest.tps1}</b>`);
-        if (st.latest.latency_ms != null) parts.push(`延迟 <b>${st.latest.latency_ms}ms</b>`);
+    parts.push(`<span class="monitor-dot on"></span> 实时采集（后端驱动）每 ${freq} 秒一次`);
+    if (server) {
+      const payload = this.monitorSeriesCache.get(server.server_name);
+      let lastTs = 0;
+      if (payload && payload.series) {
+        for (const key of Object.keys(payload.series)) {
+          const pts = (payload.series[key] && payload.series[key].points) || [];
+          if (pts.length && pts[pts.length - 1].ts > lastTs) {
+            lastTs = pts[pts.length - 1].ts;
+          }
+        }
       }
+      if (lastTs) parts.push(`最近采样 ${this.formatClock(lastTs)}`);
     }
     line.innerHTML = parts.join(' · ');
   }
