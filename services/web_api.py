@@ -16,6 +16,9 @@ from astrbot.api import logger
 from ..core.constants import PLUGIN_NAME
 from .metrics import MetricsCollector
 
+# 互通终端默认加载最近几天的分片（含当天）：避免一次拉取 30 天全量
+DEFAULT_TERMINAL_DAYS = 2
+
 try:
     from astrbot.api.web import error_response, json_response, request, stream_response
 except ImportError:
@@ -473,15 +476,40 @@ class WebApiController:
         return stream_response(_event_generator(), content_type="text/event-stream")
 
     async def get_terminal_logs(self) -> Any:
-        """获取某台服务器的持久化终端日志（旧 → 新）。"""
+        """获取某台服务器的持久化终端日志（旧 → 新）。
+
+        `days` 查询参数控制返回最近几天的分片：缺省默认 **2**（今天+昨天，
+        避免跨月/长历史一次性加载过多）；`0` 表示全部保留分片；正整数为
+        最近 N 天（含当天）。
+        """
         try:
             server_name = str(request.query.get("server", "")).strip()
         except (AttributeError, ValueError, TypeError):
             server_name = ""
         if not server_name:
             return error_response("缺少 server 参数", status_code=400)
-        logs = self.terminal_logs.get(server_name) if self.terminal_logs else []
-        return json_response({"server": server_name, "logs": logs})
+        raw_days = ""
+        try:
+            raw_days = str(request.query.get("days", "")).strip()
+        except (AttributeError, ValueError, TypeError):
+            raw_days = ""
+        if raw_days == "":
+            days: int | None = DEFAULT_TERMINAL_DAYS
+        else:
+            try:
+                days = int(raw_days)
+            except ValueError:
+                days = DEFAULT_TERMINAL_DAYS
+            if days < 0:
+                days = DEFAULT_TERMINAL_DAYS
+            # 0 表示全部保留分片；正整数取最近 N 天
+            days = days if days > 0 else None
+        logs = (
+            self.terminal_logs.get(server_name, days=days)
+            if self.terminal_logs
+            else []
+        )
+        return json_response({"server": server_name, "days": days, "logs": logs})
 
     async def clear_terminal_logs(self) -> Any:
         """清空某台服务器的持久化终端日志（仅「清屏」按钮调用）。"""

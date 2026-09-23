@@ -342,7 +342,8 @@ class MinecraftQueQiaoPlugin(Star):
         if config is None:
             return
 
-        # 记录事件指标与持久化终端日志（网页未打开期间同样记录）
+        # 记录事件指标与持久化终端日志（网页未打开期间同样记录）；
+        # 同时写入 AstrBot 主日志，便于在控制台直接观察互通动态
         if event.is_chat:
             self.metrics.record_event(
                 "chat",
@@ -352,6 +353,10 @@ class MinecraftQueQiaoPlugin(Star):
             )
             self.terminal_logs.append(
                 server_name, "chat", f"<{event.player_name}> {event.message}"
+            )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 游戏内聊天: "
+                f"<{event.player_name}> {event.message}"
             )
         elif event.is_join:
             self.metrics.record_event(
@@ -363,6 +368,7 @@ class MinecraftQueQiaoPlugin(Star):
             self.terminal_logs.append(
                 server_name, "join", f"玩家 {event.player_name} 加入了游戏"
             )
+            logger.info(f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} 加入了游戏")
         elif event.is_quit:
             self.metrics.record_event(
                 "quit",
@@ -372,6 +378,9 @@ class MinecraftQueQiaoPlugin(Star):
             )
             self.terminal_logs.append(
                 server_name, "quit", f"玩家 {event.player_name} 离开了游戏"
+            )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} 离开了游戏"
             )
         elif event.is_death:
             death_text = event.death.as_text() or "死亡"
@@ -383,6 +392,9 @@ class MinecraftQueQiaoPlugin(Star):
             )
             self.terminal_logs.append(
                 server_name, "death", f"玩家 {event.player_name} {death_text}"
+            )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} {death_text}"
             )
         elif event.is_achievement:
             ach_text = event.achievement.as_text() or "达成成就"
@@ -397,6 +409,10 @@ class MinecraftQueQiaoPlugin(Star):
                 "achievement",
                 f"玩家 {event.player_name} 达成了成就 {ach_text}",
             )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} "
+                f"达成了成就 {ach_text}"
+            )
         elif event.is_command:
             self.metrics.record_event(
                 "command",
@@ -406,6 +422,10 @@ class MinecraftQueQiaoPlugin(Star):
             )
             self.terminal_logs.append(
                 server_name, "command", f"<{event.player_name}> 执行指令: {event.command}"
+            )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} "
+                f"执行指令: {event.command}"
             )
 
         # AI 与互通互斥：命中 AI 前缀即交给 LLM，不再转发到会话
@@ -711,8 +731,9 @@ class MinecraftQueQiaoPlugin(Star):
 
             instance = self.server_manager.get(server_name)
             if instance is None or not instance.connected:
-                logger.debug(
-                    f"[{PLUGIN_NAME}][{server_name}] 服务器未连接，跳过该消息的转发"
+                logger.warning(
+                    f"[{PLUGIN_NAME}][{server_name}] 服务器未连接，"
+                    f"跳过该消息的转发: {text[:60]}"
                 )
                 continue
 
@@ -771,25 +792,41 @@ class MinecraftQueQiaoPlugin(Star):
                 display_name=config.server_label,
                 server_name=server_name,
             )
-            if await instance.client.broadcast(formatted, config.broadcast_color):
-                # 记录以防止该消息从游戏回传时形成回声。
-                # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
-                # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
-                self.message_bridge.mark_forwarded(server_name, content)
-                self.metrics.record_relay_to_mc(server_name)
-                relayed = True
-                if image_codes:
-                    self.metrics.record_image_relayed(len(image_codes))
-                    extra = (
-                        f"，另 {skipped_images} 张无公开 URL 已跳过"
-                        if skipped_images
-                        else ""
-                    )
-                    logger.info(
-                        f"[{PLUGIN_NAME}][{server_name}] 已转发 {len(image_codes)} "
-                        f"张图片到游戏内{extra}"
-                    )
-                # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
-                await self.message_bridge.mark_relayed(event, config)
+            sent = await instance.client.broadcast(formatted, config.broadcast_color)
+            if not sent:
+                logger.warning(
+                    f"[{PLUGIN_NAME}][{server_name}] 群消息转发到游戏失败: "
+                    f"[{config.platform_display_name(platform)}]{sender}: {message[:60]}"
+                )
+                continue
+            # 记录以防止该消息从游戏回传时形成回声。
+            # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
+            # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
+            self.message_bridge.mark_forwarded(server_name, content)
+            self.metrics.record_relay_to_mc(server_name)
+            relayed = True
+            # QQ → 游戏方向的转发同时写入互通终端，与游戏事件同流展示
+            self.terminal_logs.append(
+                server_name,
+                "qq_chat",
+                f"[{config.platform_display_name(platform)}]{sender}: {message}",
+            )
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 群消息 → 游戏: "
+                f"[{config.platform_display_name(platform)}]{sender}: {message}"
+            )
+            if image_codes:
+                self.metrics.record_image_relayed(len(image_codes))
+                extra = (
+                    f"，另 {skipped_images} 张无公开 URL 已跳过"
+                    if skipped_images
+                    else ""
+                )
+                logger.info(
+                    f"[{PLUGIN_NAME}][{server_name}] 已转发 {len(image_codes)} "
+                    f"张图片到游戏内{extra}"
+                )
+            # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
+            await self.message_bridge.mark_relayed(event, config)
 
         return relayed

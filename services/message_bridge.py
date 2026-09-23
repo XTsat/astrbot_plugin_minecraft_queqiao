@@ -443,9 +443,16 @@ class MessageBridge:
         if not content and not images:
             return False
 
+        sent_count = 0
         for umo in targets:
-            await self._send(umo, content, images)
-        return True
+            if await self._send(umo, content, images):
+                sent_count += 1
+        if sent_count:
+            logger.info(
+                f"[{PLUGIN_NAME}][{server_name}] 游戏消息 → QQ: {content} "
+                f"(已发送 {sent_count}/{len(targets)} 个会话)"
+            )
+        return sent_count > 0
 
     async def _send(self, umo: str, content: str, images: list | None = None) -> bool:
         """向指定会话发送消息（文本 + 可选图片组件）。"""

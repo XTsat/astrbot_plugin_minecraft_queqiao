@@ -142,7 +142,11 @@
     <section class="terminal-panel hidden" id="terminal-panel">
       <div class="terminal-header">
         <div class="terminal-title" id="terminal-title">互通终端</div>
-        <button id="terminal-clear" class="btn btn-sm" title="清空当前终端输出">清屏</button>
+        <div class="terminal-actions">
+          <button id="terminal-autoscroll" class="btn btn-sm active" title="新消息自动滚动到底部；点击暂停">📌 自动滚动</button>
+          <button id="terminal-refresh" class="btn btn-sm" title="重新拉取终端日志">↻ 刷新</button>
+          <button id="terminal-clear" class="btn btn-sm" title="清空当前终端输出">清屏</button>
+        </div>
       </div>
       <div class="terminal-body" id="terminal-body"></div>
       <div class="terminal-input-row">
@@ -206,6 +210,13 @@
             <input type="number" id="ms-auto-refresh" min="10" max="3600" step="1" value="10" />
           </span>
           <span class="modal-row-hint">勾选仪表盘「自动刷新」后每 N 秒拉取一次卡片状态（10～3600，默认 10）</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">互通终端加载天数</span>
+          <span class="modal-row-control">
+            <input type="number" id="ms-terminal-days" min="0" max="30" step="1" value="2" />
+          </span>
+          <span class="modal-row-hint">互通终端展示最近几天的日志（1～30，0=全部保留分片，默认 2：今天+昨天）</span>
         </label>
         <label class="modal-row">
           <span class="modal-row-label">数据保留（天）</span>

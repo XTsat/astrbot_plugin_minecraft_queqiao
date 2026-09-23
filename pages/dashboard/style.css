@@ -909,6 +909,21 @@ body {
   text-overflow: ellipsis;
 }
 
+.terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 终端工具栏开关（如「📌 跟随」）的激活态高亮 */
+.terminal-actions .btn.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+}
+
 .terminal-stream {
   display: none;
 }
@@ -932,6 +947,17 @@ body {
   align-items: baseline;
   gap: 8px;
   padding: 2px 0;
+}
+
+/* 跨天日期分割线：居中弱化，直观区分不同分片 */
+.terminal-date-divider {
+  text-align: center;
+  color: var(--terminal-muted);
+  font-size: 11px;
+  letter-spacing: 2px;
+  padding: 8px 0 4px;
+  user-select: none;
+  opacity: 0.85;
 }
 
 .terminal-time {

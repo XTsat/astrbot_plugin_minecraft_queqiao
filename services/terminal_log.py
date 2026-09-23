@@ -175,11 +175,18 @@ class TerminalLogStore:
                 del arr[: len(arr) - TERMINAL_LIMIT]
             self._write_file_locked(key, day)
 
-    def get(self, server_name: str) -> list[dict[str, str]]:
-        """获取某台服务器的全部日志（旧 → 新，跨分片按日期合并）。"""
+    def get(self, server_name: str, days: int | None = None) -> list[dict[str, str]]:
+        """获取某台服务器的日志（旧 → 新，跨分片按日期合并）。
+
+        `days` 为 None 时返回全部保留分片；为正整数时只返回**最近 N 天**
+        的分片（含当天），用于终端默认只展示最近几天的历史。
+        """
         with self._lock:
+            keys = sorted(self._cache)
+            if days is not None and days > 0:
+                keys = keys[-days:]
             out: list[dict[str, str]] = []
-            for key in sorted(self._cache):
+            for key in keys:
                 out.extend(self._cache[key].get(server_name, []))
             return out
 

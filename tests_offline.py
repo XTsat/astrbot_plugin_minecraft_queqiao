@@ -2966,6 +2966,14 @@ _logs_b = _tls_b.get("Server")
 assert _logs_b[0]["message"] == "昨天加入", "昨天分片在前"
 assert _logs_b[-1]["message"] == "line-309", "今天分片在后"
 
+# days 过滤：默认不传=全部分片；days=1 只含当天分片（昨天被排除）
+assert _tls_b.get("Server")[0]["message"] == "昨天加入", "不传 days 返回全部分片"
+assert _logs_b == _tls_b.get("Server", days=None), "days=None 等价全部分片"
+_logs_b_1d = _tls_b.get("Server", days=1)
+assert _logs_b_1d[0]["message"] == "line-10", "days=1 只含当天分片，昨天被排除"
+assert len(_logs_b_1d) == 300, len(_logs_b_1d)
+assert _tls_b.get("Server", days=0) == _logs_b, "days=0 等价全部分片"
+
 # 损坏分片容错：坏文件被忽略、不抛异常，其它分片不受影响
 (_tls_dir / "terminal_logs" / f"{_yesterday_key}.json").write_text(
     "{broken json", encoding="utf-8"

@@ -101,6 +101,23 @@ class DashboardApp {
     // 自动刷新轮询间隔（秒）：后端设置持久化（默认 10，10~3600）
     this.autoRefreshInterval = 10;
     this.chartState = null; // { canvas, opts } 供 resize/hover 重算
+    // 互通终端轮询句柄：单服务器视图下 4 秒增量拉取，切换视图时停止
+    this.terminalPollTimer = null;
+    // 互通终端自动滚动：开启时新消息自动滚到底部；关闭时停在当前位置
+    // 阅读历史（保持关闭，直到再次点击按钮）
+    this.terminalAutoscroll = true;
+    // 互通终端加载天数（面板级偏好，localStorage 持久化）：
+    // 0=全部保留分片，1~30=最近 N 天；默认 2（今天+昨天）
+    // 注：插件页面运行在受限 iframe，localStorage 可能被沙箱禁止，
+    // 一律 try/catch 兜底，失败时退回默认值，绝不阻断页面启动
+    let savedDays = 2;
+    try {
+      savedDays = parseInt(localStorage.getItem('queqiao_terminal_days') || '2', 10);
+    } catch (e) {
+      savedDays = 2;
+    }
+    this.terminalDays = (Number.isFinite(savedDays) && savedDays >= 0 && savedDays <= 30)
+      ? savedDays : 2;
   }
 
   async init() {
@@ -135,6 +152,7 @@ class DashboardApp {
       this.autoRefreshInterval =
         Math.max(10, Math.min(3600, firstMon.auto_refresh_interval));
     }
+    this.syncAutoRefreshLabel();
     // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；是否开启以开关为准
     this.setupAutoRefresh(
       document.getElementById('auto-refresh-toggle')?.checked || false
@@ -275,6 +293,14 @@ class DashboardApp {
     if (el) {
       const now = new Date();
       el.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    }
+  }
+
+  // 顶部「自动刷新 (Ns)」按钮文字与当前间隔保持同步
+  syncAutoRefreshLabel() {
+    const label = document.querySelector('.auto-refresh-toggle span');
+    if (label) {
+      label.textContent = `自动刷新 (${this.autoRefreshInterval}s)`;
     }
   }
 
@@ -699,8 +725,8 @@ class DashboardApp {
     return s ? (s.server_label || s.server_name) : name;
   }
 
-  // 渲染互通终端：全局视图整体隐藏；单服务器视图显示该服务器的日志流，
-  // 首次进入时从后端拉取持久化历史（网页未打开期间的事件也已记录）
+  // 渲染互通终端：全局视图整体隐藏；单服务器视图显示该服务器的日志流。
+  // 每次进入都做增量拉取并启动 4 秒轮询，新日志自动追加、实时可见
   async renderTerminal() {
     const panel = document.getElementById('terminal-panel');
     const key = this.activeServerTab;
@@ -709,7 +735,13 @@ class DashboardApp {
     if (panel) panel.classList.toggle('hidden', isAll);
     // 输入区可用性始终同步（全局视图无目标服务器，禁用输入）
     this.updateTerminalInputState();
-    if (isAll) return;
+    if (isAll) {
+      this.stopTerminalPolling();
+      return;
+    }
+
+    // 轮询只跟随当前视图服务器；切换视图时旧轮询自动停止
+    this.startTerminalPolling(key);
 
     const server = this.activeServerObject();
     const titleEl = document.getElementById('terminal-title');
@@ -722,25 +754,60 @@ class DashboardApp {
     document.querySelectorAll('.terminal-stream').forEach(s => {
       s.classList.toggle('active', s.id === `terminal-stream-${key}`);
     });
-    // 仅首次进入（流为空）时从后端拉取历史日志
-    if (stream.children.length === 0) {
-      await this.loadTerminalLogs(key, stream);
-    }
-    // 无任何历史时给出操作提示
+    // 增量拉取历史日志（网页未打开期间的事件也已记录）
+    await this.loadTerminalLogs(key, stream);
+    // 无任何历史时给出操作提示（提示行本身计入流，后续轮询不会重复打出）
     if (stream.children.length === 0) {
       this.terminalLog('system', key, '互通终端就绪 — 输入内容回车=广播，以 / 开头回车=执行指令');
     }
     this.updateTerminalInputState();
   }
 
-  // 从后端拉取某台服务器的持久化日志并渲染到流
+  // 互通终端轮询：固定 4 秒增量拉取（只读本地持久化日志，不打扰鹊桥）
+  startTerminalPolling(key) {
+    if (this.terminalPollTimer) {
+      clearInterval(this.terminalPollTimer);
+      this.terminalPollTimer = null;
+    }
+    this.terminalPollTimer = setInterval(() => {
+      const current = this.activeServerTab;
+      if (!current || current === 'all' || current !== key) {
+        this.stopTerminalPolling();
+        return;
+      }
+      this.loadTerminalLogs(key, this.ensureTerminalStream(key));
+    }, 4000);
+  }
+
+  stopTerminalPolling() {
+    if (this.terminalPollTimer) {
+      clearInterval(this.terminalPollTimer);
+      this.terminalPollTimer = null;
+    }
+  }
+
+  // 从后端拉取某台服务器的持久化日志，只追加尚未渲染的新条目。
+  // 请求带 5 秒超时保护：桥通道异常时降级跳过本次拉取，避免拖死整页刷新
   async loadTerminalLogs(key, stream) {
     try {
-      const res = await this.apiGet('terminal_logs', { server: key });
+      const res = await Promise.race([
+        this.apiGet('terminal_logs', { server: key, days: this.terminalDays }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('terminal_logs 请求超时')), 5000)
+        ),
+      ]);
       // 拉取期间用户已切换视图，丢弃过期结果
       if (this.activeServerTab !== key) return;
       const logs = res?.logs || [];
-      for (const entry of logs) {
+      let rendered = parseInt(stream.dataset.rendered || '0', 10);
+      // 后端被清屏（条目数回退）时重置渲染游标，避免新日志无法再追加
+      if (logs.length < rendered) {
+        stream.innerHTML = '';
+        stream.dataset.lastDate = '';
+        rendered = 0;
+      }
+      for (let i = rendered; i < logs.length; i++) {
+        const entry = logs[i];
         this.appendTerminalLine(
           stream,
           entry.type || 'system',
@@ -749,6 +816,7 @@ class DashboardApp {
           entry.time || '--:--:--'
         );
       }
+      stream.dataset.rendered = String(logs.length);
     } catch (e) {
       console.warn('拉取终端日志失败:', e);
     }
@@ -785,11 +853,23 @@ class DashboardApp {
     if (cBtn) cBtn.disabled = isAll;
   }
 
-  // 向指定日志流追加一行并滚动到底部（纯 DOM 操作）
+  // 向指定日志流追加一行（纯 DOM 操作）；跨天时先插入日期分割线，
+  // 自动滚动开启时滚到底部
   appendTerminalLine(stream, type, key, message, time) {
+    // 日期分割线：time 形如 "MM-DD HH:MM:SS"，取前 5 位作为分片日期；
+    // 与上一行日期不同（含首行）时插入「── MM-DD ──」
+    const datePart = (time || '').slice(0, 5);
+    const lastDate = stream.dataset.lastDate || '';
+    if (datePart && datePart !== lastDate) {
+      const divider = document.createElement('div');
+      divider.className = 'terminal-date-divider';
+      divider.textContent = `── ${datePart} ──`;
+      stream.appendChild(divider);
+      stream.dataset.lastDate = datePart;
+    }
     const tagMap = {
       broadcast: '📢', cmd: '⚡', out: '↳', error: '✖', system: 'ℹ',
-      chat: '💬', join: '🟢', quit: '🔴', death: '💀',
+      chat: '💬', qq_chat: '📲', join: '🟢', quit: '🔴', death: '💀',
       achievement: '🏆', command: '⌨',
     };
     const line = document.createElement('div');
@@ -801,7 +881,28 @@ class DashboardApp {
       `<span class="terminal-server">[${escapeHtml(this.terminalServerLabel(key))}]</span>` +
       `<span class="terminal-msg">${escapeHtml(message)}</span>`;
     stream.appendChild(line);
-    stream.scrollTop = stream.scrollHeight;
+    this.scrollTerminalToBottom();
+  }
+
+  // 终端滚动容器是 .terminal-body；自动滚动开启时滚到底部
+  scrollTerminalToBottom() {
+    if (!this.terminalAutoscroll) return;
+    const body = document.getElementById('terminal-body');
+    if (body) body.scrollTop = body.scrollHeight;
+  }
+
+  // 更新自动滚动按钮的 UI 状态
+  syncAutoscrollButton() {
+    const btn = document.getElementById('terminal-autoscroll');
+    if (!btn) return;
+    btn.classList.toggle('active', this.terminalAutoscroll);
+    if (this.terminalAutoscroll) {
+      btn.title = '新消息自动滚动到底部；点击暂停';
+      btn.textContent = '📌 自动滚动';
+    } else {
+      btn.title = '已暂停自动滚动；点击恢复';
+      btn.textContent = '📌 已暂停';
+    }
   }
 
   // 向对应服务器的日志流追加一行（即时反馈；持久化由后端负责）
@@ -913,18 +1014,31 @@ class DashboardApp {
   renderMonitorPanel() {
     const panel = document.getElementById('monitor-panel');
     const server = this.activeServerObject();
-    const enabled = !!server && !!(server.monitor && server.monitor.enabled);
-
-    if (panel) panel.classList.toggle('hidden', !enabled);
-    // 监控面板隐藏（全局视图/监控关闭）时，主布局退化为单列全宽，
-    // 服务器卡片不再被挤在左半列（否则会变细长）
+    // 面板可见性只跟随视图（全局视图隐藏）；监控禁用不隐藏面板——
+    // 否则面板内的「⚙ 设置」入口一并消失，无法再重新启用
+    const isAll = this.activeServerTab === 'all';
+    if (panel) panel.classList.toggle('hidden', isAll);
+    // 全局视图下主布局退化为单列全宽，服务器卡片不再被挤在左半列
     const layoutMain = document.querySelector('.layout-main');
-    if (layoutMain) layoutMain.classList.toggle('monitor-hidden', !enabled);
-    if (!enabled) {
-      // 全局视图/监控关闭：无采样目标，实时模式一并停止
+    if (layoutMain) layoutMain.classList.toggle('monitor-hidden', isAll);
+    if (!server || isAll) {
+      // 全局视图：无目标服务器，实时模式一并停止
       this._defaultTabServer = null;
       this.stopRealtime();
       return;
+    }
+
+    const enabled = !!(server.monitor && server.monitor.enabled);
+    // 监控停用：面板与图表**完整保留**（继续渲染历史数据），仅状态行提示
+    if (!enabled) {
+      this._defaultTabServer = null;
+      this.stopRealtime();
+      const statusLine = document.getElementById('monitor-status-line');
+      if (statusLine) {
+        statusLine.innerHTML =
+          '<span class="monitor-dot off"></span> 监控已停用 —— ' +
+          '点击右上角「⚙ 设置」可重新启用';
+      }
     }
 
     // 默认展示项来自后端设置（default_tab）：切换服务器时套用该服默认子页面
@@ -937,7 +1051,7 @@ class DashboardApp {
     // 打开页面时按「默认展示项」恢复子页面（HTML 初始为 TPS）
     this.setMonitorTab(this.monitorTab);
 
-    this.updateMonitorStatusLine(server);
+    if (enabled) this.updateMonitorStatusLine(server);
     // 右侧面板高度与左侧服务器面板动态同步（底部对齐）
     this.syncMonitorPanelHeight();
     if (this.monitorSeriesCache.has(server.server_name)) {
@@ -946,7 +1060,7 @@ class DashboardApp {
         this.monitorSeriesCache.get(server.server_name)
       );
     } else {
-      // 进入视图首次：拉取时间序列（含摘要）
+      // 进入视图首次：拉取时间序列（含摘要，含停用期间的历史数据）
       this.loadMonitorSeries(server.server_name);
     }
   }
@@ -1345,7 +1459,7 @@ class DashboardApp {
       this.stopRealtime();
       this.monitorRange = rangeSel.value;
       const server = this.activeServerObject();
-      if (!server || !(server.monitor && server.monitor.enabled)) return;
+      if (!server) return;
       this.monitorSeriesCache.delete(server.server_name);
       this.loadMonitorSeries(server.server_name);
     });
@@ -1436,11 +1550,39 @@ class DashboardApp {
     }
     document.getElementById('terminal-broadcast')?.addEventListener('click', () => this.sendBroadcast());
     document.getElementById('terminal-cmd')?.addEventListener('click', () => this.runCommand());
+    // 自动滚动开关：开启时新消息自动滚到底部，关闭时停在当前位置阅读历史。
+    // 关闭后仅当手动滚到**真正底部**（误差 ≤1px）才自动恢复；中途上滚
+    // 不会误触发
+    document.getElementById('terminal-autoscroll')?.addEventListener('click', () => {
+      this.terminalAutoscroll = !this.terminalAutoscroll;
+      this.syncAutoscrollButton();
+      if (this.terminalAutoscroll) this.scrollTerminalToBottom();
+    });
+    // 暂停状态下滚到真正底部 → 自动恢复自动滚动
+    const terminalBody = document.getElementById('terminal-body');
+    if (terminalBody) {
+      terminalBody.addEventListener('scroll', () => {
+        if (this.terminalAutoscroll) return;
+        const atBottom =
+          terminalBody.scrollHeight - terminalBody.scrollTop - terminalBody.clientHeight <= 1;
+        if (atBottom) {
+          this.terminalAutoscroll = true;
+          this.syncAutoscrollButton();
+        }
+      });
+    }
+    document.getElementById('terminal-refresh')?.addEventListener('click', async () => {
+      const key = this.activeServerTab;
+      if (!key || key === 'all') return;
+      await this.loadTerminalLogs(key, this.ensureTerminalStream(key));
+    });
     document.getElementById('terminal-clear')?.addEventListener('click', async () => {
       const key = this.activeServerTab;
       if (!key || key === 'all') return;
       const stream = this.ensureTerminalStream(key);
       stream.innerHTML = '';
+      stream.dataset.rendered = '0';
+      stream.dataset.lastDate = '';
       try {
         // 同步清除后端持久化日志，仅此操作会删除历史
         await this.apiPost('terminal_logs/clear', { server: key });
@@ -1483,6 +1625,8 @@ class DashboardApp {
     document.getElementById('ms-auto-refresh').value =
       (m.auto_refresh_interval >= 10 && m.auto_refresh_interval <= 3600)
         ? m.auto_refresh_interval : 10;
+    // 互通终端加载天数：面板级偏好（localStorage），0=全部保留分片
+    document.getElementById('ms-terminal-days').value = this.terminalDays;
     document.getElementById('monitor-settings-modal').classList.remove('hidden');
   }
 
@@ -1554,6 +1698,26 @@ class DashboardApp {
         this.setupAutoRefresh(
           document.getElementById('auto-refresh-toggle')?.checked || false
         );
+      }
+      this.syncAutoRefreshLabel();
+      // 互通终端加载天数：0=全部保留分片，1~30=最近 N 天；保存后立即重拉当前终端
+      const terminalDays = parseInt(
+        document.getElementById('ms-terminal-days').value, 10);
+      if (Number.isFinite(terminalDays) && terminalDays >= 0 && terminalDays <= 30) {
+        this.terminalDays = terminalDays;
+        try {
+          localStorage.setItem('queqiao_terminal_days', String(terminalDays));
+        } catch (e) {
+          // 受限 iframe 下 localStorage 不可用时忽略（仅本次会话生效）
+        }
+        const curKey = this.activeServerTab;
+        if (curKey && curKey !== 'all') {
+          const stream = this.ensureTerminalStream(curKey);
+          stream.innerHTML = '';
+          stream.dataset.rendered = '0';
+          stream.dataset.lastDate = '';
+          await this.loadTerminalLogs(curKey, stream);
+        }
       }
       this.closeMonitorSettings();
       this.showToast(`监控设置已保存：${enabled ? '已启用' : '已停用'}（间隔 ${resp?.settings?.interval ?? interval}s）`, 'success');
