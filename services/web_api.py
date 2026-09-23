@@ -22,9 +22,6 @@ DEFAULT_TERMINAL_DAYS = 2
 try:
     from astrbot.api.web import error_response, json_response, request, stream_response
 except ImportError:
-    import logging
-
-    _log = logging.getLogger(PLUGIN_NAME)
 
     def json_response(data: Any, status_code: int = 200) -> Any:
         return {"data": data, "status_code": status_code}

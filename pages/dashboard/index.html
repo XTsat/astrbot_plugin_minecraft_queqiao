@@ -265,5 +265,22 @@
       </div>
     </div>
   </div>
+  <!-- 通用二次确认弹窗：页面运行在受限 iframe，window.confirm 会被浏览器静默
+       拦截返回 false（无 modals 权限），故用页面内自绘对话框替代 -->
+  <div class="modal-overlay hidden" id="confirm-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title" id="cf-title">确认操作</span>
+        <button class="modal-close" id="cf-close" title="取消">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="confirm-body" id="cf-message"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="cf-cancel">取消</button>
+        <button class="btn btn-danger btn-sm" id="cf-ok">确定</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

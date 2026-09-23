@@ -1604,8 +1604,18 @@ class DashboardApp {
     overlay?.addEventListener('click', (e) => {
       if (e.target === overlay) this.closeMonitorSettings();
     });
+    // 通用二次确认弹窗：✕ / 取消 / 点击遮罩均视为取消
+    const confirmOverlay = document.getElementById('confirm-modal');
+    confirmOverlay?.addEventListener('click', (e) => {
+      if (e.target === confirmOverlay) this.confirmDialogDismiss(false);
+    });
+    document.getElementById('cf-close')?.addEventListener('click', () => this.confirmDialogDismiss(false));
+    document.getElementById('cf-cancel')?.addEventListener('click', () => this.confirmDialogDismiss(false));
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.isMonitorSettingsOpen()) this.closeMonitorSettings();
+      if (e.key !== 'Escape') return;
+      // 确认弹窗叠在设置弹窗之上，Esc 优先关闭确认弹窗
+      if (this._confirmWaiter) this.confirmDialogDismiss(false);
+      else if (this.isMonitorSettingsOpen()) this.closeMonitorSettings();
     });
     // hover 提示与窗口缩放重绘
     document.querySelectorAll('.monitor-chart-wrap').forEach(wrap => {
@@ -1774,6 +1784,35 @@ class DashboardApp {
     document.getElementById('monitor-settings-modal').classList.remove('hidden');
   }
 
+  // 通用二次确认弹窗：页面运行在受限 iframe，window.confirm 会被浏览器静默
+  // 拦截返回 false（无 modals 权限），二次确认必须页面内自绘。返回 Promise；
+  // 同一时刻只允许一个待决确认，重复调用复用已打开的弹窗。
+  confirmDialog(title, message, confirmText = '确定') {
+    if (this._confirmWaiter) return this._confirmWaiter.promise;
+    // 不能在 new Promise 的 executor 内引用 promise 变量：此刻它处于暂时性
+    // 死区，求值即抛 ReferenceError。而 Promise 构造函数会捕获 executor 的
+    // 异常并把 promise 置为 rejected（不向外抛出），于是 _confirmWaiter 永远
+    // 保持 undefined —— 弹窗能显示，但点确定/取消时 confirmDialogDismiss 的
+    // 守卫 `if (!_confirmWaiter) return` 直接返回，按钮就成了死按钮。
+    let resolveFn;
+    const promise = new Promise((resolve) => { resolveFn = resolve; });
+    this._confirmWaiter = { promise, resolve: resolveFn };
+    document.getElementById('cf-title').textContent = title;
+    document.getElementById('cf-message').textContent = message;
+    const okBtn = document.getElementById('cf-ok');
+    okBtn.textContent = confirmText;
+    okBtn.onclick = () => this.confirmDialogDismiss(true);
+    document.getElementById('confirm-modal').classList.remove('hidden');
+    return promise;
+  }
+
+  confirmDialogDismiss(result) {
+    if (!this._confirmWaiter) return;
+    document.getElementById('confirm-modal').classList.add('hidden');
+    this._confirmWaiter.resolve(result);
+    this._confirmWaiter = null;
+  }
+
   // 清除当前服务器已采集的全部监控数据（设置弹窗「🗑 清除采集数据」）。
   // 删除不可恢复：前端二次确认 + 后端返回删除条数，成功后整体刷新
   async clearMonitorData() {
@@ -1785,11 +1824,13 @@ class DashboardApp {
     const m = server.monitor || {};
     const count = m.sample_count || 0;
     const label = server.server_label || server.server_name;
-    if (!window.confirm(
+    if (!(await this.confirmDialog(
+      '🗑 清除监控数据',
       `确定清除「${label}」已采集的全部 ${count} 条监控数据？\n` +
       '此操作不可恢复（历史 TPS / 延迟曲线与统计将清空）；\n' +
-      '监控设置保留，采样任务会从零重新开始。'
-    )) return;
+      '监控设置保留，采样任务会从零重新开始。',
+      '清除'
+    ))) return;
     try {
       const resp = await this.apiPost(
         `monitor/${encodeURIComponent(server.server_name)}/clear`, {});

@@ -1578,6 +1578,18 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* 通用二次确认弹窗：正文保留换行，标题栏与按钮行复用 modal 体系 */
+#confirm-modal .modal-card {
+  width: min(420px, 92vw);
+}
+
+.confirm-body {
+  white-space: pre-line;
+  line-height: 1.65;
+  color: var(--text-color);
+  padding: 4px 18px 14px;
+}
+
 @media (max-width: 480px) {
   .modal-row {
     grid-template-columns: 1fr;
