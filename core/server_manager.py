@@ -21,6 +21,7 @@ class ServerInstance:
         on_event=None,
         on_connect=None,
         on_disconnect=None,
+        on_reconnect=None,
     ) -> None:
         self.config = config
         self.server_name = config.server_name
@@ -71,6 +72,7 @@ class ServerInstance:
             on_event=_wrapped_on_event,
             on_connect=_wrapped_on_connect,
             on_disconnect=_wrapped_on_disconnect,
+            on_reconnect=on_reconnect,
         )
         self.rcon = RconClient(config)
         self._task: asyncio.Task | None = None
@@ -305,12 +307,14 @@ class ServerManager:
         on_event=None,
         on_connect=None,
         on_disconnect=None,
+        on_reconnect=None,
     ) -> ServerInstance:
         instance = ServerInstance(
             config,
             on_event=on_event,
             on_connect=on_connect,
             on_disconnect=on_disconnect,
+            on_reconnect=on_reconnect,
         )
         self._servers[config.server_name] = instance
         return instance

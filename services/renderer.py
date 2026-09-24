@@ -66,7 +66,7 @@ class InfoRenderer:
         if status_dict.get("memory_total"):
             lines.append(f"内存：{status_dict['memory_usage_text']}")
         if status.jvm_memory.total:
-            lines.append(f"JVM：{status.jvm_memory.heap_text}")
+            lines.append(f"JVM 堆：{status.jvm_memory.heap_detail_text}")
         if status_dict.get("memory_free"):
             def _mb(size: int) -> str:
                 return f"{size / 1024 / 1024:.0f}MB"

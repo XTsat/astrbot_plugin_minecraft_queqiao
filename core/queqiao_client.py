@@ -49,6 +49,11 @@ _SHARED_SERVERS: dict[tuple[str, int], "SharedReverseServer"] = {}
 _SHARED_LOCK = asyncio.Lock()
 
 
+def reverse_servers_snapshot() -> list[dict[str, Any]]:
+    """返回全部反向共享 WS 服务端的状态快照（只读，供 Web API 展示）。"""
+    return [shared.snapshot() for shared in _SHARED_SERVERS.values()]
+
+
 class QueQiaoTimeout(Exception):
     """API 请求已发出但超时未收到鹊桥响应（投递结果未知）。
 
@@ -101,6 +106,16 @@ class SharedReverseServer:
     @property
     def is_empty(self) -> bool:
         return not self.clients
+
+    def snapshot(self) -> dict[str, Any]:
+        """只读快照：反向共享服务端监听状态与挂载的服务器列表。"""
+        return {
+            "host": self.host,
+            "port": self.port,
+            "path": self.path,
+            "running": self._running,
+            "clients": sorted(self.clients.keys()),
+        }
 
     def register(self, server_name: str, client: "QueQiaoClient") -> None:
         self.clients[server_name] = client
@@ -209,18 +224,27 @@ class QueQiaoClient:
         on_event: Callable[[QueQiaoEvent], Awaitable[None]] | None = None,
         on_connect: Callable[[], Awaitable[None]] | None = None,
         on_disconnect: Callable[[str], Awaitable[None]] | None = None,
+        on_reconnect: Callable[[int, str], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self.server_name = config.server_name
         self.on_event = on_event
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        # 重连调度回调（attempt, stage）：stage 为「退避/低频/上限」，供观测
+        self.on_reconnect = on_reconnect
 
         self._ws: Any = None
         self._connected = False
         self._running = False
         self._closing = False
         self._retries = 0
+        # 连接层运行观测（只读，见 runtime_stats）：超时计数、最近重连阶段、
+        # 是否达上限、最近断开原因。全部为观测性数据，不改动连接/重连语义
+        self._api_timeouts = 0
+        self._last_reconnect_stage = ""
+        self._reconnect_exhausted = False
+        self._last_disconnect_reason = ""
         self._send_lock = asyncio.Lock()
         self._shared_server: SharedReverseServer | None = None
         self._client_gone = asyncio.Event()
@@ -233,6 +257,27 @@ class QueQiaoClient:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def runtime_stats(self) -> dict[str, Any]:
+        """连接层运行观测（只读，供 Web API / 面板展示）。
+
+        - retry_count：累计重连尝试次数（连接成功后清零）
+        - reconnect_stage：最近一次重连阶段（退避/低频；从未重连为空串）
+        - reconnect_exhausted：已达 max_reconnect 上限，停止重连
+        - pending_api_calls：未决 API 请求数（断开未清 = 挂起泄漏信号）
+        - api_timeouts：API 响应超时累计（超时 ≠ 失败，禁止据此重发）
+        - last_disconnect_reason：最近一次断开原因（致命错误可据此判断）
+        """
+        return {
+            "connected": self._connected,
+            "retry_count": self._retries,
+            "reconnect_stage": self._last_reconnect_stage,
+            "reconnect_exhausted": self._reconnect_exhausted,
+            "pending_api_calls": len(self._pending),
+            "api_timeouts": self._api_timeouts,
+            "last_disconnect_reason": self._last_disconnect_reason,
+        }
 
     # ---- 生命周期 ----
 
@@ -319,9 +364,11 @@ class QueQiaoClient:
                 self._ws = None
                 if self._connected:
                     self._connected = False
+                    reason = "鹊桥连接已断开"
+                    self._last_disconnect_reason = reason
                     if self.on_disconnect:
                         with contextlib.suppress(Exception):
-                            await self.on_disconnect("鹊桥连接已断开")
+                            await self.on_disconnect(reason)
             self._fail_pending("连接已断开")
             self._client_gone.set()
 
@@ -340,9 +387,11 @@ class QueQiaoClient:
     async def _on_lost(self, exc: Exception) -> None:
         was_connected = self._connected
         self._connected = False
+        reason = str(exc)
+        self._last_disconnect_reason = reason
         if was_connected and self.on_disconnect:
             with contextlib.suppress(Exception):
-                await self.on_disconnect(str(exc))
+                await self.on_disconnect(reason)
         self._fail_pending("连接已断开")
 
     def _should_retry(self, exc: Exception) -> bool:
@@ -361,6 +410,7 @@ class QueQiaoClient:
             return status not in FATAL_HTTP_STATUS
 
         if self.config.max_reconnect and self._retries >= self.config.max_reconnect:
+            self._reconnect_exhausted = True
             logger.error(
                 f"[{PLUGIN_NAME}][{self.server_name}] 重连次数已达上限 "
                 f"({self.config.max_reconnect})，停止重连"
@@ -389,12 +439,20 @@ class QueQiaoClient:
         self._retries += 1
         if self.config.max_reconnect and self._retries > self.config.max_reconnect:
             self._running = False
+            self._reconnect_exhausted = True
+            if self.on_reconnect:
+                with contextlib.suppress(Exception):
+                    await self.on_reconnect(self._retries, "上限")
             return
         wait, stage = self._reconnect_wait(self._retries, self.config)
+        self._last_reconnect_stage = stage
         logger.warning(
             f"[{PLUGIN_NAME}][{self.server_name}] {stage}重试：{wait} 秒后重连 "
             f"(第 {self._retries} 次)"
         )
+        if self.on_reconnect:
+            with contextlib.suppress(Exception):
+                await self.on_reconnect(self._retries, stage)
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.sleep(wait)
 
@@ -544,6 +602,7 @@ class QueQiaoClient:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending.pop(echo, None)
+            self._api_timeouts += 1
             logger.warning(
                 f"[{PLUGIN_NAME}][{self.server_name}] API {api} 响应超时"
                 "（请求可能已投递，勿据此重发）"

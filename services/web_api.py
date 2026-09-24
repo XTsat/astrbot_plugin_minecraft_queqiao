@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from astrbot.api import logger
 
 from ..core.constants import PLUGIN_NAME
+from ..core.queqiao_client import reverse_servers_snapshot
 from .host_mem import correct_physical_memory
 from .metrics import MetricsCollector
 
@@ -124,6 +125,7 @@ class WebApiController:
             ("/terminal_logs", self.get_terminal_logs, ["GET"], "获取某台服务器的持久化终端日志"),
             ("/terminal_logs/clear", self.clear_terminal_logs, ["POST"], "清空某台服务器的持久化终端日志"),
             ("/image_bed/status", self.get_image_bed_status, ["GET"], "获取图床服务状态"),
+            ("/reverse/servers", self.get_reverse_servers, ["GET"], "反向共享 WS 服务端状态"),
             ("/config", self.get_config_overview, ["GET"], "获取插件配置概览"),
             ("/panel/prefs", self.get_panel_prefs, ["GET"], "获取面板级偏好（长期存储）"),
             ("/panel/prefs", self.set_panel_prefs, ["POST"], "保存面板级偏好（长期存储）"),
@@ -183,6 +185,17 @@ class WebApiController:
         all_instances = self.server_manager.all()
         data["total_servers"] = len(all_instances)
         data["connected_servers"] = sum(1 for inst in all_instances if inst.connected)
+        # 连接层汇总：正在重试（断线且重连未达上限）/ 已放弃（达上限停止）
+        reconnecting = 0
+        exhausted = 0
+        for inst in all_instances:
+            stats = inst.client.runtime_stats
+            if stats["reconnect_exhausted"]:
+                exhausted += 1
+            elif not inst.connected and stats["retry_count"] > 0:
+                reconnecting += 1
+        data["reconnecting_servers"] = reconnecting
+        data["exhausted_servers"] = exhausted
         return json_response(data)
 
     async def get_servers(self) -> Any:
@@ -258,6 +271,8 @@ class WebApiController:
                     # 单服务器视图用：本次连接持续秒数与该服累计互通事件数
                     "connected_seconds": instance.connected_seconds if instance else 0,
                     "events_total": self.metrics.get_server_event_count(server_name),
+                    # 连接层运行观测：重连次数/阶段/是否达上限/未决请求/超时计数/断开原因
+                    "client": instance.client.runtime_stats if instance else None,
                     "rcon_fallback_enabled": config.rcon_fallback_enabled,
                     "rcon_connected": direct_rcon_connected,
                     "rcon_channels": rcon_channels,
@@ -572,6 +587,15 @@ class WebApiController:
             }
         )
 
+    async def get_reverse_servers(self) -> Any:
+        """获取反向模式下共享 WS 服务端的监听状态与挂载服务器列表。
+
+        反向模式同端口多服务器共享一个 WS Server（按 x-self-name 路由），
+        此处只读暴露 host/port/path/running 与挂载的 server_name 列表，
+        便于排障端口占用、path 冲突与监听存活问题。
+        """
+        return json_response({"servers": reverse_servers_snapshot()})
+
     async def get_config_overview(self) -> Any:
         """获取插件配置概览（脱敏敏感字段）。"""
         servers = []
@@ -615,7 +639,8 @@ class WebApiController:
     async def set_panel_prefs(self) -> Any:
         """保存面板级偏好（合并写入并原子落盘）。
 
-        当前支持字段：``terminal_days``（互通终端加载天数，0~30，0=全部）。
+        当前支持字段：``terminal_days``（互通终端加载天数，0~30，0=全部）、
+        ``auto_refresh``（顶部自动刷新开关，布尔）。
         """
         if self.panel_prefs is None:
             return error_response("面板偏好存储未接入", status_code=503)
@@ -630,6 +655,14 @@ class WebApiController:
             except (TypeError, ValueError):
                 return error_response("terminal_days 需为数字", status_code=400)
             fields["terminal_days"] = max(0, min(30, value))
+        if "auto_refresh" in raw:
+            raw_ar = raw["auto_refresh"]
+            if isinstance(raw_ar, bool):
+                fields["auto_refresh"] = raw_ar
+            elif isinstance(raw_ar, str) and raw_ar.strip().lower() in ("true", "false"):
+                fields["auto_refresh"] = raw_ar.strip().lower() == "true"
+            else:
+                return error_response("auto_refresh 需为布尔值", status_code=400)
         if not fields:
             return json_response({"prefs": self.panel_prefs.all()})
         self.panel_prefs.update(fields)

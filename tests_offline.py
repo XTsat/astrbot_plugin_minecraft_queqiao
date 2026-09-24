@@ -2704,9 +2704,16 @@ _jvm34 = _sd34["jvm_memory"]
 assert _jvm34["total"] == 486539264 and _jvm34["max"] == 8573157376
 assert "372.5MB / 8176.0MB" in _jvm34["heap_text"], _jvm34["heap_text"]
 assert abs(_jvm34["heap_percentage"] - 4.56) < 0.01, _jvm34["heap_percentage"]
+# 三段式：已用 / 已申请(committed) / 上限(max)，百分比 used/max
+assert (
+    "372MB 已用 / 464MB 已申请 / 8176MB 上限 (4.6%)"
+    in _jvm34["heap_detail_text"]
+), _jvm34["heap_detail_text"]
+assert "372.5MB / 464.0MB" in _jvm34["usage_text"], _jvm34["usage_text"]
 # 缺省/畸形输入不抛异常，扩展字段保持空值
 _ss34_empty = _SS34.from_dict("not-a-dict")
 assert _ss34_empty.to_dict()["jvm_memory"]["heap_text"] == "未知"
+assert _ss34_empty.to_dict()["jvm_memory"]["heap_detail_text"] == "未知"
 # 键存在但值为 null → None（区别于明确 false/0/-1）
 assert _SS34.from_dict({"server_list_ping": {"available": None}}).slp_available is None
 assert _SS34.from_dict({"server_list_ping": {"available": False}}).slp_available is False
@@ -2720,7 +2727,7 @@ _host_mem34 = {
     "MemAvailable": _ss34_full.memory_total - 2 * 1024 ** 3,
 }
 _fmt34 = _IR34.format_status("SrvForge", _ss34_full, host_mem=_host_mem34)
-assert "JVM：372.5MB / 8176.0MB" in _fmt34, _fmt34
+assert "JVM 堆：372MB 已用 / 464MB 已申请 / 8176MB 上限 (4.6%)" in _fmt34, _fmt34
 assert "进程" not in _fmt34, f"process_load=-1 应被过滤: {_fmt34}"
 assert "系统 0.00" in _fmt34, _fmt34
 # 修正后物理内存 = 2G used / 31.9G total (6.3%)，空闲 = MemAvailable（30643MB）
@@ -2733,7 +2740,7 @@ _fmt34_remote = _IR34.format_status(
 )
 assert "内存：" not in _fmt34_remote, f"跨机不应展示物理内存: {_fmt34_remote}"
 assert "空闲：" not in _fmt34_remote, _fmt34_remote
-assert "JVM：372.5MB / 8176.0MB" in _fmt34_remote, _fmt34_remote
+assert "JVM 堆：372MB 已用 / 464MB 已申请 / 8176MB 上限 (4.6%)" in _fmt34_remote, _fmt34_remote
 
 # (a4) correct_physical_memory 单元断言：同机修正 / 跨机清零 / 无数据不动
 from astrbot_plugin_minecraft_queqiao.services import host_mem as _hm34
@@ -2844,7 +2851,7 @@ _wac34 = _WAC34(
     terminal_logs=_tls34,
 )
 _wac34.register_routes()
-assert len(_mock_ctx34.routes) == 18, f"注册路由数不符: {len(_mock_ctx34.routes)}"
+assert len(_mock_ctx34.routes) == 19, f"注册路由数不符: {len(_mock_ctx34.routes)}"
 _route_paths = [r[0] for r in _mock_ctx34.routes]
 assert "/astrbot_plugin_minecraft_queqiao/servers" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/stats" in _route_paths
@@ -3613,7 +3620,7 @@ _ctx35 = _MockCtx35()
 _wac35 = _WAC35(_ctx35, _sm35, None, None, None,
                 {"Srv": _cfg35_on, "Srv2": _SC35.from_dict({})}, None, _col35)
 _wac35.register_routes()
-assert len(_ctx35.routes) == 23, f"监控注入后应注册 23 条路由, 实际 {len(_ctx35.routes)}"
+assert len(_ctx35.routes) == 24, f"监控注入后应注册 24 条路由, 实际 {len(_ctx35.routes)}"
 _rp35 = [r[0] for r in _ctx35.routes]
 assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
@@ -3995,10 +4002,21 @@ async def _fake_json_prefs39_d(default=None): return {}
 _wa35.request.json = _fake_json_prefs39_d
 # 空字段：返回现有偏好不落盘
 assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["terminal_days"] == 30
+# auto_refresh：布尔落盘、字符串 true/false 解析、非法值拒绝
+async def _fake_json_prefs39_e(default=None): return {"auto_refresh": True}
+_wa35.request.json = _fake_json_prefs39_e
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["auto_refresh"] is True
+async def _fake_json_prefs39_f(default=None): return {"auto_refresh": "false"}
+_wa35.request.json = _fake_json_prefs39_f
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["auto_refresh"] is False
+async def _fake_json_prefs39_g(default=None): return {"auto_refresh": "yes"}
+_wa35.request.json = _fake_json_prefs39_g
+assert _asyncio35.run(_wac39.set_panel_prefs())["status_code"] == 400
 _wa35.request.json = _orig_json39
 # 重启后仍为最后一次合法值
 assert _PP39(_mdir39).get("terminal_days") == 30
-print("OK  存储落盘重启可读 / GET 合并写入 / terminal_days 钳制与非法拒绝 / 空字段不落盘")
+assert _PP39(_mdir39).get("auto_refresh") is False
+print("OK  存储落盘重启可读 / GET 合并写入 / terminal_days 钳制与非法拒绝 / auto_refresh 布尔与非法拒绝 / 空字段不落盘")
 
 print("\n=== 40. 清除监控采集数据（store.clear + Web API） ===")
 _mdir40 = pathlib.Path("/tmp/queqiao_test_monitor40")
@@ -4067,3 +4085,108 @@ assert _s41b["latency"]["summary"]["count"] == 30, "样本不足上限时不截�
 # 正常长窗口（24h、cap=86400）不受影响
 assert _col41.store.series("Srv", _base41 - 3600, 600, cap_seconds=86400)["latency"]["summary"]["count"] == 30
 print("OK  61→稳定60 / 不足上限不截断 / 长窗口cap不误伤")
+
+print("\n=== 42. 连接层运行观测（runtime_stats / 重连回调 / 超时计数 / API 暴露） ===")
+from astrbot_plugin_minecraft_queqiao.core.queqiao_client import (
+    QueQiaoClient as _QC42, QueQiaoTimeout as _QTO42,
+    SharedReverseServer as _SRS42, reverse_servers_snapshot as _rss42,
+)
+from astrbot_plugin_minecraft_queqiao.core.server_manager import ServerManager as _SM42
+from astrbot_plugin_minecraft_queqiao.services.metrics import MetricsCollector as _Metrics42
+
+# (a) runtime_stats 字段齐全且只读反映内部状态
+_cfg42 = _SC35.from_dict({"server": {"server_name": "Srv42", "ws_mode": "forward"},
+    "reconnect": {"max_reconnect": 3, "reconnect_interval": 1}})
+_qc42 = _QC42(_cfg42)
+_s42 = _qc42.runtime_stats
+assert _s42["connected"] is False and _s42["retry_count"] == 0
+assert _s42["reconnect_stage"] == "" and _s42["reconnect_exhausted"] is False
+assert _s42["pending_api_calls"] == 0 and _s42["api_timeouts"] == 0
+assert _s42["last_disconnect_reason"] == ""
+_qc42._retries = 5
+_qc42._last_reconnect_stage = "低频"
+_qc42._api_timeouts = 3
+_qc42._pending["echo-x"] = object()  # len 只看长度，类型无关
+_s42b = _qc42.runtime_stats
+assert _s42b["retry_count"] == 5 and _s42b["reconnect_stage"] == "低频"
+assert _s42b["pending_api_calls"] == 1 and _s42b["api_timeouts"] == 3
+
+# (b) _backoff 触发 on_reconnect：退避段（threshold=0 关闭低频）且记录阶段
+_ev42 = []
+async def _onrc42(attempt, stage):
+    _ev42.append((attempt, stage))
+async def _fake_sleep42(*a, **k):
+    return None
+_cfg42b = _SC35.from_dict({"server": {"server_name": "Srv42b", "ws_mode": "forward"},
+    "reconnect": {"reconnect_interval": 1, "low_frequency_threshold": 0}})
+_qc42b = _QC42(_cfg42b, on_reconnect=_onrc42)
+_qc42b._retries = 1
+_orig_sleep42 = asyncio.sleep
+asyncio.sleep = _fake_sleep42
+asyncio.run(_qc42b._backoff())
+assert _qc42b._retries == 2, f"退避段 retries 应 +1, 实际 {_qc42b._retries}"
+assert _ev42 == [(2, "退避")], _ev42
+assert _qc42b.runtime_stats["reconnect_stage"] == "退避"
+assert _qc42b.runtime_stats["reconnect_exhausted"] is False
+
+# (c) 达上限：max_reconnect=3，第 4 次停止并回调 stage=上限
+_qc42c = _QC42(_cfg42, on_reconnect=_onrc42)
+_qc42c._retries = 3
+asyncio.run(_qc42c._backoff())
+assert _qc42c._reconnect_exhausted is True and _qc42c._running is False
+assert _ev42[-1] == (4, "上限"), _ev42
+assert _qc42c.runtime_stats["reconnect_exhausted"] is True
+asyncio.sleep = _orig_sleep42
+
+# (d) call_api 超时 → api_timeouts+1 且仍抛 QueQiaoTimeout（禁止据此重发）
+_qc42d = _QC42(_cfg42)
+_qc42d._connected = True
+async def _fake_send42d(payload):
+    return True
+_qc42d._send = _fake_send42d
+_to42 = False
+try:
+    asyncio.run(_qc42d.call_api("broadcast", {"message": [{"text": "x"}]}, timeout=0.01))
+except _QTO42:
+    _to42 = True
+assert _to42, "超时应抛 QueQiaoTimeout（语义：禁止据此重发）"
+assert _qc42d.runtime_stats["api_timeouts"] == 1, "超时应累计 api_timeouts"
+assert _qc42d.runtime_stats["pending_api_calls"] == 0, "超时后未决请求应清理"
+
+# (e) Web API：/stats 重连汇总 + /servers 单服 client 观测字段
+_sm42 = _SM42()
+_sm42.add(_cfg42)  # Srv42：断线且重连中
+_inst42 = _sm42.get("Srv42")
+_inst42.client._retries = 2
+_inst42.client._last_reconnect_stage = "退避"
+_cfg42x = _SC35.from_dict({"server": {"server_name": "Srv42x", "ws_mode": "forward"},
+    "reconnect": {"max_reconnect": 1}})
+_sm42.add(_cfg42x)  # Srv42x：已达上限
+_inst42x = _sm42.get("Srv42x")
+_inst42x.client._reconnect_exhausted = True
+_m42 = _Metrics42()
+_wac42 = _WAC35(_ctx35, _sm42, None, None, _m42, {"Srv42": _cfg42}, None, None)
+_r42 = asyncio.run(_wac42.get_stats())
+assert _r42["data"]["total_servers"] == 2, _r42["data"]
+assert _r42["data"]["reconnecting_servers"] == 1, _r42["data"]
+assert _r42["data"]["exhausted_servers"] == 1, _r42["data"]
+_r42s = asyncio.run(_wac42.get_servers())
+_srv42s = [s for s in _r42s["data"]["servers"] if s["server_name"] == "Srv42"]
+assert len(_srv42s) == 1, _r42s["data"]
+assert _srv42s[0]["client"]["retry_count"] == 2
+assert _srv42s[0]["client"]["reconnect_stage"] == "退避"
+assert _srv42s[0]["client"]["reconnect_exhausted"] is False
+assert _srv42s[0]["client"]["api_timeouts"] == 0
+
+# (f) 反向共享 WS 服务端快照：单例 snapshot 与全局只读枚举
+assert _rss42() == [], "测试环境不应有反向共享服务端"
+_srs42 = _SRS42("127.0.0.1", 9999, "/mc/ws")
+_snap42 = _srs42.snapshot()
+assert _snap42 == {"host": "127.0.0.1", "port": 9999, "path": "/mc/ws",
+                   "running": False, "clients": []}, _snap42
+_srs42.register("B", object())
+_srs42.register("A", object())
+assert _srs42.snapshot()["clients"] == ["A", "B"], "clients 应排序"
+_r42r = asyncio.run(_wac42.get_reverse_servers())
+assert _r42r["data"]["servers"] == [], "Web API 反向快照应返回空列表"
+print("OK  runtime_stats 只读观测 / 退避与上限回调 / 超时计数且禁止重发 / Web API 汇总与反向快照")

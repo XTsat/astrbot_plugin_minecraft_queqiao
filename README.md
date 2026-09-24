@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.5-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.6-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -14,7 +14,7 @@
 - **图片互通**：群消息图片转发进游戏（需玩家安装 [ChatImage](https://github.com/kitUIN/ChatImage) 模组渲染）；游戏内图片 / 链接自动下载后发回群
 - **事件播报**：玩家进出 / 死亡 / 成就事件转发到指定会话（死亡与成就原版端与 Velocity 不支持）
 - **服务器管理**：状态查询、在线玩家列表、远程指令执行
-- **Web 仪表盘**：查看各服务器状态、性能监控（TPS / 延迟）与互通终端实时日志，支持快捷广播与指令执行
+- **Web 仪表盘**：查看各服务器状态、性能监控（TPS / 延迟）、互通终端实时日志与连接观测（重连次数 / 阶段 / 上限告警、API 超时计数），支持快捷广播与指令执行
 - **AI 聊天**：游戏内以 `ai` 前缀发言即可与 AI 对话，回复私聊给玩家
 - **多服务器**：同时连接多台服务器，各自独立配置转发会话与开关
 - **灵活连接**：正向连接（插件连鹊桥）或反向连接（鹊桥连插件，适合租赁服）

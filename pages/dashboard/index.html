@@ -75,6 +75,13 @@
         <span class="stat-value" id="stat-uptime">--</span>
       </div>
     </div>
+    <div class="stat-card">
+      <div class="stat-icon red">🔁</div>
+      <div class="stat-info">
+        <span class="stat-label" id="stat-reconnect-label">重连状态</span>
+        <span class="stat-value" id="stat-reconnect">--</span>
+      </div>
+    </div>
   </section>
 
   <!-- 主体：标题单独一行通栏 + 服务器卡片网格 + 单服务器视图下的互通终端。
@@ -254,7 +261,7 @@
               <option value="latency">📡 延迟</option>
             </select>
           </span>
-          <span class="modal-row-hint">打开页面时性能监控面板自动展示的子页面（保存在本机浏览器）</span>
+          <span class="modal-row-hint">打开页面时性能监控面板自动展示的子页面（按服务器保存在后端设置）</span>
         </label>
       </div>
       <div class="modal-actions">

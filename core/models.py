@@ -439,6 +439,27 @@ class MemoryInfo:
             return "未知"
         return f"{self._usage_text(denominator)} ({self.heap_percentage:.1f}%)"
 
+    @property
+    def heap_detail_text(self) -> str:
+        """JVM 堆三段式描述：已用 / 已申请(committed) / 上限(max)。
+
+        - 已申请即鹊桥的 `total`（`HeapMemoryUsage.committed`，与 `-Xms` 对齐）
+        - 上限为 `max`（`-Xmx`）
+        - 末尾百分比沿用 used/max 口径（与鹊桥 `percentage` 一致）
+        缺失的段落自动省略；无可用段落时返回「未知」。
+        """
+        def _mb(size: int) -> str:
+            return f"{size / 1024 / 1024:.0f}MB"
+
+        segments = [f"{_mb(self.used)} 已用"]
+        if self.total:
+            segments.append(f"{_mb(self.total)} 已申请")
+        if self.max:
+            segments.append(f"{_mb(self.max)} 上限")
+        if len(segments) < 2:
+            return "未知"
+        return f"{' / '.join(segments)} ({self.heap_percentage:.1f}%)"
+
     def to_dict(self) -> dict[str, object]:
         """转为字典，供 Web API 响应与序列化。"""
         return {
@@ -449,6 +470,7 @@ class MemoryInfo:
             "percentage": self.percentage,
             "usage_text": self.usage_text,
             "heap_text": self.heap_text,
+            "heap_detail_text": self.heap_detail_text,
             "heap_percentage": self.heap_percentage,
         }
 

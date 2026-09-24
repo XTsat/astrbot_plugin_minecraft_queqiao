@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.5-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.6-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -14,7 +14,7 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 - **Image forwarding**: group images relayed into the game (players need the [ChatImage](https://github.com/kitUIN/ChatImage) mod installed to render them); in-game images / links are downloaded and sent back to the group
 - **Event broadcast**: player join / quit / death / achievement events forwarded to sessions (death & achievements unsupported on Vanilla/Velocity)
 - **Server management**: status queries, online player list, remote command execution
-- **Web Dashboard**: view server status, performance monitoring (TPS / latency) and the bridge terminal in real time, with quick broadcast and command console
+- **Web Dashboard**: view server status, performance monitoring (TPS / latency), the bridge terminal in real time and connection observability (reconnect count / phase / limit alert, API timeout count), with quick broadcast and command console
 - **AI chat**: talk to the AI in-game with the `ai` prefix; replies are sent privately to the player
 - **Multiple servers**: connect several servers, each with independent forwarding settings
 - **Flexible transport**: forward mode (plugin dials QueQiao) or reverse mode (QueQiao dials plugin, ideal for rented servers)

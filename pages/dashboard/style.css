@@ -540,6 +540,7 @@ body {
 .stat-icon.blue { background: var(--mc-blue-bg); color: var(--mc-blue); }
 .stat-icon.yellow { background: var(--mc-yellow-bg); color: var(--mc-yellow); }
 .stat-icon.purple { background: var(--mc-purple-bg); color: var(--mc-purple); }
+.stat-icon.red { background: var(--mc-red-bg); color: var(--mc-red); }
 
 .stat-info {
   display: flex;
@@ -733,6 +734,16 @@ body {
 .badge-rcon {
   background: var(--mc-blue-bg);
   color: var(--accent);
+}
+
+.badge-warn {
+  background: var(--mc-yellow-bg);
+  color: var(--mc-yellow);
+}
+
+.badge-danger {
+  background: var(--mc-red-bg);
+  color: var(--mc-red);
 }
 
 .pulse-dot {

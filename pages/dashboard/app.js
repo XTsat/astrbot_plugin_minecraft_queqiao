@@ -139,6 +139,17 @@ class DashboardApp {
     }
     this.terminalDays = (Number.isFinite(savedDays) && savedDays >= 0 && savedDays <= 30)
       ? savedDays : 2;
+    // 顶部自动刷新开关：启动缓存与 terminal_days 同模式——权威数据在后端
+    // panel_prefs.json（init 异步拉取覆盖），localStorage 仅加速首屏恢复
+    let savedAuto = null;
+    try {
+      const rawAuto = localStorage.getItem('queqiao_auto_refresh');
+      if (rawAuto === '1') savedAuto = true;
+      else if (rawAuto === '0') savedAuto = false;
+    } catch (e) {
+      savedAuto = null;
+    }
+    this.autoRefreshPref = savedAuto;
   }
 
   async init() {
@@ -176,7 +187,13 @@ class DashboardApp {
     // 异步拉取覆盖本地启动缓存（localStorage 仅加速首屏，以后端为准）
     this.loadPanelPrefs();
     this.syncAutoRefreshLabel();
-    // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；是否开启以开关为准
+    // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；先按 localStorage 启动
+    // 缓存恢复勾选（加速首屏），权威值随后由 loadPanelPrefs 异步覆盖
+    const cachedAuto = this.autoRefreshPref;
+    if (cachedAuto !== null) {
+      const toggle = document.getElementById('auto-refresh-toggle');
+      if (toggle) toggle.checked = cachedAuto;
+    }
     this.setupAutoRefresh(
       document.getElementById('auto-refresh-toggle')?.checked || false
     );
@@ -225,8 +242,26 @@ class DashboardApp {
 
     const autoToggle = document.getElementById('auto-refresh-toggle');
     autoToggle?.addEventListener('change', (e) => {
-      this.setupAutoRefresh(e.target.checked);
+      const on = !!e.target.checked;
+      this.setupAutoRefresh(on);
+      this.saveAutoRefreshPref(on);
     });
+  }
+
+  // 顶部自动刷新开关持久化：后端 panel_prefs.json 为权威（换设备/清缓存
+  // 均保持），localStorage 仅作启动缓存；受限 iframe 下 localStorage 可能
+  // 被禁，失败仅影响本次会话，不阻断页面
+  async saveAutoRefreshPref(on) {
+    try {
+      localStorage.setItem('queqiao_auto_refresh', on ? '1' : '0');
+    } catch (e) {
+      // 忽略：仅本次会话生效
+    }
+    try {
+      await this.apiPost('panel/prefs', { auto_refresh: on });
+    } catch (e) {
+      console.warn('保存自动刷新偏好失败:', e);
+    }
   }
 
   setupAutoRefresh(enable) {
@@ -383,6 +418,12 @@ class DashboardApp {
           }
         }
       }
+      // 自动刷新开关：后端为权威，覆盖启动缓存并重建定时器
+      if (typeof prefs.auto_refresh === 'boolean') {
+        const toggle = document.getElementById('auto-refresh-toggle');
+        if (toggle) toggle.checked = prefs.auto_refresh;
+        this.setupAutoRefresh(prefs.auto_refresh);
+      }
     } catch (e) {
       console.warn('拉取面板偏好失败:', e);
     }
@@ -449,6 +490,13 @@ class DashboardApp {
       this.setStatCard('stat-players-label', 'stat-players', '全服在线玩家', `${totalOnlinePlayers} 人`);
       this.setStatCard('stat-events-label', 'stat-events', '累计互通事件', `${totalEvents} 条`);
       this.setStatCard('stat-uptime-label', 'stat-uptime', '插件运行时间', `${h}h ${m}m`);
+      // 重连状态：正在重试（断线且未达上限）/ 已放弃（达上限停止）
+      const reconnecting = this.stats?.reconnecting_servers ?? 0;
+      const exhausted = this.stats?.exhausted_servers ?? 0;
+      const reconnectText = (reconnecting > 0 || exhausted > 0)
+        ? `${reconnecting} 重试 / ${exhausted} 放弃`
+        : '正常';
+      this.setStatCard('stat-reconnect-label', 'stat-reconnect', '重连状态', reconnectText);
       return;
     }
 
@@ -466,6 +514,14 @@ class DashboardApp {
       '本次连接时长',
       connected ? this.formatDuration(connectedSeconds) : '--'
     );
+    // 本服重连状态：达上限停止 / 正在重试 / 正常
+    const cst = server.client || null;
+    const retryCount = cst?.retry_count ?? 0;
+    const exhausted = !!cst?.reconnect_exhausted;
+    const reconnectText = exhausted
+      ? '已放弃重连'
+      : (retryCount > 0 ? `重连 ${retryCount} 次` : '正常');
+    this.setStatCard('stat-reconnect-label', 'stat-reconnect', '重连状态', reconnectText);
   }
 
   renderServers() {
@@ -549,11 +605,15 @@ class DashboardApp {
       let jvmStateClass = 'normal';
       if (jvmPercent > 85) jvmStateClass = 'danger';
       else if (jvmPercent > 65) jvmStateClass = 'warning';
-      const jvmText = `${fmtMB(jvm.used)} / ${fmtMB(jvmDenom)} (${jvmPercent.toFixed(1)}%)`;
+      const mbInt = (size) => `${Math.round(size / 1048576)}MB`;
+      const jvmSegs = [`${mbInt(jvm.used)} 已用`];
+      if (jvm.total > 0) jvmSegs.push(`${mbInt(jvm.total)} 已申请`);
+      if (jvm.max > 0) jvmSegs.push(`${mbInt(jvm.max)} 上限`);
+      const jvmText = `${jvmSegs.join(' / ')} (${jvmPercent.toFixed(1)}%)`;
       jvmMemoryHtml = `
         <div class="progress-wrap jvm-progress">
           <div class="progress-header">
-            <span class="detail-label">JVM 堆内存</span>
+            <span class="detail-label">JVM 堆</span>
             <span class="detail-val">${jvmText}</span>
           </div>
           <div class="progress-bar-bg">
@@ -689,6 +749,23 @@ class DashboardApp {
     // 性能监控徽标行（仅启用监控的服务器显示；全局视图同样可见）
     const monitorRowHtml = this.buildMonitorBadgesHtml(server);
 
+    // 连接层运行观测徽章：已达重连上限（红）/ 正在重试（黄，附次数与阶段）
+    let reconnectBadgeHtml = '';
+    const cst = server.client || null;
+    if (cst) {
+      if (cst.reconnect_exhausted) {
+        reconnectBadgeHtml = `<span class="badge badge-danger" title="已达重连上限，停止重连">⛔ 已放弃重连</span>`;
+      } else if (!isConnected && (cst.retry_count ?? 0) > 0) {
+        const stageText = cst.reconnect_stage === '低频' ? '低频重试' : '退避重试';
+        const reason = cst.last_disconnect_reason || '';
+        const tip = `已尝试 ${cst.retry_count} 次（${stageText}）${reason ? `\n断开原因: ${reason}` : ''}`;
+        reconnectBadgeHtml = `
+          <span class="badge badge-warn" title="${escapeHtml(tip)}">
+            🔁 重连 ${cst.retry_count} 次
+          </span>`;
+      }
+    }
+
     return `
       <div class="server-card ${isConnected ? 'connected' : 'disconnected'}" id="server-card-${escapeHtml(server.server_name)}">
         <div class="server-card-header">
@@ -713,6 +790,7 @@ class DashboardApp {
               <span class="badge badge-mode">${server.is_reverse ? '反向监听' : '正向连接'}</span>
               <span class="badge ${rconBadgeClass}">${rconBadgeText}</span>
               ${slpBadgeHtml}
+              ${reconnectBadgeHtml}
             </div>
             ${freshnessHtml}
           </div>
@@ -1034,7 +1112,7 @@ class DashboardApp {
     const tagMap = {
       broadcast: '📢', cmd: '⚡', out: '↳', error: '✖', system: 'ℹ',
       chat: '💬', qq_chat: '📲', join: '🟢', quit: '🔴', death: '💀',
-      achievement: '🏆', command: '⌨',
+      achievement: '🏆', command: '⌨', conn: '🔁',
     };
     const line = document.createElement('div');
     line.className = `terminal-line terminal-${type}`;

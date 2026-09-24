@@ -141,6 +141,7 @@ class MinecraftQueQiaoPlugin(Star):
                 on_event=self._make_event_handler(config.server_name),
                 on_connect=self._make_connect_handler(config.server_name),
                 on_disconnect=self._make_disconnect_handler(config.server_name),
+                on_reconnect=self._make_reconnect_handler(config.server_name),
             )
 
             if config.custom_cmd_list:
@@ -328,12 +329,56 @@ class MinecraftQueQiaoPlugin(Star):
     def _make_connect_handler(self, server_name: str):
         async def _handler() -> None:
             logger.info(f"[{PLUGIN_NAME}][{server_name}] 连接就绪")
+            self.metrics.record_event(
+                "conn", server_name, "连接恢复", {"event": "connected"}
+            )
+            self.terminal_logs.append(server_name, "conn", "🟢 连接恢复")
 
         return _handler
 
     def _make_disconnect_handler(self, server_name: str):
         async def _handler(reason: str) -> None:
             logger.warning(f"[{PLUGIN_NAME}][{server_name}] 连接断开: {reason}")
+            self.metrics.record_event(
+                "conn", server_name, f"连接断开: {reason}", {"reason": reason}
+            )
+            self.terminal_logs.append(server_name, "conn", f"🔴 连接断开: {reason}")
+
+        return _handler
+
+    def _make_reconnect_handler(self, server_name: str):
+        async def _handler(attempt: int, stage: str) -> None:
+            # 重连调度事件：达上限与进行中分开呈现。用 "conn" 类型走
+            # metrics 历史 + SSE（不在 events_by_type 白名单，不污染统计口径）
+            if stage == "上限":
+                self.metrics.record_event(
+                    "conn",
+                    server_name,
+                    f"已达重连上限（第 {attempt} 次），停止重连",
+                    {"attempt": attempt, "stage": stage},
+                )
+                self.terminal_logs.append(
+                    server_name, "conn", f"⛔ 已达重连上限（第 {attempt} 次），停止重连"
+                )
+                logger.error(
+                    f"[{PLUGIN_NAME}][{server_name}] 重连次数已达上限 "
+                    f"({attempt})，停止重连"
+                )
+                return
+
+            stage_text = "低频重试" if stage == "低频" else "退避重试"
+            self.metrics.record_event(
+                "conn",
+                server_name,
+                f"第 {attempt} 次重连（{stage_text}）",
+                {"attempt": attempt, "stage": stage},
+            )
+            self.terminal_logs.append(
+                server_name, "conn", f"🔁 第 {attempt} 次重连（{stage_text}）"
+            )
+            logger.warning(
+                f"[{PLUGIN_NAME}][{server_name}] 第 {attempt} 次重连（{stage_text}）"
+            )
 
         return _handler
 
