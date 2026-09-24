@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from astrbot.api import logger
 
 from ..core.constants import PLUGIN_NAME
+from .host_mem import correct_physical_memory
 from .metrics import MetricsCollector
 
 # 互通终端默认加载最近几天的分片（含当天）：避免一次拉取 30 天全量
@@ -212,7 +213,11 @@ class WebApiController:
                 try:
                     status_model = await instance.get_status_model()
                     if status_model:
-                        status_data = status_model.to_dict()
+                        # 同机部署时用宿主机 MemAvailable 口径修正物理内存
+                        # （鹊桥 used 把 page cache 计入，会常年显示接近满）
+                        status_data = correct_physical_memory(
+                            status_model.to_dict()
+                        )
                 except Exception as exc:
                     logger.warning(
                         f"[{PLUGIN_NAME}][{server_name}] 获取状态失败: {exc}"
@@ -287,7 +292,7 @@ class WebApiController:
                 "获取状态失败（可能服务端鹊桥版本 < v0.5.0 或请求超时）",
                 status_code=500,
             )
-        return json_response(status.to_dict())
+        return json_response(correct_physical_memory(status.to_dict()))
 
     async def get_server_players(self, server_name: str) -> Any:
         """获取指定服务器的在线玩家列表。"""

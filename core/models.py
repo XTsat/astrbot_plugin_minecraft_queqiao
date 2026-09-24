@@ -375,12 +375,100 @@ class QueQiaoEvent:
 
 
 @dataclass
+class MemoryInfo:
+    """内存快照（物理内存 / JVM 堆复用）。
+
+    物理内存与 JVM 堆的字段结构一致（total/free/used/max/percentage），
+    差异只在分母语义：
+    - 物理内存：`total` 是总量，`max` 恒为 0（鹊桥不返回）
+    - JVM 堆：`total` 是当前分配，`max` 是堆上限，`percentage` 由鹊桥按
+      其内部口径给出（可能基于 max）；展示时用 `heap_*` 属性更符合直觉
+    """
+
+    total: int = 0
+    free: int = 0
+    used: int = 0
+    max: int = 0
+    percentage: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: object) -> "MemoryInfo":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            total=_as_int(data.get("total")),
+            free=_as_int(data.get("free")),
+            used=_as_int(data.get("used")),
+            max=_as_int(data.get("max")),
+            percentage=_as_float(data.get("percentage")),
+        )
+
+    @property
+    def heap_percentage(self) -> float:
+        """JVM 堆占用百分比（used / max，max 缺失时回落 total）。
+
+        鹊桥的 `percentage` 口径不可靠时由前端/渲染层用此属性兜底；
+        物理内存请用 `percentage` 字段而非此属性。
+        """
+        denominator = self.max or self.total
+        if not denominator:
+            return 0.0
+        return min(100.0, max(0.0, self.used / denominator * 100.0))
+
+    def _usage_text(self, denominator: int) -> str:
+        if not denominator:
+            return "未知"
+
+        def _to_mb(size: int) -> str:
+            return f"{size / 1024 / 1024:.1f}MB"
+
+        return f"{_to_mb(self.used)} / {_to_mb(denominator)}"
+
+    @property
+    def usage_text(self) -> str:
+        """以 total 为分母的内存占用描述（与 ServerStatus.memory_usage_text 同款）。"""
+        if not self.total:
+            return "未知"
+        return f"{self._usage_text(self.total)} ({self.percentage:.1f}%)"
+
+    @property
+    def heap_text(self) -> str:
+        """以 max 为分母的 JVM 堆占用描述（max 缺失回落 total）。"""
+        denominator = self.max or self.total
+        if not denominator:
+            return "未知"
+        return f"{self._usage_text(denominator)} ({self.heap_percentage:.1f}%)"
+
+    def to_dict(self) -> dict[str, object]:
+        """转为字典，供 Web API 响应与序列化。"""
+        return {
+            "total": self.total,
+            "free": self.free,
+            "used": self.used,
+            "max": self.max,
+            "percentage": self.percentage,
+            "usage_text": self.usage_text,
+            "heap_text": self.heap_text,
+            "heap_percentage": self.heap_percentage,
+        }
+
+
+@dataclass
 class ServerStatus:
     """`get_status` 接口返回的服务器状态（鹊桥 >= v0.5.0）。
 
     `player_sample` 取自 SLP 的 `server_list_ping.players.sample`：每项
     `(name, uuid)`，name 已剥离 § 格式码。它免 RCON 即可得，但可能不全
     或被服务端伪造（原版端会截断、反 bot 插件会留空/塞假名）。
+
+    扩展字段（补全自鹊桥 `get_status` 完整返回，缺失时降级默认值/None）：
+    - `timestamp`：服务端状态时间戳（毫秒），面板据此判断数据新鲜度
+    - `slp_available` / `slp_reason` / `slp_error`：SLP 探测状态，可做健康检查
+    - `enforces_secure_chat`：安全聊天开关（原版端才有意义）
+    - `process_load` / `load_average`：进程级负载与系统负载均值，
+      鹊桥在不可用时会返回 -1.0（保留原值，由展示层过滤）
+    - `memory_free`：物理内存空闲量
+    - `jvm_memory`：JVM 堆内存快照
     """
 
     server_type: str = ""
@@ -397,6 +485,15 @@ class ServerStatus:
     memory_used: int = 0
     memory_percentage: float = 0.0
     player_sample: list[tuple[str, str]] = field(default_factory=list)
+    timestamp: int = 0
+    slp_available: bool | None = None
+    slp_reason: str = ""
+    slp_error: str = ""
+    enforces_secure_chat: bool | None = None
+    process_load: float | None = None
+    load_average: float | None = None
+    memory_free: int = 0
+    jvm_memory: MemoryInfo = field(default_factory=MemoryInfo)
 
     @classmethod
     def from_dict(cls, data: object) -> "ServerStatus":
@@ -415,6 +512,12 @@ class ServerStatus:
         memory = memory if isinstance(memory, dict) else {}
         physical = memory.get("physical_memory")
         physical = physical if isinstance(physical, dict) else {}
+
+        # 可空字段：键缺失或值为 null 时保持 None（区别于明确返回的 false/0/-1）
+        raw_available = ping.get("available")
+        raw_secure_chat = ping.get("enforcesSecureChat")
+        raw_process_load = cpu.get("process_load")
+        raw_load_average = cpu.get("load_average")
 
         # SLP players.sample：在线玩家名+UUID 样本（免 RCON，但可能不全/伪造）
         player_sample: list[tuple[str, str]] = []
@@ -447,7 +550,27 @@ class ServerStatus:
             memory_used=_as_int(physical.get("used")),
             memory_percentage=_as_float(physical.get("percentage")),
             player_sample=player_sample,
+            timestamp=_as_int(data.get("timestamp")),
+            slp_available=_as_bool(raw_available) if raw_available is not None else None,
+            slp_reason=_as_str(ping.get("reason")),
+            slp_error=_as_str(ping.get("error")),
+            enforces_secure_chat=(
+                _as_bool(raw_secure_chat) if raw_secure_chat is not None else None
+            ),
+            process_load=(
+                _as_float(raw_process_load) if raw_process_load is not None else None
+            ),
+            load_average=(
+                _as_float(raw_load_average) if raw_load_average is not None else None
+            ),
+            memory_free=_as_int(physical.get("free")),
+            jvm_memory=MemoryInfo.from_dict(memory.get("jvm_memory")),
         )
+
+    @property
+    def timestamp_seconds(self) -> float:
+        """状态时间戳（秒）；0 表示鹊桥未返回。"""
+        return self.timestamp / 1000.0 if self.timestamp else 0.0
 
     @property
     def memory_usage_text(self) -> str:
@@ -494,6 +617,17 @@ class ServerStatus:
             "player_sample": [
                 {"name": name, "uuid": uuid} for name, uuid in self.player_sample
             ],
+            # 扩展字段（补全自鹊桥 get_status 完整返回）
+            "timestamp": self.timestamp,
+            "timestamp_seconds": self.timestamp_seconds,
+            "slp_available": self.slp_available,
+            "slp_reason": self.slp_reason,
+            "slp_error": self.slp_error,
+            "enforces_secure_chat": self.enforces_secure_chat,
+            "process_load": self.process_load,
+            "load_average": self.load_average,
+            "memory_free": self.memory_free,
+            "jvm_memory": self.jvm_memory.to_dict(),
         }
 
 

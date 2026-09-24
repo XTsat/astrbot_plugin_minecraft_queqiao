@@ -8,6 +8,7 @@ from astrbot.api import logger
 
 from ..core.constants import PLUGIN_NAME
 from ..core.models import PlayerListResult, ServerStatus
+from .host_mem import correct_physical_memory
 
 
 class InfoRenderer:
@@ -23,6 +24,7 @@ class InfoRenderer:
         label: str | None = None,
         tps: tuple[float | None, float | None, float | None] | None = None,
         latency_ms: float | None = None,
+        host_mem: dict[str, int] | None = None,
     ) -> str:
         """状态文本（渲染失败或未启用渲染时的输出）。
 
@@ -30,10 +32,15 @@ class InfoRenderer:
         `tps` 为监控采样的 ``(1m, 5m, 15m)`` 三档值（可含 None）；
         `latency_ms` 为监控采样的 API 往返延迟。两者来自性能监控的最新采样，
         与实时状态查询相互独立；未启用监控时不展示。
+        `host_mem` 供测试注入宿主机内存；缺省时同机部署自动用 MemAvailable
+        口径修正物理内存（鹊桥 used 把 page cache 计入，会常年显示接近满）。
         """
         name = label or server_name
         if status is None:
             return f"❌ 服务器 {name} 状态获取失败（需鹊桥 v0.5.0+ 且已连接）"
+
+        # 物理内存修正后的展示字典（跨机部署/读取失败时与原始值一致）
+        status_dict = correct_physical_memory(status.to_dict(), host_mem)
 
         lines = [
             f"📊 服务器状态：{name}",
@@ -56,10 +63,21 @@ class InfoRenderer:
             shown = "、".join(names[:8])
             more = f" 等 {len(names)} 人" if len(names) > 8 else ""
             lines.append(f"玩家：{shown}{more}")
-        if status.memory_total:
-            lines.append(f"内存：{status.memory_usage_text}")
+        if status_dict.get("memory_total"):
+            lines.append(f"内存：{status_dict['memory_usage_text']}")
+        if status.jvm_memory.total:
+            lines.append(f"JVM：{status.jvm_memory.heap_text}")
+        if status_dict.get("memory_free"):
+            def _mb(size: int) -> str:
+                return f"{size / 1024 / 1024:.0f}MB"
+            lines.append(f"空闲：{_mb(status_dict['memory_free'])}")
         if status.cpu_cores:
-            lines.append(f"CPU 核心：{status.cpu_cores}（负载 {status.system_load:.2f}）")
+            cpu_parts = [f"{status.cpu_cores} 核"]
+            if status.system_load >= 0:
+                cpu_parts.append(f"系统 {status.system_load:.2f}")
+            if status.process_load is not None and status.process_load >= 0:
+                cpu_parts.append(f"进程 {status.process_load:.2f}")
+            lines.append(f"CPU：{' / '.join(cpu_parts)}")
         return "\n".join(lines)
 
     async def render_status(

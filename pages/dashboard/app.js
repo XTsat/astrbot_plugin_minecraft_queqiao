@@ -74,6 +74,22 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// 字节数 → 人类可读 MB 文本（1024 进制，与后端 usage_text 口径一致）
+function fmtMB(size) {
+  if (!(typeof size === 'number' && size > 0)) return '--';
+  return `${(size / 1024 / 1024).toFixed(1)}MB`;
+}
+
+// 状态时间戳（秒）→ 「刚刚 / N 秒前 / N 分钟前 / N 小时前」
+function formatAgeText(tsSeconds) {
+  if (!(typeof tsSeconds === 'number' && tsSeconds > 0)) return '';
+  const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - tsSeconds));
+  if (ageSec < 5) return '刚刚';
+  if (ageSec < 60) return `${ageSec} 秒前`;
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)} 分钟前`;
+  return `${Math.floor(ageSec / 3600)} 小时前`;
+}
+
 class DashboardApp {
   constructor() {
     this.bridge = window.AstrBotPluginPage || null;
@@ -500,8 +516,9 @@ class DashboardApp {
       ? faviconRaw
       : defaultIcon;
 
-    // 内存进度条
-    let memoryHtml = '<span class="detail-val">--</span>';
+    // 内存进度条（物理内存：同机部署后端已按宿主机 MemAvailable 口径修正，
+    // 跨机部署清零不显示；此处仅在有数据时渲染，避免 "--" 占位误导）
+    let memoryHtml = '';
     if (status && status.memory_total > 0) {
       const percent = Math.min(100, Math.max(0, status.memory_percentage || 0));
       let stateClass = 'normal';
@@ -511,10 +528,36 @@ class DashboardApp {
       memoryHtml = `
         <div class="progress-wrap">
           <div class="progress-header">
+            <span class="detail-label">物理内存</span>
             <span class="detail-val">${status.memory_usage_text || '--'}</span>
           </div>
           <div class="progress-bar-bg">
             <div class="progress-bar-fill ${stateClass}" style="width: ${percent}%;"></div>
+          </div>
+        </div>`;
+    }
+
+    // JVM 堆内存进度条（鹊桥 get_status 扩展字段；分母优先 max，缺失回落 total）
+    let jvmMemoryHtml = '';
+    const jvm = (status && status.jvm_memory) || null;
+    if (jvm && jvm.total > 0) {
+      const jvmDenom = jvm.max > 0 ? jvm.max : jvm.total;
+      let jvmPercent = (typeof jvm.percentage === 'number' && jvm.percentage > 0)
+        ? jvm.percentage
+        : (jvmDenom > 0 ? (jvm.used / jvmDenom * 100) : 0);
+      jvmPercent = Math.min(100, Math.max(0, jvmPercent));
+      let jvmStateClass = 'normal';
+      if (jvmPercent > 85) jvmStateClass = 'danger';
+      else if (jvmPercent > 65) jvmStateClass = 'warning';
+      const jvmText = `${fmtMB(jvm.used)} / ${fmtMB(jvmDenom)} (${jvmPercent.toFixed(1)}%)`;
+      jvmMemoryHtml = `
+        <div class="progress-wrap jvm-progress">
+          <div class="progress-header">
+            <span class="detail-label">JVM 堆内存</span>
+            <span class="detail-val">${jvmText}</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill ${jvmStateClass}" style="width: ${jvmPercent}%;"></div>
           </div>
         </div>`;
     }
@@ -576,6 +619,46 @@ class DashboardApp {
       playersListHtml = `<span class="no-players">${isConnected ? '当前暂无玩家在线' : '服务器未连接'}</span>`;
     }
 
+    // CPU 负载：系统负载（system_load）+ 进程负载（process_load）+ 负载均值
+    // （load_average）。process_load/load_average 为 -1.0 或 null 表示鹊桥侧
+    // 不可用，展示层过滤为「--」。
+    let cpuHtml = '--';
+    if (status && status.cpu_cores) {
+      const loadParts = [];
+      if (typeof status.system_load === 'number' && status.system_load >= 0) {
+        loadParts.push(`系统 ${status.system_load.toFixed(2)}`);
+      }
+      if (typeof status.process_load === 'number' && status.process_load >= 0) {
+        loadParts.push(`进程 ${status.process_load.toFixed(2)}`);
+      }
+      if (typeof status.load_average === 'number' && status.load_average >= 0) {
+        loadParts.push(`平均 ${status.load_average.toFixed(2)}`);
+      }
+      cpuHtml = `${status.cpu_cores} 核${loadParts.length ? ` (${loadParts.join(' / ')})` : ''}`;
+    }
+
+    // SLP 探测健康徽章：available 为明确布尔时显示，未知（旧版鹊桥/未连接）不显示
+    let slpBadgeHtml = '';
+    if (status && typeof status.slp_available === 'boolean') {
+      const slpOk = status.slp_available;
+      const slpReason = status.slp_reason || status.slp_error || '';
+      slpBadgeHtml = `
+        <span class="badge ${slpOk ? 'badge-online' : 'badge-offline'}"
+              title="${escapeHtml(slpOk ? 'SLP 探测正常' : `SLP 探测异常：${slpReason}`)}">
+          SLP ${slpOk ? '正常' : '异常'}
+        </span>`;
+    }
+
+    // 状态数据新鲜度（timestamp 为鹊桥状态时间戳，毫秒）：
+    // 位于卡片右上角徽章行下方，右对齐，超 60 秒标黄
+    let freshnessHtml = '';
+    if (status && status.timestamp_seconds > 0) {
+      const ageText = formatAgeText(status.timestamp_seconds);
+      const stale = ageText.includes('分钟') || ageText.includes('小时');
+      freshnessHtml = `
+        <span class="status-freshness ${stale ? 'stale' : ''}">🕐 更新于 ${ageText || '--'}</span>`;
+    }
+
     // MOTD 渲染：过滤鹊桥错误响应 JSON（如 {"status":"error","message":"未授权"}）
     let motdHtml = '';
     const motdRaw = (status && typeof status.description === 'string') ? status.description.trim() : '';
@@ -622,12 +705,16 @@ class DashboardApp {
             </div>
           </div>
           <div class="badges-group">
-            <span class="badge ${isConnected ? 'badge-online' : 'badge-offline'}">
-              <span class="pulse-dot"></span>
-              ${isConnected ? '在线' : '未连接'}
-            </span>
-            <span class="badge badge-mode">${server.is_reverse ? '反向监听' : '正向连接'}</span>
-            <span class="badge ${rconBadgeClass}">${rconBadgeText}</span>
+            <div class="badges-row">
+              <span class="badge ${isConnected ? 'badge-online' : 'badge-offline'}">
+                <span class="pulse-dot"></span>
+                ${isConnected ? '在线' : '未连接'}
+              </span>
+              <span class="badge badge-mode">${server.is_reverse ? '反向监听' : '正向连接'}</span>
+              <span class="badge ${rconBadgeClass}">${rconBadgeText}</span>
+              ${slpBadgeHtml}
+            </div>
+            ${freshnessHtml}
           </div>
         </div>
 
@@ -640,11 +727,12 @@ class DashboardApp {
           </div>
           <div class="detail-item">
             <span class="detail-label">CPU 核心与负载</span>
-            <span class="detail-val">${status?.cpu_cores ? `${status.cpu_cores} 核 (负载 ${status.system_load.toFixed(2)})` : '--'}</span>
+            <span class="detail-val">${cpuHtml}</span>
           </div>
           <div class="detail-item" style="grid-column: span 2;">
             <span class="detail-label">内存占用</span>
             ${memoryHtml}
+            ${jvmMemoryHtml}
           </div>
         </div>
 

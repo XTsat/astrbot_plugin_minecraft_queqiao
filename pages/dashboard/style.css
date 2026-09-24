@@ -685,11 +685,21 @@ body {
   color: var(--text-muted);
 }
 
+/* 卡片右上角状态区：徽章行 + 新鲜度行，纵向排列且两排都右对齐 */
 .badges-group {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+/* 徽章行：独立 flex 容器，自身换行时同样右对齐 */
+.badges-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* 状态与模式徽章 */
@@ -814,6 +824,24 @@ body {
 .progress-bar-fill.normal { background: var(--mc-green); }
 .progress-bar-fill.warning { background: var(--mc-yellow); }
 .progress-bar-fill.danger { background: var(--mc-red); }
+
+/* JVM 堆内存条：与物理内存条分隔 */
+.progress-wrap.jvm-progress {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+/* 状态数据新鲜度（get_status timestamp）：徽章行下方独立一排，右对齐，超 60 秒标黄 */
+.status-freshness {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.status-freshness.stale {
+  color: var(--mc-yellow);
+}
 
 /* 在线玩家标签 */
 .players-box {

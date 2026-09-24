@@ -2661,6 +2661,125 @@ assert _plr_dict["source"] == "rcon"
 assert _plr_dict["rcon_channel"] == "queqiao"
 assert _plr_dict["online"] == 2
 
+# (a2) ServerStatus 扩展字段：get_status 完整返回的解析与序列化
+# （notes §7.1：jvm_memory / process_load / load_average / SLP 健康 /
+#  timestamp / enforcesSecureChat / physical free）
+_ss34_full = _SS34.from_dict({
+    "timestamp": 1775444822691,
+    "server_type": "forge",
+    "server_version": "1.21",
+    "server_list_ping": {
+        "available": True,
+        "host": "127.0.0.1", "port": 25565,
+        "reason": "ok", "error": None,
+        "enforcesSecureChat": True,
+        "players": {"online": 0, "max": 20},
+    },
+    "cpu_information": {
+        "cpu_cores": 16, "load_average": -1.0,
+        "system_load": 0.0, "process_load": -1.0,
+    },
+    "memory_information": {
+        "physical_memory": {
+            "total": 34278875136, "free": 14827216896,
+            "used": 19451658240, "percentage": 56.75,
+        },
+        "jvm_memory": {
+            "total": 486539264, "free": 95978912,
+            "max": 8573157376, "used": 390560352, "percentage": 4.56,
+        },
+    },
+})
+_sd34 = _ss34_full.to_dict()
+assert _sd34["timestamp"] == 1775444822691
+assert abs(_sd34["timestamp_seconds"] - 1775444822.691) < 1e-6
+assert _sd34["slp_available"] is True
+assert _sd34["slp_reason"] == "ok"
+assert _sd34["slp_error"] == ""
+assert _sd34["enforces_secure_chat"] is True
+assert _sd34["process_load"] == -1.0, "不可用保留原值，由展示层过滤"
+assert _sd34["load_average"] == -1.0
+assert _sd34["memory_free"] == 14827216896
+_jvm34 = _sd34["jvm_memory"]
+assert _jvm34["total"] == 486539264 and _jvm34["max"] == 8573157376
+assert "372.5MB / 8176.0MB" in _jvm34["heap_text"], _jvm34["heap_text"]
+assert abs(_jvm34["heap_percentage"] - 4.56) < 0.01, _jvm34["heap_percentage"]
+# 缺省/畸形输入不抛异常，扩展字段保持空值
+_ss34_empty = _SS34.from_dict("not-a-dict")
+assert _ss34_empty.to_dict()["jvm_memory"]["heap_text"] == "未知"
+# 键存在但值为 null → None（区别于明确 false/0/-1）
+assert _SS34.from_dict({"server_list_ping": {"available": None}}).slp_available is None
+assert _SS34.from_dict({"server_list_ping": {"available": False}}).slp_available is False
+assert _SS34.from_dict({"cpu_information": {"process_load": None}}).process_load is None
+
+# (a3) format_status 渲染 JVM/进程负载（命令 /ai 状态 文本输出）
+from astrbot_plugin_minecraft_queqiao.services.renderer import InfoRenderer as _IR34
+# 同机部署：注入与鹊桥 MemTotal 一致的宿主机内存 → 物理内存按 MemAvailable 修正
+_host_mem34 = {
+    "MemTotal": _ss34_full.memory_total,
+    "MemAvailable": _ss34_full.memory_total - 2 * 1024 ** 3,
+}
+_fmt34 = _IR34.format_status("SrvForge", _ss34_full, host_mem=_host_mem34)
+assert "JVM：372.5MB / 8176.0MB" in _fmt34, _fmt34
+assert "进程" not in _fmt34, f"process_load=-1 应被过滤: {_fmt34}"
+assert "系统 0.00" in _fmt34, _fmt34
+# 修正后物理内存 = 2G used / 31.9G total (6.3%)，空闲 = MemAvailable（30643MB）
+assert "内存：2048.0MB / 32690.9MB (6.3%)" in _fmt34, _fmt34
+assert "空闲：30643MB" in _fmt34, _fmt34
+# 跨机部署（MemTotal 不匹配）：物理内存清零不展示，只保留 JVM
+_fmt34_remote = _IR34.format_status(
+    "SrvForge", _ss34_full,
+    host_mem={"MemTotal": 16 * 1024 ** 3, "MemAvailable": 8 * 1024 ** 3},
+)
+assert "内存：" not in _fmt34_remote, f"跨机不应展示物理内存: {_fmt34_remote}"
+assert "空闲：" not in _fmt34_remote, _fmt34_remote
+assert "JVM：372.5MB / 8176.0MB" in _fmt34_remote, _fmt34_remote
+
+# (a4) correct_physical_memory 单元断言：同机修正 / 跨机清零 / 无数据不动
+from astrbot_plugin_minecraft_queqiao.services import host_mem as _hm34
+from astrbot_plugin_minecraft_queqiao.services.host_mem import (
+    correct_physical_memory as _cpm34,
+)
+# 同机：used = MemTotal - MemAvailable（排除 page cache）
+_smem34 = _SS34(
+    memory_total=8 * 1024 ** 3, memory_used=7 * 1024 ** 3,
+    memory_percentage=87.5,
+).to_dict()
+_cmem34 = _cpm34(
+    _smem34, {"MemTotal": 8 * 1024 ** 3, "MemAvailable": 2 * 1024 ** 3}
+)
+assert _cmem34["memory_used"] == 6 * 1024 ** 3, _cmem34
+assert _cmem34["memory_free"] == 2 * 1024 ** 3, _cmem34
+assert _cmem34["memory_percentage"] == 75.0, _cmem34
+# 跨机：物理内存清零，面板只保留 JVM
+_smem34b = _SS34(
+    memory_total=64 * 1024 ** 3, memory_used=32 * 1024 ** 3,
+    memory_percentage=50.0,
+).to_dict()
+_cmem34b = _cpm34(
+    _smem34b, {"MemTotal": 8 * 1024 ** 3, "MemAvailable": 2 * 1024 ** 3}
+)
+assert _cmem34b["memory_total"] == 0, _cmem34b
+assert _cmem34b["memory_usage_text"] == "未知", _cmem34b
+# 无 memory_total（旧版鹊桥/字段缺失）：原样不动
+_smem34c = _SS34().to_dict()
+assert _cpm34(
+    _smem34c, {"MemTotal": 8 * 1024 ** 3, "MemAvailable": 2 * 1024 ** 3}
+) is _smem34c
+# 读不到 meminfo（非 Windows）：无法判定部署形态 → 清零隐藏
+_orig_read34 = _hm34.read_host_meminfo
+_hm34.read_host_meminfo = lambda: None  # type: ignore[method-assign]
+try:
+    _smem34d = _SS34(
+        memory_total=8 * 1024 ** 3, memory_used=7 * 1024 ** 3,
+        memory_percentage=87.5,
+    ).to_dict()
+    _cmem34d = _cpm34(_smem34d)
+    assert _cmem34d["memory_total"] == 0, _cmem34d
+    assert _cmem34d["memory_usage_text"] == "未知", _cmem34d
+finally:
+    _hm34.read_host_meminfo = _orig_read34
+
 # (b) MetricsCollector 计数与发布订阅
 _mc34 = _MC34(max_history=10)
 _q34 = _mc34.subscribe()
