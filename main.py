@@ -95,6 +95,7 @@ class MinecraftQueQiaoPlugin(Star):
             self.terminal_logs,
             self.monitor,
             self.panel_prefs,
+            self,
         )
         self.web_api.register_routes()
         self._init_task: asyncio.Task | None = None
@@ -113,6 +114,14 @@ class MinecraftQueQiaoPlugin(Star):
             f"[{PLUGIN_NAME}] 终端日志目录: {self._data_dir / 'terminal_logs'}"
         )
 
+        await self._apply_runtime_config()
+
+    async def _apply_runtime_config(self) -> None:
+        """按当前 self.config 构建服务器实例并启动连接。
+
+        供 initialize() 与配置热重载（reload_config）共用；调用方需保证
+        先清空旧的运行时状态（self._configs / message_bridge 索引）。
+        """
         raw_servers = self.config.get("mc_servers", []) or []
         if not isinstance(raw_servers, list) or not raw_servers:
             logger.warning(f"[{PLUGIN_NAME}] 未配置任何服务器")
@@ -170,6 +179,26 @@ class MinecraftQueQiaoPlugin(Star):
             f"[{PLUGIN_NAME}] 插件已初始化，共 {len(self._configs)} 台服务器"
         )
 
+    async def _stop_runtime(self) -> None:
+        """停止所有运行时连接与监听（不触碰 self.config）。"""
+        await self.image_bed.stop_builtin()
+        await self.server_manager.stop_all()
+        await self.monitor.stop()
+
+    async def reload_config(self) -> None:
+        """热重载配置：按 self.config 当前值重建全部运行时。
+
+        配置已由调用方写入磁盘与内存（self.config）；此处断开旧连接、
+        清空索引后重新应用，使服务器列表/条目/开关的改动全部生效。
+        """
+        logger.info(f"[{PLUGIN_NAME}] 配置已更新，正在热重载...")
+        await self._stop_runtime()
+        self._configs.clear()
+        self.message_bridge.clear()
+        self.renderer.enabled = False
+        await self._apply_runtime_config()
+        logger.info(f"[{PLUGIN_NAME}] 配置热重载完成")
+
     async def terminate(self) -> None:
         """插件卸载时清理所有连接。"""
         logger.info(f"[{PLUGIN_NAME}] 正在关闭...")
@@ -179,9 +208,7 @@ class MinecraftQueQiaoPlugin(Star):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._init_task
 
-        await self.image_bed.stop_builtin()
-        await self.server_manager.stop_all()
-        await self.monitor.stop()
+        await self._stop_runtime()
         logger.info(f"[{PLUGIN_NAME}] 已关闭")
 
     async def _setup_image_services(self) -> None:

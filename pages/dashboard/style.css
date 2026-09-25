@@ -603,8 +603,11 @@ body {
   display: grid;
   /* auto-fit + 1fr：多台服务器横向并排、平分面板宽度（占满一排），
      不留未填充的空列；面板高度由卡片内容自然决定（align-items: start
-     不拉伸），卡片不再被右侧监控面板撑高 */
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+     不拉伸），卡片不再被右侧监控面板撑高。
+     最小轨道宽取 max(320px, (100% - 3*gap)/4)：宽屏最多 4 列，第 5 张卡片
+     起换行（列数多于一排 4 个时卡片过窄、内容挤压不好看），
+     窗口变窄时按 320px 下限自然退化为 3 / 2 列 */
+  grid-template-columns: repeat(auto-fit, minmax(max(320px, calc((100% - 60px) / 4)), 1fr));
   flex: 1 1 auto;
   gap: 20px;
 }
@@ -637,6 +640,65 @@ body {
 .server-card.disconnected {
   border-left: 4px solid var(--text-muted);
   opacity: 0.9;
+}
+
+/* 未启用 / 未生效的服务器条目：仍留在面板上（点开即可启用），但整体灰化，
+   与运行中的卡片一眼区分——它们不连鹊桥，也没有监控/终端数据 */
+.server-card.disabled {
+  border: 1px dashed var(--border-color);
+  border-left: 4px dashed var(--text-muted);
+  box-shadow: none;
+  filter: grayscale(0.9);
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+.server-card.disabled:hover {
+  filter: none;
+  opacity: 1;
+  box-shadow: var(--shadow-sm);
+}
+
+.server-card.disabled .server-display-name {
+  color: var(--text-secondary);
+}
+
+.badge-disabled {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-color);
+}
+
+.disabled-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+
+.disabled-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+/* 运行中卡片底部的管理行（配置 / 停用）：与灰卡操作区同款，多一条分隔线 */
+.card-manage-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 区块标题：左标题右「＋ 新建服务器」按钮（唯一的新建入口） */
+.servers-section-title {
+  justify-content: space-between;
 }
 
 /* 卡片头部 */
@@ -1172,6 +1234,7 @@ body {
 
 .toast.success { border-left: 4px solid var(--mc-green); }
 .toast.error { border-left: 4px solid var(--mc-red); }
+.toast.warn { border-left: 4px solid var(--mc-yellow); }
 
 @keyframes slideIn {
   from { transform: translateX(100%); opacity: 0; }
@@ -1517,6 +1580,11 @@ body {
   padding-top: 10vh;
 }
 
+/* 二次确认必须盖在设置弹窗之上（两者可能同时打开：在服务器弹窗里点删除） */
+#confirm-modal {
+  z-index: 1100;
+}
+
 .modal-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -1530,6 +1598,12 @@ body {
 /* 监控设置弹窗：字段较多（采集/保留/指令/探测/展示/实时频率），加宽便于阅读 */
 #monitor-settings-modal .modal-card {
   width: min(560px, 94vw);
+}
+
+/* 服务器配置弹窗：含较长的 WS 地址与目标会话，加宽以保证输入框整列等宽
+   且右侧说明文字仍有可读宽度 */
+#server-form-modal .modal-card {
+  width: min(720px, 94vw);
 }
 
 .modal-header {
@@ -1585,15 +1659,35 @@ body {
   color: var(--text-secondary);
 }
 
+/* 表单控件统一宽度：全部同宽（含 select / password / textarea），
+   取值以能完整显示 `ws://127.0.0.1:8080/minecraft/ws` 与目标会话 UMO 为准 */
 .modal-row-control input[type='number'],
-.modal-row-control input[type='text'] {
-  width: 120px;
+.modal-row-control input[type='text'],
+.modal-row-control input[type='password'],
+.modal-row-control select,
+.modal-row-control textarea {
+  width: 320px;
+  box-sizing: border-box;
   padding: 6px 8px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-input, var(--bg-tertiary));
   color: var(--text-primary);
   font-size: 13px;
+}
+
+/* 反向监听行：地址 + 端口并排，各收窄到半行，避免撑破行宽 */
+#sf-row-reverse .modal-row-control input[type='text'],
+#sf-row-reverse .modal-row-control input[type='number'] {
+  width: 150px;
+}
+
+/* 目标会话文本框：只保留与单行输入框的差异（页面字体 / 多行高度 / 可纵向拉伸） */
+.modal-row-control textarea {
+  font-family: inherit;
+  line-height: 1.5;
+  min-height: 56px;
+  resize: vertical;
 }
 
 .modal-row-control input[type='checkbox'] {
@@ -1657,3 +1751,4 @@ body {
   .servers-container { grid-template-columns: 1fr; }
   .terminal-panel { height: 60vh; min-height: 320px; }
 }
+

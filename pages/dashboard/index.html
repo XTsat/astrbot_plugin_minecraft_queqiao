@@ -23,6 +23,9 @@
       </div>
     </div>
     <div class="header-actions">
+      <span style="font-size: 12px; color: var(--text-muted);">
+        更新于: <span id="last-refresh-time">--:--:--</span>
+      </span>
       <label class="auto-refresh-toggle">
         <input type="checkbox" id="auto-refresh-toggle" />
         <span>自动刷新 (10s)</span>
@@ -30,9 +33,10 @@
       <button class="btn btn-primary" id="btn-refresh" title="立即刷新数据">
         <span>🔄 刷新</span>
       </button>
-      <span style="font-size: 12px; color: var(--text-muted);">
-        更新于: <span id="last-refresh-time">--:--:--</span>
-      </span>
+      <!-- 暂未开放：先占位，后续接配置管理页入口 -->
+      <button class="btn" id="btn-config-link" title="配置管理（暂未开放）">
+        <span>⚙️ 配置管理</span>
+      </button>
     </div>
   </header>
 
@@ -89,6 +93,10 @@
   <main class="layout-main monitor-hidden">
     <div class="servers-section-title" id="servers-section-title">
       <span>🌐 服务器实例状态</span>
+      <!-- 面板内直接改 conf：新建条目写入 mc_servers 后热重载生效 -->
+      <button class="btn btn-sm" id="btn-new-server" title="在插件 conf 里新增一台 MC 服务器并热重载生效">
+        ＋ 新建服务器
+      </button>
     </div>
     <section class="servers-panel">
       <div class="servers-container" id="servers-container">
@@ -272,6 +280,7 @@
       </div>
     </div>
   </div>
+
   <!-- 通用二次确认弹窗：页面运行在受限 iframe，window.confirm 会被浏览器静默
        拦截返回 false（无 modals 权限），故用页面内自绘对话框替代 -->
   <div class="modal-overlay hidden" id="confirm-modal">
@@ -286,6 +295,93 @@
       <div class="modal-actions">
         <button class="btn btn-sm" id="cf-cancel">取消</button>
         <button class="btn btn-danger btn-sm" id="cf-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 服务器条目弹窗：面板内直接管理插件 conf 的 mc_servers（新建 / 编辑 /
+       启用 / 删除）。保存链路与配置页一致：备份 → 原子落盘 → 热重载。
+       仅暴露常用字段，其余字段沿用 _conf_schema.json 模板默认值，完整
+       字段编辑仍在「配置管理」页里做 -->
+  <div class="modal-overlay hidden" id="server-form-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title" id="sf-title">新建服务器</span>
+        <button class="modal-close" id="sf-close" title="关闭">✕</button>
+      </div>
+      <div class="modal-sub" id="sf-sub">按 conf 模板补齐其余字段，保存后立即热重载生效</div>
+      <div class="modal-body">
+        <label class="modal-row">
+          <span class="modal-row-label">启用此服务器</span>
+          <span class="modal-row-control">
+            <input type="checkbox" id="sf-enabled" checked />
+          </span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">服务器名称</span>
+          <span class="modal-row-control">
+            <input type="text" id="sf-name" />
+          </span>
+          <span class="modal-row-hint">唯一标识，不能与已有条目重复；鹊桥端按此名字找配置</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">显示名称</span>
+          <span class="modal-row-control">
+            <input type="text" id="sf-display" />
+          </span>
+          <span class="modal-row-hint">面板卡片与聊天转发里展示的名字</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">连接方式</span>
+          <span class="modal-row-control">
+            <select id="sf-mode">
+              <option value="forward">forward · 插件主动连鹊桥 WS</option>
+              <option value="reverse">reverse · 插件监听端口等鹊桥连入</option>
+            </select>
+          </span>
+          <span class="modal-row-hint">必须与鹊桥端该服务器的 ws_mode 一致，否则连不上</span>
+        </label>
+        <label class="modal-row" id="sf-row-wsurl">
+          <span class="modal-row-label">鹊桥 WS 地址</span>
+          <span class="modal-row-control">
+            <input type="text" id="sf-wsurl" />
+          </span>
+          <span class="modal-row-hint">forward 模式下插件主动连接的地址</span>
+        </label>
+        <label class="modal-row hidden" id="sf-row-reverse">
+          <span class="modal-row-label">反向监听地址</span>
+          <span class="modal-row-control">
+            <input type="text" id="sf-rhost" placeholder="0.0.0.0" />
+            <input type="number" id="sf-rport" min="1" max="65535" step="1" placeholder="8080" />
+          </span>
+          <span class="modal-row-hint">reverse 模式下插件监听的地址与端口</span>
+        </label>
+        <label class="modal-row hidden" id="sf-row-rpath">
+          <span class="modal-row-label">反向监听路径</span>
+          <span class="modal-row-control">
+            <input type="text" id="sf-rpath" placeholder="/minecraft/ws" />
+          </span>
+          <span class="modal-row-hint">需与鹊桥端连接的路径一致</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">认证 Token</span>
+          <span class="modal-row-control">
+            <input type="password" id="sf-token" placeholder="留空 = 不修改" autocomplete="new-password" />
+          </span>
+          <span class="modal-row-hint" id="sf-token-hint">与鹊桥端 access_token 一致；留空表示不修改</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">目标会话</span>
+          <span class="modal-row-control">
+            <textarea id="sf-sessions" rows="3" placeholder="default:GroupMessage:1107211209（每行一个）"></textarea>
+          </span>
+          <span class="modal-row-hint">MC 消息转发到哪些 QQ 会话；每行一个，留空 = 不转发；在对应目标中发 /sid 获取该会话的 UMO</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-danger btn-sm hidden" id="sf-delete" title="从配置中删除该服务器条目">🗑 删除服务器</button>
+        <button class="btn btn-sm" id="sf-cancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="sf-save">保存并热重载</button>
       </div>
     </div>
   </div>

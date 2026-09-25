@@ -2851,7 +2851,7 @@ _wac34 = _WAC34(
     terminal_logs=_tls34,
 )
 _wac34.register_routes()
-assert len(_mock_ctx34.routes) == 19, f"注册路由数不符: {len(_mock_ctx34.routes)}"
+assert len(_mock_ctx34.routes) == 25, f"注册路由数不符: {len(_mock_ctx34.routes)}"
 _route_paths = [r[0] for r in _mock_ctx34.routes]
 assert "/astrbot_plugin_minecraft_queqiao/servers" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/stats" in _route_paths
@@ -3620,7 +3620,7 @@ _ctx35 = _MockCtx35()
 _wac35 = _WAC35(_ctx35, _sm35, None, None, None,
                 {"Srv": _cfg35_on, "Srv2": _SC35.from_dict({})}, None, _col35)
 _wac35.register_routes()
-assert len(_ctx35.routes) == 24, f"监控注入后应注册 24 条路由, 实际 {len(_ctx35.routes)}"
+assert len(_ctx35.routes) == 30, f"监控注入后应注册 30 条路由, 实际 {len(_ctx35.routes)}"
 _rp35 = [r[0] for r in _ctx35.routes]
 assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
@@ -4190,3 +4190,227 @@ assert _srs42.snapshot()["clients"] == ["A", "B"], "clients 应排序"
 _r42r = asyncio.run(_wac42.get_reverse_servers())
 assert _r42r["data"]["servers"] == [], "Web API 反向快照应返回空列表"
 print("OK  runtime_stats 只读观测 / 退避与上限回调 / 超时计数且禁止重发 / Web API 汇总与反向快照")
+
+print("\n=== 43. 面板直接管理 conf 服务器条目（新建/启用/改/删 + 热重载） ===")
+import copy as _copy43
+import pathlib as _pl43
+from astrbot_plugin_minecraft_queqiao.services.web_api import (
+    WebApiController as _WAC43,
+    _as_bool as _ab43,
+    _as_int as _ai43,
+    _as_str_list as _asl43,
+    _schema_default as _sd43,
+)
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wa43
+
+# --- schema 默认值推导（与配置页前端 makeDefault 同语义） ---
+assert _sd43({"type": "bool", "default": True}) is True
+assert _sd43({"type": "bool"}) is False
+assert _sd43({"type": "int", "default": 8080}) == 8080
+assert _sd43({"type": "int", "default": True}) == 0, "int 字段的布尔默认值应回落 0"
+assert _sd43({"type": "string", "default": "ai"}) == "ai"
+assert _sd43({"type": "list", "default": ["a"]}) == ["a"]
+assert _sd43({"type": "object", "items": {"a": {"type": "bool", "default": True}}}) == {"a": True}
+assert _sd43({"type": "template_list"}) is None and _sd43(None) is None
+# 防御式解析：WebUI 可能把布尔/数字写成字符串
+assert _ab43("true", False) is True and _ab43("False", True) is False
+assert _ab43(None, True) is True and _ab43("weird", True) is True and _ab43(1, False) is True
+assert _ai43("8180", 8080) == 8180 and _ai43("x", 8080) == 8080 and _ai43(True, 8080) == 8080
+assert _asl43("a, b ,,c") == ["a", "b", "c"]
+assert _asl43(["a", "", " b "]) == ["a", "b"] and _asl43(None) == []
+
+
+class _SM43:
+    """最小 server_manager 桩：面板只需 get() 判连接态。"""
+
+    def __init__(self):
+        self._inst = {}
+
+    def get(self, name):
+        return self._inst.get(name)
+
+    def put(self, name, connected):
+        self._inst[name] = types.SimpleNamespace(connected=connected)
+
+
+class _FakeConfig43(dict):
+    """近似 AstrBotConfig：dict 语义 + 异步保存（记录落盘内容）。"""
+
+    def __init__(self, conf):
+        super().__init__(conf)
+        self.saves = []
+
+    async def save_config_async(self, replace_config=None, **kwargs):
+        self.saves.append(_copy43.deepcopy(replace_config))
+        if replace_config:
+            self.update(replace_config)
+        return True
+
+
+class _FakePlugin43:
+    def __init__(self, conf, data_dir):
+        self.config = _FakeConfig43(conf)
+        self._data_dir = data_dir
+        self.reloads = 0
+
+    async def reload_config(self):
+        self.reloads += 1
+
+
+class _Ctx43:
+    def __init__(self):
+        self.routes = []
+
+    def register_web_api(self, path, handler, methods, desc):
+        self.routes.append((path, handler, methods, desc))
+
+
+_tmp43 = tempfile.mkdtemp(prefix="queqiao_conf43_")
+_conf43 = {
+    "enabled": True,
+    "mc_servers": [
+        {
+            "__template_key": "server",
+            "enabled": True,
+            "target_sessions": ["default:GroupMessage:1"],
+            "server": {
+                "server_name": "Server",
+                "display_name": "方可梦",
+                "ws_mode": "forward",
+                "ws_url": "ws://127.0.0.1:8080/minecraft/ws",
+                "reverse_port": 8080,
+                "access_token": "topsecret",
+            },
+        },
+        {
+            "__template_key": "server",
+            "enabled": False,
+            "target_sessions": [],
+            "server": {
+                "server_name": "Server1",
+                "display_name": "",
+                "ws_mode": "reverse",
+                "reverse_port": "8180",
+            },
+        },
+    ],
+}
+_plugin43 = _FakePlugin43(_conf43, _tmp43)
+_sm43 = _SM43()
+_sm43.put("Server", True)  # 仅 Server 有运行时实例（Server1 未启用 → main 层跳过）
+_ctx43 = _Ctx43()
+_wac43 = _WAC43(
+    _ctx43, _sm43, None, None, None,
+    {"Server": ServerConfig.from_dict({})}, None, None, None, _plugin43,
+)
+_wac43.register_routes()
+_rp43 = [r[0] for r in _ctx43.routes]
+for _p43 in (
+    "/astrbot_plugin_minecraft_queqiao/config/servers",
+    "/astrbot_plugin_minecraft_queqiao/config/server/create",
+    "/astrbot_plugin_minecraft_queqiao/config/server/update",
+    "/astrbot_plugin_minecraft_queqiao/config/server/delete",
+):
+    assert _p43 in _rp43, f"缺少路由 {_p43}"
+
+# 列表：未启用条目必须返回（面板据此渲染灰色卡片），且不回传 token 明文
+_res43 = asyncio.run(_wac43.get_config_servers())
+_items43 = _res43["data"]["servers"]
+assert len(_items43) == 2, _items43
+_it0, _it1 = _items43
+assert _it0["server_name"] == "Server" and _it0["label"] == "方可梦"
+assert _it0["enabled"] is True and _it0["running"] is True and _it0["connected"] is True
+assert _it0["access_token_set"] is True and "access_token" not in _it0, "不得回传 token 明文"
+assert _it0["target_sessions"] == ["default:GroupMessage:1"]
+assert _it1["enabled"] is False, "未启用的条目也必须出现在面板数据里"
+assert _it1["running"] is False and _it1["connected"] is False
+assert _it1["label"] == "Server1", "display_name 为空回落 server_name"
+assert _it1["ws_mode"] == "reverse" and _it1["reverse_port"] == 8180, "字符串端口需解析为 int"
+
+_orig_json43 = _wa43.request.json
+
+
+def _set_payload43(payload):
+    async def _fake(default=None):
+        return payload
+
+    _wa43.request.json = _fake
+
+
+# 新建：仅显式字段覆盖，其余按 _conf_schema.json 模板补齐（与 WebUI 新建条目一致）
+_set_payload43({
+    "server_name": "Server2",
+    "display_name": "新服",
+    "ws_mode": "forward",
+    "ws_url": "ws://127.0.0.1:8280/minecraft/ws",
+    "target_sessions": ["default:GroupMessage:2"],
+    "enabled": False,
+})
+_res43c = asyncio.run(_wac43.create_config_server())
+assert _res43c["data"]["saved"] is True and _res43c["data"]["server_name"] == "Server2"
+assert _plugin43.reloads == 1, "改配置必须落盘 + 热重载"
+_entries43 = _plugin43.config["mc_servers"]
+assert len(_entries43) == 3, _entries43
+_new43 = _entries43[2]
+assert _new43["__template_key"] == "server" and _new43["enabled"] is False
+assert _new43["target_sessions"] == ["default:GroupMessage:2"]
+assert _new43["server"]["server_name"] == "Server2"
+assert _new43["server"]["display_name"] == "新服"
+assert _new43["server"]["ws_url"] == "ws://127.0.0.1:8280/minecraft/ws"
+assert _new43["ai_chat_prefix"] == "ai" and _new43["enable_ai_chat"] is True
+assert _new43["server"]["reverse_port"] == 8080, "未指定的连接参数回落 schema 默认值"
+assert _new43["server"]["client_origin"] == "astrbot"
+assert isinstance(_new43["message"], dict) and _new43["message"]["forward_chat_format"]
+assert _new43["server"]["display_name_default"] == "MC"
+assert list((_pl43.Path(_tmp43) / "conf_backups").glob("*.json")), "改配置前必须留备份"
+
+# 校验失败不得落盘/热重载
+_set_payload43({"server_name": "Server2"})
+assert asyncio.run(_wac43.create_config_server())["status_code"] == 400, "同名服务器必须拒绝"
+_set_payload43({"server_name": "   "})
+assert asyncio.run(_wac43.create_config_server())["status_code"] == 400, "空服务器名必须拒绝"
+assert _plugin43.reloads == 1 and len(_plugin43.config["mc_servers"]) == 3
+
+# 启用切换（用户核心诉求：点一下把未启用的服务器启用）
+_set_payload43({"index": 1, "enabled": True})
+_res43u = asyncio.run(_wac43.update_config_server())
+assert _res43u["data"]["saved"] is True
+assert _plugin43.config["mc_servers"][1]["enabled"] is True
+assert _plugin43.reloads == 2
+
+# 字段级更新：未传字段保持原值，字符串数字按 int 落盘
+_set_payload43({"index": 2, "display_name": "二号服", "reverse_port": "9999"})
+asyncio.run(_wac43.update_config_server())
+_u43 = _plugin43.config["mc_servers"][2]
+assert _u43["server"]["display_name"] == "二号服" and _u43["server"]["reverse_port"] == 9999
+assert _u43["server"]["ws_url"] == "ws://127.0.0.1:8280/minecraft/ws", "未传字段不得被清空"
+
+# 改名冲突 / 定位失败
+_set_payload43({"index": 2, "new_server_name": "Server"})
+assert asyncio.run(_wac43.update_config_server())["status_code"] == 400, "改名撞名必须拒绝"
+_set_payload43({"index": 99, "enabled": True})
+assert asyncio.run(_wac43.update_config_server())["status_code"] == 404
+_set_payload43({"server_name": "ghost", "enabled": True})
+assert asyncio.run(_wac43.update_config_server())["status_code"] == 404
+
+# 不带 index 时按 server_name 兜底定位
+_set_payload43({"server_name": "Server2", "enabled": False})
+assert asyncio.run(_wac43.update_config_server())["status_code"] == 200
+assert _plugin43.config["mc_servers"][2]["enabled"] is False
+
+# 删除
+_set_payload43({"index": 2})
+_res43d = asyncio.run(_wac43.delete_config_server())
+assert _res43d["data"]["removed"] == "Server2"
+assert len(_plugin43.config["mc_servers"]) == 2
+_set_payload43({"index": 5})
+assert asyncio.run(_wac43.delete_config_server())["status_code"] == 404
+
+# 插件实例未注入时降级（旧测试桩 / 非 AstrBot 环境）
+_wac43n = _WAC43(_Ctx43(), _sm43, None, None, None, {}, None, None, None, None)
+assert asyncio.run(_wac43n.get_config_servers())["data"]["servers"] == []
+assert asyncio.run(_wac43n.create_config_server())["status_code"] == 503
+assert asyncio.run(_wac43n.update_config_server())["status_code"] == 503
+assert asyncio.run(_wac43n.delete_config_server())["status_code"] == 503
+_wa43.request.json = _orig_json43
+print("OK  条目列表(含未启用) / 新建按 schema 补齐 / 启用切换 / 字段级更新 / 改名冲突 / 删除 / 备份与热重载 / 未注入插件降级")

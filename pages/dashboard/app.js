@@ -2,6 +2,10 @@
  * Minecraft QueQiao Plugin - Dashboard Logic
  */
 
+// 新建服务器时的默认值，与 core/constants.py 的 DEFAULT_WS_URL / _conf_schema.json 保持一致
+const DEFAULT_WS_URL = 'ws://127.0.0.1:8080/minecraft/ws';
+const DEFAULT_SERVER_NAME = 'Server';
+
 // MC 格式码到 CSS 类名的映射
 const MC_COLOR_MAP = {
   '0': 'mc-black',
@@ -150,6 +154,12 @@ class DashboardApp {
       savedAuto = null;
     }
     this.autoRefreshPref = savedAuto;
+    // conf（mc_servers）里的服务器条目，含**未启用**的条目：来自
+    // /config/servers。未启用条目在运行时不会建实例（main 层启动时跳过），
+    // 此前在这块面板上完全不可见，只能改配置文件才能启用。现在以灰色卡片
+    // 呈现，点进去即可启用/编辑/删除
+    this.configServers = [];
+    this.serverFormMode = null; // 'create' | 'edit'：服务器弹窗当前模式
   }
 
   async init() {
@@ -246,6 +256,27 @@ class DashboardApp {
       this.setupAutoRefresh(on);
       this.saveAutoRefreshPref(on);
     });
+
+    // 服务器条目弹窗（新建 / 编辑 / 启用 / 删除）
+    document.getElementById('btn-new-server')?.addEventListener('click', () => {
+      this.openServerForm('create');
+    });
+    document.getElementById('sf-close')?.addEventListener('click', () => this.closeServerForm());
+    document.getElementById('sf-cancel')?.addEventListener('click', () => this.closeServerForm());
+    document.getElementById('sf-save')?.addEventListener('click', () => this.submitServerForm());
+    document.getElementById('sf-delete')?.addEventListener('click', () => this.deleteServerEntry());
+    document.getElementById('sf-mode')?.addEventListener('change', () => this.syncServerFormModeRows());
+    const sfOverlay = document.getElementById('server-form-modal');
+    sfOverlay?.addEventListener('click', (e) => {
+      if (e.target === sfOverlay) this.closeServerForm();
+    });
+    // 回车提交（多行目标会话框除外）
+    document.getElementById('server-form-modal')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT') {
+        e.preventDefault();
+        this.submitServerForm();
+      }
+    });
   }
 
   // 顶部自动刷新开关持久化：后端 panel_prefs.json 为权威（换设备/清缓存
@@ -324,6 +355,19 @@ class DashboardApp {
         ),
       ]);
       this.servers = serversData?.servers || [];
+
+      // 1b. 配置中的服务器条目（含未启用）：失败不影响主流程，只丢灰卡区
+      try {
+        const confServers = await Promise.race([
+          this.apiGet('config/servers'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('配置服务器列表请求超时')), 8000)
+          ),
+        ]);
+        this.configServers = confServers?.servers || [];
+      } catch (e) {
+        console.warn('Failed to fetch config servers:', e);
+      }
 
       // 2. 获取统计数据（独立超时，失败不影响列表渲染）
       try {
@@ -539,22 +583,300 @@ class DashboardApp {
       }
     }
 
-    if (!this.servers.length) {
-      container.innerHTML = `
-        <div class="empty-box">
-          <p>⚠️ 暂未配置或加载到任何 Minecraft 服务器</p>
-          <p style="margin-top: 8px; font-size: 12px;">请在插件配置中添加 MC 服务器并确保 enabled 为 true</p>
-        </div>`;
-      return;
-    }
-
     // 单服务器视图只展示该服务器卡片；全局视图展示全部
     const list = activeServer ? [activeServer] : this.servers;
-    container.innerHTML = list.map(server => this.buildServerCardHtml(server)).join('');
+    let html = list.map(server => this.buildServerCardHtml(server)).join('');
+
+    // 全局视图额外追加：配置里存在但未生效的条目（灰色卡片，可点开启用）。
+    // 单服务器视图下不追加，避免切走当前实例的视野。
+    // 新建入口只保留区块标题右上角的「＋ 新建服务器」按钮，网格内不再放虚线新建卡
+    if (!activeServer) {
+      const pending = this.pendingConfigServers();
+      html += pending.map(item => this.buildDisabledServerCardHtml(item)).join('');
+      if (!list.length && !pending.length) {
+        html = `
+        <div class="empty-box">
+          <p>⚠️ 暂未配置任何 Minecraft 服务器</p>
+          <p style="margin-top: 8px; font-size: 12px;">点右上角「＋ 新建服务器」即可在面板里直接添加，保存后自动热重载生效</p>
+        </div>`;
+      }
+    }
+
+    container.innerHTML = html;
     this.bindServerCardActions();
+    this.bindServerManageActions();
     // 玩家进出/卡片高度变化后立即同步右侧监控面板高度（等一帧布局结算，
     // 避免 innerHTML 重建后读到旧高度）
     requestAnimationFrame(() => this.syncMonitorPanelHeight());
+  }
+
+  // 配置里存在、但运行时没有实例的条目：未启用（enabled=false）或启用了
+  // 却没生效（server_name 为空 / 与其它条目重复，被 main 层跳过）。
+  // 两类都必须显示出来，否则用户在面板上根本看不到它们
+  pendingConfigServers() {
+    const running = new Set(this.servers.map(s => s.server_name));
+    return (this.configServers || []).filter(
+      item => !item.enabled || !(item.running || running.has(item.server_name))
+    );
+  }
+
+  buildDisabledServerCardHtml(item) {
+    const modeText = item.ws_mode === 'reverse' ? '反向监听' : '正向连接';
+    const endpoint = item.ws_mode === 'reverse'
+      ? `${item.reverse_host || '0.0.0.0'}:${item.reverse_port || ''}${item.reverse_path || ''}`
+      : (item.ws_url || '--');
+    const label = item.label || item.server_name || `服务器 #${item.index + 1}`;
+    const idTag = item.server_name
+      ? `<span class="server-id-tag">(${escapeHtml(item.server_name)})</span>`
+      : '<span class="server-id-tag">(未命名)</span>';
+    const badge = item.enabled ? '未生效' : '未启用';
+    const hint = item.enabled
+      ? '已勾选启用但没有建立实例：服务器名可能为空或与其它条目重复'
+      : '配置存在但未启用';
+    const sessions = (item.target_sessions || []).length;
+
+    return `
+      <div class="server-card disabled" data-config-index="${item.index}"
+        title="点击打开配置：启用 / 编辑 / 删除">
+        <div class="server-card-header">
+          <div class="server-title-group">
+            <img class="server-favicon" src="${escapeHtml(this.defaultServerIcon)}" alt="">
+            <div class="server-name-wrap">
+              <div class="server-display-name">${escapeHtml(label)} ${idTag}</div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                ${escapeHtml(modeText)} · ${escapeHtml(endpoint)}
+              </div>
+            </div>
+          </div>
+          <div class="badges-group">
+            <div class="badges-row">
+              <span class="badge badge-disabled">${badge}</span>
+              <span class="badge badge-mode">${sessions} 个目标会话</span>
+            </div>
+          </div>
+        </div>
+        <div class="disabled-hint">${escapeHtml(hint)}</div>
+        <div class="disabled-actions">
+          <button class="btn btn-sm" data-server-action="edit" data-config-index="${item.index}">⚙ 配置</button>
+          <button class="btn btn-primary btn-sm" data-server-action="${item.enabled ? 'disable' : 'enable'}"
+            data-config-index="${item.index}">
+            ${item.enabled ? '⏸ 停用' : '▶ 启用'}
+          </button>
+        </div>
+      </div>`;
+  }
+
+  // 灰卡的事件绑定（与运行中卡片的 bindServerCardActions 分开，
+  // 避免 innerHTML 重建后重复绑定到旧节点）
+  bindServerManageActions() {
+    document.querySelectorAll('#servers-container .server-card[data-config-index]')
+      .forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('[data-server-action]')) return; // 按钮自行处理
+          this.openServerForm('edit', parseInt(card.dataset.configIndex, 10));
+        });
+      });
+    document.querySelectorAll('#servers-container [data-server-action]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.dataset.configIndex, 10);
+        const action = btn.dataset.serverAction;
+        if (action === 'edit') this.openServerForm('edit', index);
+        else await this.setServerEnabled(index, action === 'enable');
+      });
+    });
+  }
+
+  // 启用 / 停用一台已配置的服务器：写回 conf → 热重载（断开旧连接重建）
+  async setServerEnabled(index, enabled) {
+    const item = (this.configServers || []).find(s => s.index === index);
+    const label = item ? (item.label || item.server_name) : `#${index}`;
+    try {
+      const resp = await this.apiPost('config/server/update', { index, enabled });
+      this.configServers = resp?.servers || this.configServers;
+      this.showToast(
+        enabled ? `已启用「${label}」，正在热重载连接…` : `已停用「${label}」`,
+        'success'
+      );
+      await this.refreshAll(true);
+    } catch (e) {
+      this.showToast(`${enabled ? '启用' : '停用'}失败: ${e.message || '网络错误'}`, 'error');
+    }
+  }
+
+  // ---- 服务器条目弹窗（新建 / 编辑 / 删除）----
+
+  // 新建时的默认服务器名：取 conf 默认值 Server，已占用则递增到 Server2 / Server3 …
+  nextServerName() {
+    const used = new Set(
+      (this.configServers || []).map(s => (s.server_name || '').trim()).filter(Boolean)
+    );
+    if (!used.has(DEFAULT_SERVER_NAME)) return DEFAULT_SERVER_NAME;
+    let n = 2;
+    while (used.has(DEFAULT_SERVER_NAME + n)) n++;
+    return DEFAULT_SERVER_NAME + n;
+  }
+
+  openServerForm(mode, index = null) {
+    const item = mode === 'edit'
+      ? (this.configServers || []).find(s => s.index === index)
+      : null;
+    if (mode === 'edit' && !item) {
+      this.showToast('该服务器条目已不存在，请刷新后重试', 'warn');
+      return;
+    }
+    this.serverFormMode = mode;
+    this.serverFormIndex = mode === 'edit' ? index : null;
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.value = value ?? '';
+    };
+    const title = document.getElementById('sf-title');
+    const sub = document.getElementById('sf-sub');
+    const delBtn = document.getElementById('sf-delete');
+    const tokenHint = document.getElementById('sf-token-hint');
+
+    if (mode === 'edit') {
+      if (title) title.textContent = `⚙ 服务器配置 · ${item.label || item.server_name || '#' + index}`;
+      if (sub) {
+        sub.textContent = '';
+        sub.classList.add('hidden');
+      }
+      document.getElementById('sf-enabled').checked = !!item.enabled;
+      set('sf-name', item.server_name);
+      set('sf-display', item.display_name);
+      set('sf-mode', item.ws_mode === 'reverse' ? 'reverse' : 'forward');
+      set('sf-wsurl', item.ws_url);
+      set('sf-rhost', item.reverse_host || '0.0.0.0');
+      set('sf-rport', item.reverse_port || 8080);
+      set('sf-rpath', item.reverse_path || '/minecraft/ws');
+      set('sf-token', '');
+      set('sf-sessions', (item.target_sessions || []).join('\n'));
+      if (tokenHint) {
+        tokenHint.textContent = item.access_token_set
+          ? '已设置（留空 = 保持原值；填入新值即覆盖）'
+          : '与鹊桥端 access_token 一致；留空表示不修改';
+      }
+      delBtn?.classList.remove('hidden');
+    } else {
+      if (title) title.textContent = '＋ 新建服务器';
+      if (sub) sub.textContent = '按 conf 模板补齐其余字段，保存后立即热重载生效';
+      sub?.classList.remove('hidden');
+      document.getElementById('sf-enabled').checked = true;
+      set('sf-name', this.nextServerName());
+      set('sf-display', '');
+      set('sf-mode', 'forward');
+      set('sf-wsurl', DEFAULT_WS_URL);
+      set('sf-rhost', '0.0.0.0');
+      set('sf-rport', 8080);
+      set('sf-rpath', '/minecraft/ws');
+      set('sf-token', '');
+      set('sf-sessions', '');
+      if (tokenHint) tokenHint.textContent = '与鹊桥端 access_token 一致；无鉴权留空即可';
+      delBtn?.classList.add('hidden');
+    }
+    this.syncServerFormModeRows();
+    document.getElementById('server-form-modal')?.classList.remove('hidden');
+    // 名称已带默认值，聚焦并全选便于直接覆盖
+    const nameEl = document.getElementById('sf-name');
+    nameEl?.focus();
+    nameEl?.select();
+  }
+
+  // 连接方式联动：forward 只填 WS 地址，reverse 只填监听地址/路径
+  syncServerFormModeRows() {
+    const reverse = document.getElementById('sf-mode')?.value === 'reverse';
+    document.getElementById('sf-row-wsurl')?.classList.toggle('hidden', reverse);
+    document.getElementById('sf-row-reverse')?.classList.toggle('hidden', !reverse);
+    document.getElementById('sf-row-rpath')?.classList.toggle('hidden', !reverse);
+  }
+
+  closeServerForm() {
+    document.getElementById('server-form-modal')?.classList.add('hidden');
+    this.serverFormMode = null;
+  }
+
+  async submitServerForm() {
+    const mode = this.serverFormMode;
+    const nameEl = document.getElementById('sf-name');
+    const name = (nameEl?.value || '').trim();
+    if (!name) {
+      this.showToast('请填写服务器名称', 'error');
+      nameEl?.focus();
+      return;
+    }
+    const reverse = document.getElementById('sf-mode')?.value === 'reverse';
+    const payload = {
+      display_name: (document.getElementById('sf-display')?.value || '').trim(),
+      ws_mode: reverse ? 'reverse' : 'forward',
+      enabled: !!document.getElementById('sf-enabled')?.checked,
+      target_sessions: (document.getElementById('sf-sessions')?.value || '')
+        .split('\n').map(s => s.trim()).filter(Boolean),
+    };
+    if (reverse) {
+      payload.reverse_host = (document.getElementById('sf-rhost')?.value || '').trim() || '0.0.0.0';
+      payload.reverse_port = parseInt(document.getElementById('sf-rport')?.value, 10) || 8080;
+      payload.reverse_path = (document.getElementById('sf-rpath')?.value || '').trim() || '/minecraft/ws';
+    } else {
+      payload.ws_url = (document.getElementById('sf-wsurl')?.value || '').trim();
+    }
+    // 留空 = 不修改（编辑态尤其重要：不能因为没填就把已有 token 清掉）
+    const token = document.getElementById('sf-token')?.value || '';
+    if (token) payload.access_token = token;
+
+    const saveBtn = document.getElementById('sf-save');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      let resp;
+      if (mode === 'edit') {
+        const index = this.serverFormIndex;
+        resp = await this.apiPost('config/server/update', {
+          index,
+          new_server_name: name,
+          ...payload,
+        });
+        this.showToast(
+          `已保存「${name}」${payload.enabled ? '（启用）' : '（停用）'}，热重载中…`,
+          'success'
+        );
+      } else {
+        resp = await this.apiPost('config/server/create', { server_name: name, ...payload });
+        this.showToast(`已新建「${name}」，热重载中…`, 'success');
+      }
+      this.configServers = resp?.servers || this.configServers;
+      this.closeServerForm();
+      await this.refreshAll(true);
+    } catch (e) {
+      this.showToast(`保存失败: ${e.message || '网络错误'}`, 'error');
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  async deleteServerEntry() {
+    const index = this.serverFormIndex;
+    const item = (this.configServers || []).find(s => s.index === index);
+    if (!item) {
+      this.showToast('该服务器条目已不存在，请刷新后重试', 'warn');
+      return;
+    }
+    const label = item.label || item.server_name || `#${index}`;
+    const ok = await this.confirmDialog(
+      '删除服务器条目',
+      `将从插件配置中删除「${label}」，其连接与监控随之停止。`
+        + `\n配置会先备份到 data/conf_backups/，可手动恢复。`,
+      '确认删除'
+    );
+    if (!ok) return;
+    try {
+      const resp = await this.apiPost('config/server/delete', { index });
+      this.configServers = resp?.servers || this.configServers;
+      this.showToast(`已删除「${label}」`, 'success');
+      this.closeServerForm();
+      await this.refreshAll(true);
+    } catch (e) {
+      this.showToast(`删除失败: ${e.message || '网络错误'}`, 'error');
+    }
   }
 
   buildServerCardHtml(server) {
@@ -766,6 +1088,18 @@ class DashboardApp {
       }
     }
 
+    // 运行中的服务器同样提供「配置 / 停用」入口：下标按 conf 条目反查，
+    // 查不到（实例不由 conf 建立）时整行不渲染，避免出现点空的按钮
+    const cfgIndex = (this.configServers || [])
+      .find(s => s.server_name === server.server_name)?.index;
+    const manageHtml = cfgIndex === undefined ? '' : `
+        <div class="card-manage-actions">
+          <button class="btn btn-sm" data-server-action="edit" data-config-index="${cfgIndex}"
+            title="在面板里修改这台服务器的连接、Token 与目标会话">⚙ 配置</button>
+          <button class="btn btn-sm" data-server-action="disable" data-config-index="${cfgIndex}"
+            title="停用后立即断开连接，服务器转为灰色卡片保留，随时可再启用">⏸ 停用</button>
+        </div>`;
+
     return `
       <div class="server-card ${isConnected ? 'connected' : 'disconnected'}" id="server-card-${escapeHtml(server.server_name)}">
         <div class="server-card-header">
@@ -825,6 +1159,8 @@ class DashboardApp {
             ${playersListHtml}
           </div>
         </div>
+
+        ${manageHtml}
 
       </div>
     `;

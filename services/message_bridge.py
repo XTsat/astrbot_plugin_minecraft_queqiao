@@ -302,6 +302,12 @@ class MessageBridge:
             if all(sid != config.server_name for sid, _ in entries):
                 entries.append((config.server_name, config))
 
+    def clear(self) -> None:
+        """清空已注册服务器索引，供配置热重载前重置使用。"""
+        self._configs.clear()
+        self._session_to_servers.clear()
+        self._recently_forwarded.clear()
+
     def servers_for_session(self, umo: str) -> list[tuple[str, ServerConfig]]:
         """查询某会话绑定的服务器列表。"""
         return list(self._session_to_servers.get(umo, []))

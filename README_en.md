@@ -15,6 +15,7 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 - **Event broadcast**: player join / quit / death / achievement events forwarded to sessions (death & achievements unsupported on Vanilla/Velocity)
 - **Server management**: status queries, online player list, remote command execution
 - **Web Dashboard**: view server status, performance monitoring (TPS / latency), the bridge terminal in real time and connection observability (reconnect count / phase / limit alert, API timeout count), with quick broadcast and command console
+- **Manage servers from the panel**: create servers, enable / disable, edit connection settings and target sessions, or delete entries right from the dashboard; disabled servers stay visible as grey cards and can be enabled with one click — saving backs up the config and hot-reloads automatically
 - **AI chat**: talk to the AI in-game with the `ai` prefix; replies are sent privately to the player
 - **Multiple servers**: connect several servers, each with independent forwarding settings
 - **Flexible transport**: forward mode (plugin dials QueQiao) or reverse mode (QueQiao dials plugin, ideal for rented servers)
@@ -52,6 +53,16 @@ trigger <&param&><<>>actual command {param} {sender}
 Example: `tp <&X&> <&y&> <&z&><<>>tp {sender} <&X&> <&y&> <&z&>` — if user A has bound the game ID `Misaka` and sends `tp 114 514 1919` in the group, the server actually runs `tp Misaka 114 514 1919`.
 
 ## Configuration
+
+### Managing servers from the panel
+
+The dashboard (plugin Pages) manages the servers in your config directly — no more hand-editing the config file:
+
+- **Create a server**: click “＋ 新建服务器” in the section header or the placeholder card in the grid, then fill in the server name (must match `server_name` in QueQiao's `config.yml`), display name, transport and address, token and target sessions. Remaining fields are filled from the config template, so the entry is identical to one added in the WebUI
+- **Enable / disable**: a disabled server **does not disappear** — it stays on the panel as a grey card with a dashed border; click the card or its “▶ 启用” button to enable it, and a running server can be paused with “⏸ 停用”
+- **Edit / delete**: click a grey card to open the form and change the server name, display name, transport (forward / reverse) and address, token (leave empty to keep the current one) or target sessions (one per line), or delete the entry
+- **Inactive entries stay visible**: an entry with an empty or duplicate server name is skipped by the main flow; it is shown as a grey “未生效” card so the problem is easy to spot
+- Every save backs up the previous config to `data_dir/conf_backups/`, writes it atomically and **hot-reloads** (old connections are dropped and rebuilt from the new config); a failure never corrupts the in-memory config
 
 ### Connection
 

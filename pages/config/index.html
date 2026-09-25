@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Minecraft 鹊桥互通 · 配置管理</title>
+  <link rel="stylesheet" href="./style.css" />
+  <!-- 显式引入 AstrBot Plugin Page Bridge SDK，确保兼容 -->
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+</head>
+<body>
+  <header class="cfg-header">
+    <div class="cfg-header-title">
+      <span class="cfg-header-icon">⚙️</span>
+      <div>
+        <h1 class="cfg-title">鹊桥配置管理</h1>
+        <div class="cfg-subtitle" id="cfg-subtitle">正在加载配置...</div>
+      </div>
+    </div>
+    <div class="cfg-header-actions">
+      <span class="cfg-save-state" id="cfg-save-state"></span>
+      <button class="btn" id="btn-json-toggle" title="在可视化表单与原始 JSON 之间切换">📝 JSON 模式</button>
+      <button class="btn btn-primary" id="btn-save" disabled>💾 保存并重载</button>
+    </div>
+  </header>
+
+  <div class="cfg-layout">
+    <!-- 左侧：字段导航 -->
+    <nav class="cfg-nav" id="cfg-nav" aria-label="配置分区导航"></nav>
+
+    <!-- 右侧：表单主体 -->
+    <main class="cfg-main">
+      <!-- 可视化表单模式 -->
+      <div id="cfg-form-panel">
+        <div class="cfg-loading" id="cfg-loading">正在加载配置 Schema...</div>
+        <form id="cfg-form" class="hidden" autocomplete="off"></form>
+      </div>
+
+      <!-- JSON 模式 -->
+      <div id="cfg-json-panel" class="hidden">
+        <div class="json-hint">直接编辑完整配置 JSON。保存时后端会校验对象结构并保留 UTF-8 BOM；修改服务器/图床条目时请保留 <code>__template_key</code> 字段。</div>
+        <textarea id="cfg-json-text" class="json-editor" spellcheck="false"></textarea>
+      </div>
+    </main>
+  </div>
+
+  <!-- 操作结果提示条 -->
+  <div class="cfg-toast hidden" id="cfg-toast"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -7,19 +7,94 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 
-from ..core.constants import PLUGIN_NAME
+from ..core.constants import (
+    DEFAULT_CLIENT_ORIGIN,
+    DEFAULT_REVERSE_HOST,
+    DEFAULT_REVERSE_PATH,
+    DEFAULT_REVERSE_PORT,
+    DEFAULT_WS_URL,
+    PLUGIN_NAME,
+)
 from ..core.queqiao_client import reverse_servers_snapshot
 from .host_mem import correct_physical_memory
 from .metrics import MetricsCollector
 
 # 互通终端默认加载最近几天的分片（含当天）：避免一次拉取 30 天全量
 DEFAULT_TERMINAL_DAYS = 2
+
+# 面板可管理的服务器条目字段（conf 中 mc_servers 的子集，其余字段回落 schema 默认值）
+_SERVER_TEMPLATE_KEY = "server"
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """防御式布尔解析：WebUI/JSON 里可能是字符串 "true"/"false"。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("true", "1", "yes", "on"):
+            return True
+        if text in ("false", "0", "no", "off", ""):
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _as_int(value: Any, default: int) -> int:
+    """防御式整数解析：非数字回落默认值。"""
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_str_list(value: Any) -> list[str]:
+    """把目标会话等字段规整为字符串列表（兼容单值/字符串/逗号分隔）。"""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _schema_default(spec: Any) -> Any:
+    """按 ``_conf_schema.json`` 的字段规格推导默认值。
+
+    与配置页前端 ``makeDefault()`` 同语义，保证「面板新建服务器」写出的
+    条目结构与 AstrBot WebUI / 配置页新增的条目完全一致。
+    """
+    if not isinstance(spec, dict):
+        return None
+    kind = spec.get("type")
+    default = spec.get("default")
+    if kind == "bool":
+        return bool(default)
+    if kind == "int":
+        return default if isinstance(default, int) and not isinstance(default, bool) else 0
+    if kind == "string":
+        return default if isinstance(default, str) else ""
+    if kind == "list":
+        return list(default) if isinstance(default, list) else []
+    if kind == "object":
+        items = spec.get("items")
+        if not isinstance(items, dict):
+            return {}
+        return {key: _schema_default(sub) for key, sub in items.items()}
+    return None
 
 try:
     from astrbot.api.web import error_response, json_response, request, stream_response
@@ -46,6 +121,7 @@ if TYPE_CHECKING:
     from astrbot.api.star import Context
     from ..core.models_config import ServerConfig
     from ..core.server_manager import ServerManager
+    from ..main import MinecraftQueQiaoPlugin
     from .binding import BindingService
     from .image_bed import ImageBedUploaderGroup
     from .monitor import MonitorCollector
@@ -67,6 +143,7 @@ class WebApiController:
         terminal_logs: TerminalLogStore | None = None,
         monitor: "MonitorCollector | None" = None,
         panel_prefs: "PanelPrefsStore | None" = None,
+        plugin: "MinecraftQueQiaoPlugin | None" = None,
     ) -> None:
         self.context = context
         self.server_manager = server_manager
@@ -77,6 +154,7 @@ class WebApiController:
         self.terminal_logs = terminal_logs
         self.monitor = monitor
         self.panel_prefs = panel_prefs
+        self.plugin = plugin
 
     def register_routes(self) -> None:
         """向 AstrBot Context 注册所有 Web API 路由。"""
@@ -127,6 +205,32 @@ class WebApiController:
             ("/image_bed/status", self.get_image_bed_status, ["GET"], "获取图床服务状态"),
             ("/reverse/servers", self.get_reverse_servers, ["GET"], "反向共享 WS 服务端状态"),
             ("/config", self.get_config_overview, ["GET"], "获取插件配置概览"),
+            ("/config/full", self.get_config_full, ["GET"], "获取完整插件配置与配置 Schema"),
+            ("/config/save", self.save_config_full, ["POST"], "保存完整插件配置并热重载"),
+            (
+                "/config/servers",
+                self.get_config_servers,
+                ["GET"],
+                "列出配置中的服务器条目（含未启用）",
+            ),
+            (
+                "/config/server/create",
+                self.create_config_server,
+                ["POST"],
+                "新建服务器条目并热重载生效",
+            ),
+            (
+                "/config/server/update",
+                self.update_config_server,
+                ["POST"],
+                "修改服务器条目或启用状态并热重载生效",
+            ),
+            (
+                "/config/server/delete",
+                self.delete_config_server,
+                ["POST"],
+                "删除服务器条目并热重载生效",
+            ),
             ("/panel/prefs", self.get_panel_prefs, ["GET"], "获取面板级偏好（长期存储）"),
             ("/panel/prefs", self.set_panel_prefs, ["POST"], "保存面板级偏好（长期存储）"),
         ]
@@ -624,6 +728,359 @@ class WebApiController:
                 }
             )
         return json_response({"servers": servers})
+
+    def _read_schema(self) -> dict[str, Any]:
+        """读取插件根目录的 ``_conf_schema.json``（读取失败返回空 dict）。"""
+        try:
+            candidate = Path(__file__).resolve().parent.parent / "_conf_schema.json"
+            if candidate.is_file():
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            logger.warning(f"[{PLUGIN_NAME}] 读取 _conf_schema.json 失败", exc_info=True)
+        return {}
+
+    async def get_config_full(self) -> Any:
+        """获取完整插件配置与配置 Schema（供配置页表单渲染）。
+
+        Schema 取自插件根目录 ``_conf_schema.json``；配置为内存中当前值
+        （含尚未保存的运行时状态，与磁盘文件一致）。
+        """
+        conf = dict(self.plugin.config) if self.plugin is not None else {}
+        schema = self._read_schema() or None
+        data_dir = str(getattr(self.plugin, "_data_dir", "") or "")
+        return json_response(
+            {
+                "conf": conf,
+                "schema": schema,
+                "active_servers": list(self.configs.keys()),
+                "data_dir": data_dir,
+            }
+        )
+
+    async def _persist_config(self, new_conf: dict[str, Any]) -> None:
+        """备份当前配置 → 原子落盘（utf-8-sig）→ 热重载。
+
+        Pages 面板改配置的唯一落盘链路：``/config/save`` 与服务器条目
+        增删改（``/config/server/*``）共用，保证行为一致（含失败不阻断
+        保存的备份容错）。
+        """
+        data_dir = Path(getattr(self.plugin, "_data_dir", "") or ".")
+        bak_dir = data_dir / "conf_backups"
+        try:
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            bak_dir.joinpath(f"{ts}.json").write_text(
+                json.dumps(dict(self.plugin.config), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.warning(f"[{PLUGIN_NAME}] 配置备份失败（不阻断保存）", exc_info=True)
+        await self.plugin.config.save_config_async(new_conf)
+        await self.plugin.reload_config()
+
+    async def save_config_full(self) -> Any:
+        """保存完整插件配置并热重载。
+
+        流程：备份当前配置到 ``data_dir/conf_backups/`` → AstrBot 原子写
+        （utf-8-sig 保留 BOM）→ 调用插件热重载（断开旧连接、按新配置重建）。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法保存配置", status_code=503)
+        raw = await request.json(default=None)
+        if not isinstance(raw, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+        new_conf = raw.get("conf")
+        if not isinstance(new_conf, dict):
+            return error_response("conf 字段需为 JSON 对象", status_code=400)
+        try:
+            await self._persist_config(new_conf)
+            return json_response(
+                {
+                    "saved": True,
+                    "active_servers": list(self.configs.keys()),
+                }
+            )
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 保存配置失败")
+            return error_response(f"保存配置失败: {exc}", status_code=500)
+
+    # ---- 服务器条目管理（面板直接改 conf 里的 mc_servers） ----
+
+    def _conf_server_entries(self) -> list[Any]:
+        """当前内存配置里的 mc_servers 原始条目列表（含未启用条目）。"""
+        if self.plugin is None:
+            return []
+        entries = self.plugin.config.get("mc_servers")
+        if isinstance(entries, dict):  # 防御：误存成单项对象
+            entries = [entries]
+        return entries if isinstance(entries, list) else []
+
+    def _conf_with_servers(self, entries: list[Any]) -> dict[str, Any]:
+        """把替换后的条目列表合成一份完整配置（供落盘 + 热重载）。"""
+        new_conf = dict(self.plugin.config)
+        new_conf["mc_servers"] = entries
+        return new_conf
+
+    def _new_server_entry(self, template_key: str = _SERVER_TEMPLATE_KEY) -> dict[str, Any]:
+        """按 schema 模板生成一份全新服务器条目（默认值全部取自 schema）。
+
+        schema 缺失（异常环境）时退化为最小可用结构，保证新建功能不中断。
+        """
+        templates = (self._read_schema().get("mc_servers") or {}).get("templates") or {}
+        template = templates.get(template_key) or templates.get(_SERVER_TEMPLATE_KEY)
+        if not isinstance(template, dict):
+            logger.warning(f"[{PLUGIN_NAME}] 未找到 mc_servers 模板，使用最小默认结构")
+            return {
+                "__template_key": _SERVER_TEMPLATE_KEY,
+                "enabled": True,
+                "target_sessions": [],
+                "server": {
+                    "server_name": "",
+                    "display_name": "",
+                    "ws_mode": "forward",
+                    "ws_url": DEFAULT_WS_URL,
+                    "reverse_host": DEFAULT_REVERSE_HOST,
+                    "reverse_port": DEFAULT_REVERSE_PORT,
+                    "reverse_path": DEFAULT_REVERSE_PATH,
+                    "access_token": "",
+                    "client_origin": DEFAULT_CLIENT_ORIGIN,
+                },
+            }
+        entry: dict[str, Any] = {
+            "__template_key": template_key if template_key in templates else _SERVER_TEMPLATE_KEY
+        }
+        items = template.get("items")
+        if isinstance(items, dict):
+            for key, spec in items.items():
+                entry[key] = _schema_default(spec)
+        entry.setdefault("enabled", True)
+        return entry
+
+    def _config_server_items(self) -> list[dict[str, Any]]:
+        """把 conf 里的服务器条目整理成面板可用的结构（含未启用条目）。
+
+        ``enabled`` 与 main 层跳过逻辑同口径（真值判定）：面板显示的
+        「已启用」必须等于实际会被加载的条目，否则面板会说谎。
+        """
+        items: list[dict[str, Any]] = []
+        for index, entry in enumerate(self._conf_server_entries()):
+            if not isinstance(entry, dict):
+                continue
+            raw_server = entry.get("server")
+            server = raw_server if isinstance(raw_server, dict) else {}
+            server_name = str(server.get("server_name") or "").strip()
+            display_name = str(server.get("display_name") or "").strip()
+            ws_mode = str(server.get("ws_mode") or "forward").strip().lower()
+            if ws_mode not in ("forward", "reverse"):
+                ws_mode = "forward"
+            instance = self.server_manager.get(server_name) if server_name else None
+            items.append(
+                {
+                    "index": index,
+                    "server_name": server_name,
+                    "display_name": display_name,
+                    "label": display_name or server_name or f"服务器 #{index + 1}",
+                    "enabled": bool(entry.get("enabled", True)),
+                    "ws_mode": ws_mode,
+                    "ws_url": str(server.get("ws_url") or ""),
+                    "reverse_host": str(server.get("reverse_host") or ""),
+                    "reverse_port": _as_int(
+                        server.get("reverse_port"), DEFAULT_REVERSE_PORT
+                    ),
+                    "reverse_path": str(server.get("reverse_path") or ""),
+                    # 不返回 access_token 明文，只暴露「是否已设置」
+                    "access_token_set": bool(str(server.get("access_token") or "").strip()),
+                    "target_sessions": _as_str_list(entry.get("target_sessions")),
+                    "running": server_name in self.configs,
+                    "connected": bool(instance.connected) if instance is not None else False,
+                }
+            )
+        return items
+
+    def _find_server_entry(
+        self, entries: list[Any], index: Any, server_name: str
+    ) -> tuple[int, dict[str, Any]] | None:
+        """按 index 优先、server_name 兜底定位条目，返回 (下标, 条目)。"""
+        if isinstance(index, bool):
+            index = None
+        if isinstance(index, (int, str)) and str(index).strip() != "":
+            try:
+                position = int(str(index).strip())
+            except ValueError:
+                position = -1
+            if 0 <= position < len(entries) and isinstance(entries[position], dict):
+                return position, entries[position]
+        if server_name:
+            for position, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    continue
+                raw_server = entry.get("server")
+                server = raw_server if isinstance(raw_server, dict) else {}
+                if str(server.get("server_name") or "").strip() == server_name:
+                    return position, entry
+        return None
+
+    def _config_servers_response(self, **extra: Any) -> Any:
+        """统一返回格式：最新条目列表 + 当前生效的服务器名。"""
+        payload: dict[str, Any] = {
+            "servers": self._config_server_items(),
+            "active_servers": list(self.configs.keys()),
+        }
+        payload.update(extra)
+        return json_response(payload)
+
+    async def get_config_servers(self) -> Any:
+        """列出 conf 中配置的全部服务器条目（含未启用条目）。
+
+        仪表盘 / 配置页据此把「配置里存在但未启用」的服务器渲染成灰色
+        卡片——它们在运行时不会建立连接（main 层跳过），此前在面板上
+        完全不可见，只能靠改配置文件才能启用。
+        """
+        return self._config_servers_response()
+
+    async def create_config_server(self) -> Any:
+        """新建一台服务器条目并热重载生效。
+
+        请求体：``{"server_name": "...", "display_name": "...",
+        "ws_mode": "forward"|"reverse", "ws_url": "...", "reverse_port": 8080,
+        "access_token": "...", "target_sessions": [...], "enabled": true}``。
+        仅显式出现的字段覆盖 schema 默认值，其余字段按 ``_conf_schema.json``
+        模板补齐，保证条目结构与 WebUI 新增的完全一致。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        server_name = str(payload.get("server_name") or "").strip()
+        if not server_name:
+            return error_response("服务器名称不能为空", status_code=400)
+
+        entries = copy.deepcopy(self._conf_server_entries())
+        if self._find_server_entry(entries, None, server_name) is not None:
+            return error_response(f"服务器名称已存在: {server_name}", status_code=400)
+
+        entry = self._new_server_entry(str(payload.get("template_key") or _SERVER_TEMPLATE_KEY))
+        raw_server = entry.get("server")
+        server = raw_server if isinstance(raw_server, dict) else {}
+        entry["server"] = server
+        server["server_name"] = server_name
+        if "display_name" in payload:
+            server["display_name"] = str(payload.get("display_name") or "").strip()
+        ws_mode = str(payload.get("ws_mode") or "").strip().lower()
+        if ws_mode in ("forward", "reverse"):
+            server["ws_mode"] = ws_mode
+        for key in ("ws_url", "reverse_host", "reverse_path", "access_token", "client_origin"):
+            if key in payload:
+                server[key] = str(payload.get(key) or "")
+        if "reverse_port" in payload:
+            server["reverse_port"] = _as_int(
+                payload.get("reverse_port"), DEFAULT_REVERSE_PORT
+            )
+        if "target_sessions" in payload:
+            entry["target_sessions"] = _as_str_list(payload.get("target_sessions"))
+        entry["enabled"] = _as_bool(payload.get("enabled"), True)
+
+        entries.append(entry)
+        try:
+            await self._persist_config(self._conf_with_servers(entries))
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 新建服务器失败")
+            return error_response(f"新建服务器失败: {exc}", status_code=500)
+        logger.info(f"[{PLUGIN_NAME}] 面板新建服务器: {server_name}")
+        return self._config_servers_response(saved=True, server_name=server_name)
+
+    async def update_config_server(self) -> Any:
+        """修改一台已配置服务器的字段 / 启用状态并热重载。
+
+        请求体需带 ``index``（列表接口返回的下标）或 ``server_name`` 定位
+        条目；其余字段仅「显式出现」才覆盖，避免前端漏传把已有配置清空。
+        ``access_token`` 传空串表示清空，不传表示保持原值。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        entries = copy.deepcopy(self._conf_server_entries())
+        found = self._find_server_entry(
+            entries, payload.get("index"), str(payload.get("server_name") or "").strip()
+        )
+        if found is None:
+            return error_response("未找到对应的服务器条目", status_code=404)
+        position, entry = found
+        raw_server = entry.get("server")
+        server = raw_server if isinstance(raw_server, dict) else {}
+        entry["server"] = server
+
+        # 改名：校验非空 + 不与其它条目重名（重名会让 main 层丢弃后者）
+        new_name = str(payload.get("new_server_name") or "").strip()
+        if new_name:
+            other = self._find_server_entry(entries, None, new_name)
+            if other is not None and other[0] != position:
+                return error_response(f"服务器名称已存在: {new_name}", status_code=400)
+            server["server_name"] = new_name
+        if "display_name" in payload:
+            server["display_name"] = str(payload.get("display_name") or "").strip()
+        ws_mode = str(payload.get("ws_mode") or "").strip().lower()
+        if ws_mode in ("forward", "reverse"):
+            server["ws_mode"] = ws_mode
+        for key in ("ws_url", "reverse_host", "reverse_path", "access_token", "client_origin"):
+            if key in payload:
+                server[key] = str(payload.get(key) or "")
+        if "reverse_port" in payload:
+            server["reverse_port"] = _as_int(
+                payload.get("reverse_port"), DEFAULT_REVERSE_PORT
+            )
+        if "target_sessions" in payload:
+            entry["target_sessions"] = _as_str_list(payload.get("target_sessions"))
+        if "enabled" in payload:
+            entry["enabled"] = _as_bool(payload.get("enabled"), True)
+
+        try:
+            await self._persist_config(self._conf_with_servers(entries))
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 更新服务器配置失败")
+            return error_response(f"更新服务器配置失败: {exc}", status_code=500)
+        logger.info(
+            f"[{PLUGIN_NAME}] 面板更新服务器: "
+            f"{server.get('server_name') or '#' + str(position)}"
+        )
+        return self._config_servers_response(
+            saved=True, server_name=str(server.get("server_name") or "")
+        )
+
+    async def delete_config_server(self) -> Any:
+        """删除一台服务器条目并热重载（连接随即断开，配置备份已留存）。"""
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        entries = copy.deepcopy(self._conf_server_entries())
+        found = self._find_server_entry(
+            entries, payload.get("index"), str(payload.get("server_name") or "").strip()
+        )
+        if found is None:
+            return error_response("未找到对应的服务器条目", status_code=404)
+        position, entry = found
+        raw_server = entry.get("server")
+        server = raw_server if isinstance(raw_server, dict) else {}
+        removed_name = str(server.get("server_name") or "").strip()
+
+        entries.pop(position)
+        try:
+            await self._persist_config(self._conf_with_servers(entries))
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 删除服务器配置失败")
+            return error_response(f"删除服务器配置失败: {exc}", status_code=500)
+        logger.info(f"[{PLUGIN_NAME}] 面板删除服务器: {removed_name or '#' + str(position)}")
+        return self._config_servers_response(saved=True, removed=removed_name)
 
     def get_panel_prefs(self) -> Any:
         """获取面板级偏好（互通终端加载天数等，长期存储在后端）。
