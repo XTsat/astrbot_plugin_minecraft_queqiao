@@ -4474,7 +4474,18 @@ _wac44 = _WAC44(
 
 from astrbot_plugin_minecraft_queqiao.core.models_config import _to_bool as _to_bool44
 
-_plugin44.SOFT_CONFIG_KEYS = ("enable_ai_chat", "ai_chat_prefix")
+_plugin44.SOFT_CONFIG_KEYS = (
+    "enable_ai_chat",
+    "ai_chat_prefix",
+    "forward_chat_to_astrbot",
+    "forward_chat_format",
+    "forward_join_leave_to_astrbot",
+    "forward_death_to_astrbot",
+    "forward_achievement_to_astrbot",
+    "auto_forward_prefix",
+    "target_sessions",
+    "terminal_days",
+)
 
 
 def _apply_soft44(server_name, fields):
@@ -4482,14 +4493,37 @@ def _apply_soft44(server_name, fields):
     cfg = _wac44.configs.get(server_name)
     if cfg is None or not isinstance(fields, dict):
         return False
+    _bool_keys44 = {
+        "enable_ai_chat": True,
+        "forward_chat_to_astrbot": True,
+        "forward_join_leave_to_astrbot": False,
+        "forward_death_to_astrbot": False,
+        "forward_achievement_to_astrbot": False,
+    }
     applied = False
     for _key in _plugin44.SOFT_CONFIG_KEYS:
         if _key not in fields:
             continue
-        if _key == "enable_ai_chat":
-            cfg.enable_ai_chat = _to_bool44(fields.get(_key), True)
+        if _key in _bool_keys44:
+            setattr(cfg, _key, _to_bool44(fields.get(_key), _bool_keys44[_key]))
+        elif _key == "target_sessions":
+            if isinstance(fields.get(_key), list):
+                cfg.target_sessions = [
+                    str(x).strip() for x in fields[_key] if str(x).strip()
+                ]
+            elif fields.get(_key) is None:
+                cfg.target_sessions = []
+            else:
+                continue
+        elif _key == "terminal_days":
+            # 互通终端加载天数（每台服务器独立）：0~30 钳制，与 main.py 同口径
+            try:
+                _td44 = int(str(fields.get(_key)).strip())
+            except (TypeError, ValueError):
+                _td44 = int(getattr(cfg, _key, 2))
+            setattr(cfg, _key, max(0, min(30, _td44)))
         else:
-            cfg.ai_chat_prefix = str(fields.get(_key) or "").strip()
+            setattr(cfg, _key, str(fields.get(_key) or "").strip())
         applied = True
     return applied
 
@@ -4547,6 +4581,67 @@ asyncio.run(_wac44.update_config_server())
 assert _plugin44.config["mc_servers"][0]["enable_ai_chat"] is True
 assert _cfg44_run.enable_ai_chat is True and _plugin44.reloads == 0
 
+# ---- 消息转发（conf 的 message 子对象）：面板「功能设置」读写 ----
+# 列表接口回显 message 子对象，缺省值回落 schema 默认（面板首次打开即真实值）
+_it44d = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+_m44 = _it44d["message"]
+assert _m44["forward_chat_to_astrbot"] is True
+assert _m44["forward_chat_format"] == "[{display_name}]{player}: {message}"
+assert _m44["forward_join_leave_to_astrbot"] is False
+assert _m44["forward_death_to_astrbot"] is False
+assert _m44["forward_achievement_to_astrbot"] is False
+assert _m44["auto_forward_prefix"] == ""
+assert _it44d["target_sessions"] == ["default:GroupMessage:1"]
+
+# 面板保存消息转发 + 目标会话：写 message 子对象 / 顶层 target_sessions +
+# 落盘 + 就地生效（全属软字段，不得热重载）
+_set_payload44({
+    "index": 0,
+    "message": {
+        "forward_chat_to_astrbot": False,
+        "forward_chat_format": "<{player}> {message}",
+        "forward_join_leave_to_astrbot": True,
+        "forward_death_to_astrbot": True,
+        "forward_achievement_to_astrbot": True,
+        "auto_forward_prefix": "!",
+    },
+    "target_sessions": ["umo:GroupMessage:9", "umo:GroupMessage:2"],
+})
+_resp44d = asyncio.run(_wac44.update_config_server())
+assert _resp44d["data"]["saved"] is True
+assert _resp44d["data"]["reloaded"] is False, "消息转发 / 目标会话属软字段，不得热重载"
+_entry44m = _plugin44.config["mc_servers"][0]
+assert _entry44m["message"]["forward_chat_to_astrbot"] is False
+assert _entry44m["message"]["forward_chat_format"] == "<{player}> {message}"
+assert _entry44m["message"]["forward_join_leave_to_astrbot"] is True
+assert _entry44m["message"]["forward_death_to_astrbot"] is True
+assert _entry44m["message"]["forward_achievement_to_astrbot"] is True
+assert _entry44m["message"]["auto_forward_prefix"] == "!"
+assert _entry44m["target_sessions"] == ["umo:GroupMessage:9", "umo:GroupMessage:2"]
+assert _plugin44.reloads == 0, "转发保存不得热重载（连接与监控保持不动）"
+assert _cfg44_run.forward_chat_to_astrbot is False
+assert _cfg44_run.forward_chat_format == "<{player}> {message}"
+assert _cfg44_run.forward_join_leave_to_astrbot is True
+assert _cfg44_run.forward_death_to_astrbot is True
+assert _cfg44_run.forward_achievement_to_astrbot is True
+assert _cfg44_run.auto_forward_prefix == "!"
+assert _cfg44_run.target_sessions == ["umo:GroupMessage:9", "umo:GroupMessage:2"], \
+    "运行时 ServerConfig 必须就地更新，否则要等下次重载才生效"
+# 字符串布尔兼容（表单 / WebUI 可能传字符串）
+_set_payload44({"index": 0, "message": {"forward_chat_to_astrbot": "true"}})
+asyncio.run(_wac44.update_config_server())
+_entry44m2 = _plugin44.config["mc_servers"][0]
+assert _entry44m2["message"]["forward_chat_to_astrbot"] is True
+assert _entry44m2["message"]["forward_chat_format"] == "<{player}> {message}", \
+    "message 子对象漏传键不得清空既有值（合并语义）"
+assert _entry44m2["message"]["auto_forward_prefix"] == "!"
+assert _cfg44_run.forward_chat_to_astrbot is True and _plugin44.reloads == 0
+# 回读与落盘一致（面板保存后 refreshAll 会重新拉这个接口）
+_it44e = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44e["message"]["forward_chat_format"] == "<{player}> {message}"
+assert _it44e["message"]["auto_forward_prefix"] == "!"
+assert _it44e["target_sessions"] == ["umo:GroupMessage:9", "umo:GroupMessage:2"]
+
 # 连接类字段（display_name / ws_url / enabled 等）仍走完整热重载
 _set_payload44({"index": 0, "enable_ai_chat": True, "display_name": "新名字"})
 _resp44b = asyncio.run(_wac44.update_config_server())
@@ -4559,6 +4654,39 @@ _set_payload44({"index": 0, "enable_ai_chat": False})
 _resp44c = asyncio.run(_wac44.update_config_server())
 assert _resp44c["data"]["reloaded"] is True and _plugin44.reloads == 2
 _wac44.configs = _prev_configs44
+
+# ---- 互通终端加载天数（conf 条目顶层，每台服务器独立）----
+# 列表接口回显：未配置时回落默认 2（面板打开即真实生效值）
+_it44f = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44f["terminal_days"] == 2, "未配置 terminal_days 应回落默认 2"
+# 保存：显式提交 + 落盘 + 就地生效（软字段，不得热重载）
+_set_payload44({"index": 0, "terminal_days": 5})
+_resp44t = asyncio.run(_wac44.update_config_server())
+assert _resp44t["data"]["saved"] is True
+assert _resp44t["data"]["reloaded"] is False, "terminal_days 属软字段，不得热重载"
+assert _plugin44.config["mc_servers"][0]["terminal_days"] == 5, "需落盘到条目顶层"
+assert _cfg44_run.terminal_days == 5, "运行时 ServerConfig 必须就地更新"
+# 钳制：0~30 硬边界 + 字符串整数兼容（表单 / WebUI 可能传字符串）
+_set_payload44({"index": 0, "terminal_days": 99})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["terminal_days"] == 30, "超过上限需钳制"
+assert _cfg44_run.terminal_days == 30 and _plugin44.reloads == 2
+_set_payload44({"index": 0, "terminal_days": -3})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["terminal_days"] == 0, "低于下限需钳制"
+assert _cfg44_run.terminal_days == 0
+_set_payload44({"index": 0, "terminal_days": "7"})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["terminal_days"] == 7
+assert _cfg44_run.terminal_days == 7
+# 漏传不覆盖（合并语义）
+_set_payload44({"index": 0, "ai_chat_prefix": "x"})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["terminal_days"] == 7, "漏传不得清空既有值"
+# 回读与落盘一致（面板保存后 refreshAll 会重新拉这个接口）
+_it44t = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44t["terminal_days"] == 7
+assert _plugin44.reloads == 2, "terminal_days 全程不得触发热重载"
 
 
 def _post_prefs44(payload):
@@ -4597,6 +4725,9 @@ _html44 = (_web44 / "index.html").read_text(encoding="utf-8")
 _js44 = (_web44 / "app.js").read_text(encoding="utf-8")
 _css44 = (_web44 / "style.css").read_text(encoding="utf-8")
 for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"',
+                'id="st-fwd-chat"', 'id="st-fwd-chat-format"', 'id="st-fwd-joinleave"',
+                'id="st-fwd-death"', 'id="st-fwd-achievement"', 'id="st-fwd-prefix"',
+                'id="st-fwd-sessions"',
                 'id="st-auto-refresh"', 'id="st-terminal-days"', 'id="settings-save"',
                 'id="settings-toggle"'):
     assert _need44 in _html44, f"设置面板缺少 {_need44}"
@@ -4609,6 +4740,12 @@ assert "ms-auto-refresh" not in _js44 and "ms-terminal-days" not in _js44, (
     "监控设置不应再读写已迁出的控件"
 )
 assert "settings_collapsed" in _js44 and "auto_refresh_interval" in _js44
+assert "forward_chat_to_astrbot" in _js44 and "target_sessions" in _js44, (
+    "前端必须读写消息转发字段（message 子对象）"
+)
+assert "terminalDaysFor" in _js44, "前端必须按当前服务器读取 terminal_days"
+assert "queqiao_terminal_days" not in _js44, "terminal_days 已迁 conf，不得再写 localStorage"
 assert ".settings-panel" in _css44, "缺少设置面板样式"
 print("OK  AI 字段条目顶层读写(不污染 server 子对象) / 前缀置空与字符串布尔 / "
+      "消息转发 message 子对象读写·漏传合并·运行时就地生效 / 目标会话软更新 / "
       "自动刷新间隔与折叠状态钳制·合并·落盘 / 监控弹窗控件迁移与前端静态守卫")

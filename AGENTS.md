@@ -209,7 +209,11 @@ SecurityError**，不是返回空——任何「try/catch 包一下就能用」�
   `services/web_api.py::set_panel_prefs`：白名单字段、钳制校验、合并原子落盘）
 - 已按此模式落盘的偏好：`active_tab`（当前服务器视图）、`auto_refresh`
   （自动刷新开关）、`auto_refresh_interval`（间隔秒数）、
-  `settings_collapsed`（功能设置面板折叠）、`terminal_days`（终端加载天数）
+  `settings_collapsed`（功能设置面板折叠）
+- 例外：`terminal_days`（互通终端加载天数）早期也走 panel_prefs，后迁为
+  **每台服务器独立配置**（conf 条目顶层 + `SOFT_CONFIG_KEYS` 软更新 +
+  `/config/server/update`），前端按当前服务器读取；`set_panel_prefs` 仍保留
+  该字段仅作旧客户端兼容，前端不再写入
 - 浏览器存储最多作「启动缓存」：访问必须 try/catch，加载后以异步拉回的后端
   值为准覆盖；**不得**把用户可见状态只存在浏览器
 - 新增需持久化的前端状态时：先在后端 `set_panel_prefs` 加白名单字段（含

@@ -156,25 +156,21 @@
     <!-- 功能设置面板（可折叠）：承载 AI 对话开关与互通终端天数。自动刷新间隔
          已迁至右上角「⚙ 设置」弹窗（全局偏好）；监控参数仍只在「⚙ 性能监控
          设置」弹窗里维护，三边职责互不重叠。全局视图下本面板整体隐藏 -->
-    <section class="settings-panel" id="settings-panel">
+    <section class="settings-panel collapsed" id="settings-panel">
       <div class="settings-header">
         <button class="settings-toggle" id="settings-toggle" type="button"
-          aria-expanded="true" aria-controls="settings-body"
+          aria-expanded="false" aria-controls="settings-body"
           title="折叠 / 展开功能设置面板">
           <span class="settings-caret" id="settings-caret">▾</span>
           <span class="settings-title">⚙ 功能设置</span>
         </button>
-        <span class="settings-sub" id="settings-sub">AI 对话 · 互通终端</span>
         <span class="settings-spacer"></span>
         <span class="settings-status" id="settings-status"></span>
-        <button class="btn btn-primary btn-sm" id="settings-save"
-          title="保存 AI 对话开关与互通终端天数（AI 开关落盘后即时生效、不重连）">保存并生效</button>
       </div>
       <div class="settings-body" id="settings-body">
         <div class="settings-group" id="settings-group-ai">
           <div class="settings-group-head">
             <span class="settings-group-title">🤖 AI 对话</span>
-            <span class="settings-group-note" id="st-ai-note">每台服务器独立配置</span>
           </div>
           <label class="settings-row">
             <span class="settings-row-label">启用 AI 对话</span>
@@ -191,18 +187,75 @@
             <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「自动转发前缀」互相包含会在启动时告警</span>
           </label>
         </div>
+        <div class="settings-group" id="settings-group-forward">
+          <div class="settings-group-head">
+            <span class="settings-group-title">📡 消息转发</span>
+          </div>
+          <label class="settings-row">
+            <span class="settings-row-label">转发聊天到外部会话</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-chat" />
+            </span>
+            <span class="settings-row-hint">玩家游戏内聊天转发到绑定的目标会话（群/私聊）</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">聊天消息格式</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-chat-format" placeholder="[{display_name}]{player}: {message}" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">可用占位符 {player} {message} {display_name}；留空 = 用默认格式</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发进出消息</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-joinleave" />
+            </span>
+            <span class="settings-row-hint">玩家加入 / 离开服务器提示转发到目标会话</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发死亡消息</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-death" />
+            </span>
+            <span class="settings-row-hint">玩家死亡提示转发到目标会话</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发成就消息</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-achievement" />
+            </span>
+            <span class="settings-row-hint">玩家获得成就提示转发到目标会话</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">群 → MC 触发前缀</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">外部消息以此开头才转发进游戏；留空 = 全部转发。与「AI 触发前缀」互相包含会在启动时告警</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">目标会话（每行一个）</span>
+            <span class="settings-row-control">
+              <textarea id="st-fwd-sessions" rows="2" placeholder="default:GroupMessage:123456789" autocomplete="off" spellcheck="false"></textarea>
+            </span>
+            <span class="settings-row-hint">仅这些会话参与群 → MC 转发；可用 AstrBot 的 /sid 指令查看</span>
+          </label>
+        </div>
         <div class="settings-group">
           <div class="settings-group-head">
             <span class="settings-group-title">🎛 互通终端</span>
-            <span class="settings-group-note">全局生效（所有服务器共用）</span>
           </div>
           <label class="settings-row">
             <span class="settings-row-label">互通终端加载天数</span>
             <span class="settings-row-control">
               <input type="number" id="st-terminal-days" min="0" max="30" step="1" value="2" />
             </span>
-            <span class="settings-row-hint">互通终端展示最近几天的日志（1～30，0 = 全部保留分片，默认 2：今天 + 昨天）</span>
+            <span class="settings-row-hint">互通终端展示最近几天的日志（1～30，0 = 全部保留分片，默认 2：今天 + 昨天），每台服务器独立</span>
           </label>
+        </div>
+        <div class="settings-footer">
+          <button class="btn btn-primary btn-sm" id="settings-save"
+            title="保存功能设置（改动落盘后即时生效、不重连）">保存并生效</button>
         </div>
       </div>
     </section>

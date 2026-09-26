@@ -140,19 +140,8 @@ class DashboardApp {
     // 互通终端自动滚动：开启时新消息自动滚到底部；关闭时停在当前位置
     // 阅读历史（保持关闭，直到再次点击按钮）
     this.terminalAutoscroll = true;
-    // 互通终端加载天数（面板级偏好）：0=全部保留分片，1~30=最近 N 天；
-    // 默认 2（今天+昨天）。权威数据在后端 panel_prefs.json（长期存储），
-    // 此处 localStorage 仅作首屏启动缓存，init 会异步拉取后端值覆盖。
-    // 插件页面运行在受限 iframe，localStorage 可能被沙箱禁止，
-    // 一律 try/catch 兜底，失败时退回默认值，绝不阻断页面启动
-    let savedDays = 2;
-    try {
-      savedDays = parseInt(localStorage.getItem('queqiao_terminal_days') || '2', 10);
-    } catch (e) {
-      savedDays = 2;
-    }
-    this.terminalDays = (Number.isFinite(savedDays) && savedDays >= 0 && savedDays <= 30)
-      ? savedDays : 2;
+    // 互通终端加载天数：每台服务器独立配置（conf 条目顶层 terminal_days，
+    // 缺省 2），由 terminalDaysFor() 按当前服务器读取，启动时无全局缓存
     // 顶部自动刷新开关：启动缓存与 terminal_days 同模式——权威数据在后端
     // panel_prefs.json（init 异步拉取覆盖），localStorage 仅加速首屏恢复
     let savedAuto = null;
@@ -171,7 +160,7 @@ class DashboardApp {
     this.autoRefreshIntervalPref = null;
     // 「功能设置」面板折叠状态（后端 panel_prefs.json 的 settings_collapsed）：
     // 默认展开——开关存在的意义就是被看见，折叠只用于临时腾出纵向空间
-    this.settingsCollapsed = false;
+    this.settingsCollapsed = true;
     // conf（mc_servers）里的服务器条目，含**未启用**的条目：来自
     // /config/servers。未启用条目在运行时不会建实例（main 层启动时跳过），
     // 此前在这块面板上完全不可见，只能改配置文件才能启用。现在以灰色卡片
@@ -472,21 +461,8 @@ class DashboardApp {
         ),
       ]);
       const prefs = (resp && resp.prefs) || {};
-      if (Number.isFinite(prefs.terminal_days) &&
-          prefs.terminal_days >= 0 && prefs.terminal_days <= 30) {
-        this.terminalDays = prefs.terminal_days;
-        // 已进入单服视图时按新天数重拉终端（内部已捕获异常）
-        const curKey = this.activeServerTab;
-        if (curKey && curKey !== 'all') {
-          const stream = this.ensureTerminalStream(curKey);
-          if (stream) {
-            stream.innerHTML = '';
-            stream.dataset.rendered = '0';
-            stream.dataset.lastDate = '';
-            this.loadTerminalLogs(curKey, stream);
-          }
-        }
-      }
+      // 互通终端加载天数已迁移为每台服务器独立配置（conf 条目顶层），
+      // 不再从全局偏好读取；此处保留后端兼容字段，但不再覆盖任何值
       // 自动刷新间隔（全局偏好，10~3600）：后端为权威，覆盖启动缓存并
       // 按新间隔重建定时器（保持当前开关状态），顶部标签同步刷新
       if (Number.isFinite(prefs.auto_refresh_interval)) {
@@ -803,6 +779,7 @@ class DashboardApp {
       set('sf-rport', item.reverse_port || 8080);
       set('sf-rpath', item.reverse_path || '/minecraft/ws');
       set('sf-token', '');
+      // 目标会话与功能设置面板共用 conf 条目顶层字段，天然同步
       set('sf-sessions', (item.target_sessions || []).join('\n'));
       if (tokenHint) {
         tokenHint.textContent = item.access_token_set
@@ -862,6 +839,7 @@ class DashboardApp {
       display_name: (document.getElementById('sf-display')?.value || '').trim(),
       ws_mode: reverse ? 'reverse' : 'forward',
       enabled: !!document.getElementById('sf-enabled')?.checked,
+      // 与功能设置面板共用同一 conf 字段，任一侧保存都写入同一目标会话
       target_sessions: (document.getElementById('sf-sessions')?.value || '')
         .split('\n').map(s => s.trim()).filter(Boolean),
     };
@@ -1442,12 +1420,20 @@ class DashboardApp {
     }
   }
 
+  // 互通终端加载天数：按当前服务器 conf（条目顶层 terminal_days）取值，
+  // 钳制 0~30；conf 未就绪或缺省时回落 2（今天+昨天）
+  terminalDaysFor(key) {
+    const conf = (this.configServers || []).find((s) => s.server_name === key);
+    const raw = conf && Number.isFinite(conf.terminal_days) ? conf.terminal_days : 2;
+    return Math.max(0, Math.min(30, raw));
+  }
+
   // 从后端拉取某台服务器的持久化日志，只追加尚未渲染的新条目。
   // 请求带 5 秒超时保护：桥通道异常时降级跳过本次拉取，避免拖死整页刷新
   async loadTerminalLogs(key, stream) {
     try {
       const res = await Promise.race([
-        this.apiGet('terminal_logs', { server: key, days: this.terminalDays }),
+        this.apiGet('terminal_logs', { server: key, days: this.terminalDaysFor(key) }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('terminal_logs 请求超时')), 5000)
         ),
@@ -2305,7 +2291,6 @@ class DashboardApp {
       }
     }
     const aiGroup = document.getElementById('settings-group-ai');
-    const aiNote = document.getElementById('st-ai-note');
     const enabledBox = document.getElementById('st-ai-enabled');
     const prefixBox = document.getElementById('st-ai-prefix');
     const saveBtn = document.getElementById('settings-save');
@@ -2322,21 +2307,60 @@ class DashboardApp {
       enabledBox.disabled = false;
       prefixBox.disabled = false;
       if (aiGroup) aiGroup.classList.remove('disabled');
-      if (aiNote) {
-        aiNote.textContent = `按服务器配置：${server.display_name || server.server_name}`;
-      }
       if (saveBtn) saveBtn.disabled = false;
       if (status) status.textContent = '';
     }
-    // 互通终端天数：正在编辑的输入框不回写，避免打断输入
+    // 互通终端天数（每台服务器独立，conf 条目顶层；缺省 2）：
+    // 正在编辑的输入框不回写，避免打断输入
     const daysBox = document.getElementById('st-terminal-days');
     if (daysBox && document.activeElement !== daysBox) {
-      daysBox.value = String(Number.isFinite(this.terminalDays) ? this.terminalDays : 2);
+      const daysVal = confItem && Number.isFinite(confItem.terminal_days)
+        ? confItem.terminal_days
+        : 2;
+      daysBox.value = String(Math.max(0, Math.min(30, daysVal)));
+    }
+    // 消息转发配置（conf 的 message 子对象，缺省回落后端 _message_view 默认）：
+    // 任一转发控件正被编辑时整组不回写，避免打断输入
+    const fwdBoxes = {
+      chat: document.getElementById('st-fwd-chat'),
+      format: document.getElementById('st-fwd-chat-format'),
+      join: document.getElementById('st-fwd-joinleave'),
+      death: document.getElementById('st-fwd-death'),
+      ach: document.getElementById('st-fwd-achievement'),
+      prefix: document.getElementById('st-fwd-prefix'),
+      sessions: document.getElementById('st-fwd-sessions'),
+    };
+    const fwdFocused = Object.values(fwdBoxes)
+      .some((el) => el && document.activeElement === el);
+    if (!fwdFocused) {
+      const msg = (confItem && confItem.message) || {};
+      if (fwdBoxes.chat) fwdBoxes.chat.checked = msg.forward_chat_to_astrbot !== false;
+      if (fwdBoxes.format) {
+        fwdBoxes.format.value = typeof msg.forward_chat_format === 'string'
+          ? msg.forward_chat_format
+          : '';
+      }
+      if (fwdBoxes.join) fwdBoxes.join.checked = !!msg.forward_join_leave_to_astrbot;
+      if (fwdBoxes.death) fwdBoxes.death.checked = !!msg.forward_death_to_astrbot;
+      if (fwdBoxes.ach) fwdBoxes.ach.checked = !!msg.forward_achievement_to_astrbot;
+      if (fwdBoxes.prefix) {
+        fwdBoxes.prefix.value = typeof msg.auto_forward_prefix === 'string'
+          ? msg.auto_forward_prefix
+          : '';
+      }
+      if (fwdBoxes.sessions) {
+        const sessions = Array.isArray(confItem && confItem.target_sessions)
+          ? confItem.target_sessions
+          : [];
+        fwdBoxes.sessions.value = sessions.join('\n');
+      }
     }
   }
 
   async saveSettingsPanel() {
     const server = this.activeServerObject();
+    // 全局视图（全部服务器）下面板已隐藏，防御性直接返回
+    if (!server) return;
     const saveBtn = document.getElementById('settings-save');
     const status = document.getElementById('settings-status');
     const daysBox = document.getElementById('st-terminal-days');
@@ -2355,8 +2379,10 @@ class DashboardApp {
       : null;
     // 前缀冲突预检：AI 前缀与自动转发前缀互相包含时，同一条消息会命中两条
     // 路径（启动时后端也会告警），这里提前拦截
-    const forwardPrefix = (confItem && confItem.auto_forward_prefix) ||
-      (server && server.auto_forward_prefix) || '';
+    const fwdMsg = (confItem && confItem.message) || {};
+    const forwardPrefix = (typeof fwdMsg.auto_forward_prefix === 'string' && fwdMsg.auto_forward_prefix)
+      || (confItem && confItem.auto_forward_prefix)
+      || (server && server.auto_forward_prefix) || '';
     if (server && aiEnabled && aiPrefix && forwardPrefix &&
         (aiPrefix.startsWith(forwardPrefix) || forwardPrefix.startsWith(aiPrefix))) {
       this.showToast('AI 触发前缀与自动转发前缀互相包含，请改成互不包含的前缀', 'error');
@@ -2365,35 +2391,37 @@ class DashboardApp {
     if (saveBtn) saveBtn.disabled = true;
     if (status) status.textContent = '保存中…';
     try {
-      // 1) 互通终端天数（全局，panel_prefs.json）：保存后即时生效
-      await this.apiPost('panel/prefs', {
-        terminal_days: daysVal,
-      });
-      const daysChanged = daysVal !== this.terminalDays;
-      this.terminalDays = daysVal;
-      try {
-        localStorage.setItem('queqiao_terminal_days', String(daysVal));
-      } catch (e) {
-        // 受限 iframe 下 localStorage 不可用时忽略（后端仍为权威）
-      }
-      if (daysChanged) {
-        // 展示窗口变化：清空当前终端流，下一次渲染按新窗口重拉
-        const curKey = this.activeServerTab;
-        if (curKey && curKey !== 'all') {
-          const stream = this.ensureTerminalStream(curKey);
-          if (stream) {
-            stream.innerHTML = '';
-            stream.dataset.rendered = '0';
-            stream.dataset.lastDate = '';
-          }
-        }
-      }
-      // 2) AI 对话开关：写插件 conf（仅具体服务器视图可改）。后端对「只改
-      //    AI 开关」的保存走落盘 + 就地生效，不重建连接（reloaded=false）；
-      //    一旦带上连接类字段才热重载
+      // 互通终端天数 + AI/消息转发：全部写插件 conf（每台服务器独立）。
+      // 后端对「只改软开关」的保存走落盘 + 就地生效，不重建连接（reloaded=false）；
+      // 一旦带上连接类字段才热重载
       let reloaded = false;
-      if (server) {
+      let daysChanged = false;
+      {
         const payload = { enable_ai_chat: aiEnabled, ai_chat_prefix: aiPrefix };
+        // 互通终端加载天数（单服生效，0~30；后端会再钳制一次）
+        daysChanged = daysVal !== this.terminalDaysFor(server.server_name);
+        payload.terminal_days = daysVal;
+        // 消息转发：显式提交全部值（面板展示的即当前生效值，覆盖语义）
+        const msg = {};
+        const fwdChat = document.getElementById('st-fwd-chat');
+        const fwdFormat = document.getElementById('st-fwd-chat-format');
+        const fwdJoin = document.getElementById('st-fwd-joinleave');
+        const fwdDeath = document.getElementById('st-fwd-death');
+        const fwdAch = document.getElementById('st-fwd-achievement');
+        const fwdPrefix = document.getElementById('st-fwd-prefix');
+        const fwdSessions = document.getElementById('st-fwd-sessions');
+        if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdPrefix && fwdSessions) {
+          msg.forward_chat_to_astrbot = !!fwdChat.checked;
+          msg.forward_chat_format = fwdFormat.value.trim();
+          msg.forward_join_leave_to_astrbot = !!fwdJoin.checked;
+          msg.forward_death_to_astrbot = !!fwdDeath.checked;
+          msg.forward_achievement_to_astrbot = !!fwdAch.checked;
+          msg.auto_forward_prefix = fwdPrefix.value.trim();
+          payload.message = msg;
+          // 目标会话：每行一个 UMO（同服务器表单解析规则）
+          payload.target_sessions = fwdSessions.value
+            .split('\n').map((s) => s.trim()).filter(Boolean);
+        }
         if (confItem && Number.isFinite(confItem.index)) {
           payload.index = confItem.index;
         } else {
@@ -2402,14 +2430,24 @@ class DashboardApp {
         const resp = await this.apiPost('config/server/update', payload);
         if (resp && Array.isArray(resp.servers)) this.configServers = resp.servers;
         reloaded = !!(resp && resp.reloaded);
+        if (daysChanged) {
+          // 展示窗口变化：清空当前终端流，下一次渲染按新窗口重拉
+          const curKey = this.activeServerTab;
+          if (curKey && curKey !== 'all') {
+            const stream = this.ensureTerminalStream(curKey);
+            if (stream) {
+              stream.innerHTML = '';
+              stream.dataset.rendered = '0';
+              stream.dataset.lastDate = '';
+            }
+          }
+        }
       }
       if (status) status.textContent = '已保存';
       this.showToast(
-        server
-          ? (reloaded
-            ? '功能设置已保存（连接配置变更，已重连）'
-            : '功能设置已保存并即时生效（未重连）')
-          : '互通终端天数已保存',
+        reloaded
+          ? '功能设置已保存（连接配置变更，已重连）'
+          : '功能设置已保存并即时生效（未重连）',
         'success'
       );
       await this.refreshAll(true);

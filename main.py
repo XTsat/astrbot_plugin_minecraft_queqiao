@@ -187,8 +187,28 @@ class MinecraftQueQiaoPlugin(Star):
 
     # 面板「功能设置」维护的纯逻辑开关：就地更新运行时配置即可生效，无需
     # 热重载（热重载会断开全部连接、重启监控采集与内置图床，代价与收益不
-    # 匹配）。键名与 ServerConfig 属性一一对应。
-    SOFT_CONFIG_KEYS = ("enable_ai_chat", "ai_chat_prefix")
+    # 匹配）。键名与 ServerConfig 属性一一对应；消息转发字段在 conf 里位于
+    # message 子对象，Web API 侧先展平再交给本方法。
+    SOFT_CONFIG_KEYS = (
+        "enable_ai_chat",
+        "ai_chat_prefix",
+        "forward_chat_to_astrbot",
+        "forward_chat_format",
+        "forward_join_leave_to_astrbot",
+        "forward_death_to_astrbot",
+        "forward_achievement_to_astrbot",
+        "auto_forward_prefix",
+        "target_sessions",
+        "terminal_days",
+    )
+    # 布尔型软配置键 → (解析失败时的兜底默认值)，与 _conf_schema.json 默认一致
+    _SOFT_BOOL_DEFAULTS = {
+        "enable_ai_chat": True,
+        "forward_chat_to_astrbot": True,
+        "forward_join_leave_to_astrbot": False,
+        "forward_death_to_astrbot": False,
+        "forward_achievement_to_astrbot": False,
+    }
 
     def apply_soft_config(self, server_name: str, fields: dict) -> bool:
         """把「不影响连接」的开关就地写入运行时配置，返回是否命中实例。
@@ -203,18 +223,33 @@ class MinecraftQueQiaoPlugin(Star):
         for key in self.SOFT_CONFIG_KEYS:
             if key not in fields:
                 continue
-            if key == "enable_ai_chat":
-                config.enable_ai_chat = _to_bool(fields.get(key), True)
+            if key in self._SOFT_BOOL_DEFAULTS:
+                setattr(config, key, _to_bool(fields.get(key), self._SOFT_BOOL_DEFAULTS[key]))
+            elif key == "target_sessions":
+                if isinstance(fields.get("target_sessions"), list):
+                    config.target_sessions = [
+                        str(x).strip() for x in fields["target_sessions"] if str(x).strip()
+                    ]
+                elif fields.get("target_sessions") is None:
+                    config.target_sessions = []
+                else:
+                    # 类型不合法（如字符串）不应用，避免破坏运行时列表
+                    continue
+            elif key == "terminal_days":
+                # 互通终端加载天数（每台服务器独立）：0~30 钳制
+                config.terminal_days = max(
+                    0, min(30, _to_int(fields.get(key), config.terminal_days))
+                )
             else:
-                config.ai_chat_prefix = str(fields.get(key) or "").strip()
+                setattr(config, key, str(fields.get(key) or "").strip())
             applied = True
         if not applied:
             return False
         self._warn_prefix_conflict(config)
+        changed = [key for key in self.SOFT_CONFIG_KEYS if key in fields]
         logger.info(
             f"[{PLUGIN_NAME}][{config.server_name}] 面板更新开关（免重载）: "
-            f"AI 对话={'开' if config.enable_ai_chat else '关'} "
-            f"前缀={config.ai_chat_prefix or '（空）'}"
+            f"{', '.join(changed)}"
         )
         return True
 

@@ -16,19 +16,20 @@ from typing import TYPE_CHECKING, Any
 from astrbot.api import logger
 
 from ..core.constants import (
+    DEFAULT_CHAT_FORMAT,
     DEFAULT_CLIENT_ORIGIN,
     DEFAULT_REVERSE_HOST,
     DEFAULT_REVERSE_PATH,
     DEFAULT_REVERSE_PORT,
+    DEFAULT_TERMINAL_DAYS,
     DEFAULT_WS_URL,
     PLUGIN_NAME,
+    TERMINAL_DAYS_MAX,
+    TERMINAL_DAYS_MIN,
 )
 from ..core.queqiao_client import reverse_servers_snapshot
 from .host_mem import correct_physical_memory
 from .metrics import MetricsCollector
-
-# 互通终端默认加载最近几天的分片（含当天）：避免一次拉取 30 天全量
-DEFAULT_TERMINAL_DAYS = 2
 
 # 面板可管理的服务器条目字段（conf 中 mc_servers 的子集，其余字段回落 schema 默认值）
 _SERVER_TEMPLATE_KEY = "server"
@@ -60,6 +61,11 @@ def _as_int(value: Any, default: int) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return default
+
+
+def _as_int_clamped(value: Any, default: int, lo: int, hi: int) -> int:
+    """整数解析 + 区间钳制（0~30 之类的天数）。非法值回落默认。"""
+    return max(lo, min(hi, _as_int(value, default)))
 
 
 def _as_str_list(value: Any) -> list[str]:
@@ -905,11 +911,41 @@ class WebApiController:
                     # 注意落在条目顶层（与 server 子对象平级，ServerConfig 读整条）
                     "enable_ai_chat": _as_bool(entry.get("enable_ai_chat"), True),
                     "ai_chat_prefix": str(entry.get("ai_chat_prefix") or ""),
+                    # 互通终端加载天数（每台服务器独立，条目顶层；缺省回落默认）
+                    "terminal_days": _as_int_clamped(
+                        entry.get("terminal_days"), DEFAULT_TERMINAL_DAYS,
+                        TERMINAL_DAYS_MIN, TERMINAL_DAYS_MAX,
+                    ),
+                    # 消息转发配置（面板「功能设置」读写）：message 子对象按
+                    # ServerConfig.from_dict 同源读取，缺省值与 schema 默认一致
+                    "message": self._message_view(entry),
                     "running": server_name in self.configs,
                     "connected": bool(instance.connected) if instance is not None else False,
                 }
             )
         return items
+
+    def _message_view(self, entry: Any) -> dict[str, Any]:
+        """把条目 message 子对象整理成面板「功能设置」可直接回显的结构。
+
+        缺失字段一律回落 schema 默认值（forward_chat_to_astrbot 开、
+        其它开关关、格式用 DEFAULT_CHAT_FORMAT、前缀空），保证面板首次
+        打开时显示的就是实际生效值。
+        """
+        raw_msg = entry.get("message") if isinstance(entry, dict) else None
+        msg = raw_msg if isinstance(raw_msg, dict) else {}
+        return {
+            "forward_chat_to_astrbot": _as_bool(msg.get("forward_chat_to_astrbot"), True),
+            "forward_chat_format": str(msg.get("forward_chat_format") or DEFAULT_CHAT_FORMAT),
+            "forward_join_leave_to_astrbot": _as_bool(
+                msg.get("forward_join_leave_to_astrbot"), False
+            ),
+            "forward_death_to_astrbot": _as_bool(msg.get("forward_death_to_astrbot"), False),
+            "forward_achievement_to_astrbot": _as_bool(
+                msg.get("forward_achievement_to_astrbot"), False
+            ),
+            "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
+        }
 
     def _find_server_entry(
         self, entries: list[Any], index: Any, server_name: str
@@ -1056,21 +1092,64 @@ class WebApiController:
             entry["enable_ai_chat"] = _as_bool(payload.get("enable_ai_chat"), True)
         if "ai_chat_prefix" in payload:
             entry["ai_chat_prefix"] = str(payload.get("ai_chat_prefix") or "").strip()
+        if "terminal_days" in payload:
+            # 互通终端加载天数（每台服务器独立，面板「功能设置」读写条目顶层）
+            entry["terminal_days"] = _as_int_clamped(
+                payload.get("terminal_days"), DEFAULT_TERMINAL_DAYS,
+                TERMINAL_DAYS_MIN, TERMINAL_DAYS_MAX,
+            )
+        # 消息转发配置（面板「功能设置」）：message 子对象按「显式出现」键
+        # 合并，漏传不清空。字段名与 ServerConfig 属性 / main 层软更新键一致
+        message_payload = payload.get("message")
+        if isinstance(message_payload, dict):
+            raw_msg = entry.get("message")
+            msg = raw_msg if isinstance(raw_msg, dict) else {}
+            for key in (
+                "forward_chat_to_astrbot",
+                "forward_chat_format",
+                "forward_join_leave_to_astrbot",
+                "forward_death_to_astrbot",
+                "forward_achievement_to_astrbot",
+                "auto_forward_prefix",
+            ):
+                if key not in message_payload:
+                    continue
+                if key in ("forward_chat_to_astrbot", "forward_join_leave_to_astrbot",
+                           "forward_death_to_astrbot", "forward_achievement_to_astrbot"):
+                    # 布尔键：字符串布尔（表单 / WebUI 可能传字符串）统一转真布尔
+                    msg[key] = _as_bool(
+                        message_payload[key],
+                        True if key == "forward_chat_to_astrbot" else False,
+                    )
+                else:
+                    msg[key] = str(message_payload[key] or "").strip()
+            entry["message"] = msg
         if "enabled" in payload:
             entry["enabled"] = _as_bool(payload.get("enabled"), True)
 
-        # 仅改动「不影响连接」的开关（面板「功能设置」的 AI 对话项）时走落盘
-        # + 就地生效：热重载会断开全部连接、重启监控采集与内置图床，代价与
-        # 收益不匹配。定位键（index / server_name）不计入改动集合。
+        # 仅改动「不影响连接」的开关（面板「功能设置」的 AI 对话 / 消息转发
+        # 项）时走落盘 + 就地生效：热重载会断开全部连接、重启监控采集与内置
+        # 图床，代价与收益不匹配。定位键（index / server_name）不计入改动集合；
+        # message 子对象展开为其内部转发键参与判定
         soft_keys = tuple(
             getattr(self.plugin, "SOFT_CONFIG_KEYS", ("enable_ai_chat", "ai_chat_prefix"))
         )
         changed_keys = set(payload) - {"index", "server_name"}
+        if "message" in changed_keys:
+            changed_keys.discard("message")
+            if isinstance(payload.get("message"), dict):
+                changed_keys.update(payload["message"].keys())
         soft_only = bool(changed_keys) and changed_keys.issubset(set(soft_keys))
         reloaded = True
         try:
             if soft_only:
-                soft_fields = {key: payload[key] for key in soft_keys if key in payload}
+                soft_fields: dict[str, Any] = {
+                    key: payload[key] for key in soft_keys if key in payload
+                }
+                if isinstance(payload.get("message"), dict):
+                    for key in soft_keys:
+                        if key in payload["message"]:
+                            soft_fields[key] = payload["message"][key]
                 await self._write_config(self._conf_with_servers(entries))
                 applier = getattr(self.plugin, "apply_soft_config", None)
                 applied = bool(

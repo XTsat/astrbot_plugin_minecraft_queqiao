@@ -23,6 +23,7 @@ from .constants import (
     DEFAULT_REVERSE_HOST,
     DEFAULT_REVERSE_PORT,
     DEFAULT_REVERSE_PATH,
+    DEFAULT_TERMINAL_DAYS,
     DEFAULT_WS_URL,
     EMOJI_OK_GESTURE,
     MONITOR_MIN_INTERVAL,
@@ -77,6 +78,11 @@ def _to_int(value: object, default: int) -> int:
             except ValueError:
                 return default
     return default
+
+
+def _to_int_clamped(value: object, default: int, lo: int, hi: int) -> int:
+    """整数解析 + 区间钳制（0~30 之类的天数）。非法值回退默认。"""
+    return max(lo, min(hi, _to_int(value, default)))
 
 
 def _to_list(value: object, default: list[str]) -> list[str]:
@@ -179,6 +185,8 @@ class ServerConfig:
     enable_ai_chat: bool = True
     ai_chat_prefix: str = "ai"
     text2image: bool = True
+    # 互通终端加载最近几天的日志分片（0=全部保留分片），每台服务器独立
+    terminal_days: int = DEFAULT_TERMINAL_DAYS
 
     # ---- 消息转发 ----
     forward_chat_to_astrbot: bool = True
@@ -417,6 +425,9 @@ class ServerConfig:
             enable_ai_chat=_to_bool(data.get("enable_ai_chat"), True),
             ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "ai"),
             text2image=_to_bool(data.get("text2image"), True),
+            terminal_days=_to_int_clamped(
+                data.get("terminal_days"), DEFAULT_TERMINAL_DAYS, 0, 30
+            ),
             forward_chat_to_astrbot=_to_bool(message.get("forward_chat_to_astrbot"), True),
             forward_chat_format=_to_str(
                 message.get("forward_chat_format"), DEFAULT_CHAT_FORMAT

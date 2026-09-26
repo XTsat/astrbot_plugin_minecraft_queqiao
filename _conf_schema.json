@@ -106,6 +106,12 @@
             "hint": "游戏内聊天以此前缀开头时触发 AI（例如填写 ai 则发送『ai 你好』）。命中该前缀的消息只走 AI，不再转发到群。留空表示不启用 AI 触发，普通聊天不受影响",
             "default": "ai"
           },
+          "terminal_days": {
+            "type": "integer",
+            "description": "互通终端加载最近几天的日志分片",
+            "hint": "互通终端展示最近几天的日志（0~30，0=全部保留分片，默认 2：今天+昨天）。每台服务器独立",
+            "default": 2
+          },
           "text2image": {
             "type": "bool",
             "description": "将服务器信息渲染为图片输出",

@@ -1047,10 +1047,6 @@ body {
   display: none;
 }
 
-.settings-sub {
-  font-size: 12px;
-  color: var(--text-muted);
-}
 
 .settings-spacer {
   flex: 1 1 auto;
@@ -1059,6 +1055,12 @@ body {
 .settings-status {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
 }
 
 .settings-body {
@@ -1098,7 +1100,7 @@ body {
 
 .settings-row {
   display: grid;
-  grid-template-columns: 130px 200px minmax(0, 1fr);
+  grid-template-columns: 130px 400px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -1109,7 +1111,8 @@ body {
 }
 
 .settings-row-control input[type='number'],
-.settings-row-control input[type='text'] {
+.settings-row-control input[type='text'],
+.settings-row-control textarea {
   width: 100%;
   box-sizing: border-box;
   padding: 6px 8px;
@@ -1118,6 +1121,11 @@ body {
   background: var(--bg-input, var(--bg-tertiary));
   color: var(--text-primary);
   font-size: 13px;
+}
+
+.settings-row-control textarea {
+  resize: vertical;
+  min-height: 2em;
 }
 
 .settings-row-control input[type='checkbox'] {

@@ -144,6 +144,12 @@ MONITOR_MIN_INTERVAL = 10
 DEFAULT_MONITOR_REALTIME_INTERVAL = 5
 MONITOR_REALTIME_MIN = 1
 MONITOR_REALTIME_MAX = 60
+# 互通终端默认加载最近几天的分片（含当天）：避免一次拉取 30 天全量。
+# 属每台服务器独立配置：面板「互通终端」天数写入 conf 条目顶层（与
+# enable_ai_chat 平级），Web API 拉日志时由前端按当前服务器传入
+DEFAULT_TERMINAL_DAYS = 2
+TERMINAL_DAYS_MIN = 0
+TERMINAL_DAYS_MAX = 30
 # 仪表盘「自动刷新」轮询间隔（秒）：服务器卡片状态与玩家列表的定时
 # 刷新频率，可配置（10~3600 秒，默认 10；勾选自动刷新时生效）
 DEFAULT_MONITOR_AUTO_REFRESH = 10
