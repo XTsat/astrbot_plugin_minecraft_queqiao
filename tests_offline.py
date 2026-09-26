@@ -4012,11 +4012,25 @@ assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["auto_refresh"]
 async def _fake_json_prefs39_g(default=None): return {"auto_refresh": "yes"}
 _wa35.request.json = _fake_json_prefs39_g
 assert _asyncio35.run(_wac39.set_panel_prefs())["status_code"] == 400
+# active_tab（服务器视图记忆）：字符串 strip 落盘、空串忽略、超长/非法类型拒绝
+async def _fake_json_prefs39_h(default=None): return {"active_tab": "  Srv  "}
+_wa35.request.json = _fake_json_prefs39_h
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["active_tab"] == "Srv"
+async def _fake_json_prefs39_i(default=None): return {"active_tab": "   "}
+_wa35.request.json = _fake_json_prefs39_i
+assert _asyncio35.run(_wac39.set_panel_prefs())["data"]["prefs"]["active_tab"] == "Srv"
+async def _fake_json_prefs39_j(default=None): return {"active_tab": "x" * 65}
+_wa35.request.json = _fake_json_prefs39_j
+assert _asyncio35.run(_wac39.set_panel_prefs())["status_code"] == 400
+async def _fake_json_prefs39_k(default=None): return {"active_tab": 42}
+_wa35.request.json = _fake_json_prefs39_k
+assert _asyncio35.run(_wac39.set_panel_prefs())["status_code"] == 400
 _wa35.request.json = _orig_json39
 # 重启后仍为最后一次合法值
 assert _PP39(_mdir39).get("terminal_days") == 30
 assert _PP39(_mdir39).get("auto_refresh") is False
-print("OK  存储落盘重启可读 / GET 合并写入 / terminal_days 钳制与非法拒绝 / auto_refresh 布尔与非法拒绝 / 空字段不落盘")
+assert _PP39(_mdir39).get("active_tab") == "Srv"
+print("OK  存储落盘重启可读 / GET 合并写入 / terminal_days 钳制与非法拒绝 / auto_refresh 布尔与非法拒绝 / active_tab 字符串落盘与空串忽略 / 空字段不落盘")
 
 print("\n=== 40. 清除监控采集数据（store.clear + Web API） ===")
 _mdir40 = pathlib.Path("/tmp/queqiao_test_monitor40")
@@ -4414,3 +4428,187 @@ assert asyncio.run(_wac43n.update_config_server())["status_code"] == 503
 assert asyncio.run(_wac43n.delete_config_server())["status_code"] == 503
 _wa43.request.json = _orig_json43
 print("OK  条目列表(含未启用) / 新建按 schema 补齐 / 启用切换 / 字段级更新 / 改名冲突 / 删除 / 备份与热重载 / 未注入插件降级")
+
+
+print("\n=== 44. 仪表盘「功能设置」面板（AI 对话开关 / 面板偏好 / 折叠状态） ===")
+import shutil as _sh44
+import pathlib as _pl44
+from astrbot_plugin_minecraft_queqiao.services.panel_prefs import PanelPrefsStore as _PP44
+from astrbot_plugin_minecraft_queqiao.services.web_api import WebApiController as _WAC44
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wa44
+
+_mdir44 = _pl44.Path("/tmp/queqiao_test_settings44")
+if _mdir44.exists():
+    _sh44.rmtree(_mdir44)
+_mdir44.mkdir(parents=True, exist_ok=True)
+_pp44 = _PP44(_mdir44)
+
+_conf44 = {
+    "enabled": True,
+    "mc_servers": [
+        {
+            "__template_key": "server",
+            "enabled": True,
+            "target_sessions": ["default:GroupMessage:1"],
+            "server": {
+                "server_name": "Server",
+                "display_name": "方可梦",
+                "ws_mode": "forward",
+                "ws_url": "ws://127.0.0.1:8080/minecraft/ws",
+            },
+            "enable_ai_chat": True,
+            "ai_chat_prefix": "ai",
+        },
+    ],
+}
+_plugin44 = _FakePlugin43(_conf44, str(_mdir44))
+_sm44 = _SM43()
+_sm44.put("Server", True)
+_ctx44 = _Ctx43()
+# 运行时实例（对应 main 层 self._configs 的值）：软更新就地改写这个对象
+_cfg44_run = ServerConfig.from_dict({})
+_wac44 = _WAC44(
+    _ctx44, _sm44, None, None, None,
+    {"Server": _cfg44_run}, None, None, _pp44, _plugin44,
+)
+
+from astrbot_plugin_minecraft_queqiao.core.models_config import _to_bool as _to_bool44
+
+_plugin44.SOFT_CONFIG_KEYS = ("enable_ai_chat", "ai_chat_prefix")
+
+
+def _apply_soft44(server_name, fields):
+    """模拟 main.py apply_soft_config：只就地写「不影响连接」的开关。"""
+    cfg = _wac44.configs.get(server_name)
+    if cfg is None or not isinstance(fields, dict):
+        return False
+    applied = False
+    for _key in _plugin44.SOFT_CONFIG_KEYS:
+        if _key not in fields:
+            continue
+        if _key == "enable_ai_chat":
+            cfg.enable_ai_chat = _to_bool44(fields.get(_key), True)
+        else:
+            cfg.ai_chat_prefix = str(fields.get(_key) or "").strip()
+        applied = True
+    return applied
+
+
+_plugin44.apply_soft_config = _apply_soft44
+
+# 列表：AI 字段取条目顶层（与 server 子对象平级，main 层用整条 entry 构造
+# ServerConfig），并做防御式布尔 / 字符串解析
+_it44 = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44["enable_ai_chat"] is True and _it44["ai_chat_prefix"] == "ai", _it44
+_plugin44.config["mc_servers"][0]["enable_ai_chat"] = "false"
+_plugin44.config["mc_servers"][0]["ai_chat_prefix"] = None
+_it44b = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44b["enable_ai_chat"] is False and _it44b["ai_chat_prefix"] == ""
+_plugin44.config["mc_servers"][0]["enable_ai_chat"] = True
+_plugin44.config["mc_servers"][0]["ai_chat_prefix"] = "ai"
+
+_orig_json44 = _wa44.request.json
+
+
+def _set_payload44(payload):
+    async def _fake(default=None):
+        return payload
+
+    _wa44.request.json = _fake
+
+
+# 面板改 AI 开关：写条目顶层 + 落盘 + 就地生效，且不得污染 server 子对象。
+# 只改 AI 开关属「软字段」：热重载会断开全部连接并重启监控 / 内置图床，
+# 代价与收益不匹配，必须免重载
+_set_payload44({"index": 0, "enable_ai_chat": False, "ai_chat_prefix": "小助手"})
+_resp44 = asyncio.run(_wac44.update_config_server())
+assert _resp44["data"]["saved"] is True
+assert _resp44["data"]["reloaded"] is False, "只改 AI 开关不得热重载"
+_entry44 = _plugin44.config["mc_servers"][0]
+assert _entry44["enable_ai_chat"] is False and _entry44["ai_chat_prefix"] == "小助手"
+assert "enable_ai_chat" not in _entry44["server"], "AI 字段属条目顶层，不得写进 server 子对象"
+assert _entry44["server"]["server_name"] == "Server", "未传字段不得被改动"
+assert _entry44["enabled"] is True and _entry44["target_sessions"] == ["default:GroupMessage:1"]
+assert _plugin44.reloads == 0, "AI 开关保存不得热重载（连接与监控保持不动）"
+assert _cfg44_run.enable_ai_chat is False and _cfg44_run.ai_chat_prefix == "小助手", \
+    "运行时 ServerConfig 必须就地更新，否则要等下次重载才生效"
+# 回读与落盘一致（面板保存后 refreshAll 会重新拉这个接口）
+_it44c = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44c["enable_ai_chat"] is False and _it44c["ai_chat_prefix"] == "小助手"
+
+# 前缀置空 = 不触发 AI（合法路径，main 层据此不再走 AI 分支）
+_set_payload44({"index": 0, "ai_chat_prefix": "   "})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["ai_chat_prefix"] == "", "空白前缀需 strip 成空串"
+assert _cfg44_run.ai_chat_prefix == "" and _plugin44.reloads == 0, "运行时前缀同样需 strip"
+# 字符串布尔写回（表单 / WebUI 可能传字符串）
+_set_payload44({"index": 0, "enable_ai_chat": "true"})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["enable_ai_chat"] is True
+assert _cfg44_run.enable_ai_chat is True and _plugin44.reloads == 0
+
+# 连接类字段（display_name / ws_url / enabled 等）仍走完整热重载
+_set_payload44({"index": 0, "enable_ai_chat": True, "display_name": "新名字"})
+_resp44b = asyncio.run(_wac44.update_config_server())
+assert _resp44b["data"]["reloaded"] is True, "带连接类字段必须热重载"
+assert _plugin44.reloads == 1
+# 运行时未命中（未启用的服务器 / 无实例）时回落热重载，保证配置与运行态一致
+_prev_configs44 = _wac44.configs
+_wac44.configs = {}
+_set_payload44({"index": 0, "enable_ai_chat": False})
+_resp44c = asyncio.run(_wac44.update_config_server())
+assert _resp44c["data"]["reloaded"] is True and _plugin44.reloads == 2
+_wac44.configs = _prev_configs44
+
+
+def _post_prefs44(payload):
+    async def _fake(default=None):
+        return payload
+
+    _wa44.request.json = _fake
+    return asyncio.run(_wac44.set_panel_prefs())
+
+
+# 面板偏好：自动刷新间隔 10~3600 钳制（与前端 setupAutoRefresh 口径一致）
+assert _post_prefs44({"auto_refresh_interval": 30})["data"]["prefs"]["auto_refresh_interval"] == 30
+assert _post_prefs44({"auto_refresh_interval": 1})["data"]["prefs"]["auto_refresh_interval"] == 10
+assert _post_prefs44({"auto_refresh_interval": 99999})["data"]["prefs"]["auto_refresh_interval"] == 3600
+assert _post_prefs44({"auto_refresh_interval": "45"})["data"]["prefs"]["auto_refresh_interval"] == 45
+assert _post_prefs44({"auto_refresh_interval": "abc"})["status_code"] == 400
+assert _post_prefs44({"auto_refresh_interval": True})["status_code"] == 400, "布尔不是合法秒数"
+# 折叠状态：布尔与字符串 true/false，其余拒绝
+assert _post_prefs44({"settings_collapsed": True})["data"]["prefs"]["settings_collapsed"] is True
+assert _post_prefs44({"settings_collapsed": "false"})["data"]["prefs"]["settings_collapsed"] is False
+assert _post_prefs44({"settings_collapsed": "yes"})["status_code"] == 400
+# 合并写入（前端「保存并生效」一次提交偏好 + 折叠状态）
+_prefs44 = _post_prefs44(
+    {"auto_refresh_interval": 60, "terminal_days": 3, "settings_collapsed": True}
+)["data"]["prefs"]
+assert _prefs44["auto_refresh_interval"] == 60 and _prefs44["terminal_days"] == 3
+assert _prefs44["settings_collapsed"] is True
+# 落盘重启可读（权威数据在后端，不依赖 localStorage）
+assert _PP44(_mdir44).get("auto_refresh_interval") == 60
+assert _PP44(_mdir44).get("settings_collapsed") is True
+_wa44.request.json = _orig_json44
+
+# 前端静态守卫：监控弹窗不再持有已迁出的控件，设置面板与前端方法必须存在
+_web44 = _pl44.Path(__file__).resolve().parent / "pages" / "dashboard"
+_html44 = (_web44 / "index.html").read_text(encoding="utf-8")
+_js44 = (_web44 / "app.js").read_text(encoding="utf-8")
+_css44 = (_web44 / "style.css").read_text(encoding="utf-8")
+for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"',
+                'id="st-auto-refresh"', 'id="st-terminal-days"', 'id="settings-save"',
+                'id="settings-toggle"'):
+    assert _need44 in _html44, f"设置面板缺少 {_need44}"
+assert 'id="ms-auto-refresh"' not in _html44, "自动刷新间隔应迁出监控设置弹窗"
+assert 'id="ms-terminal-days"' not in _html44, "互通终端加载天数应迁出监控设置弹窗"
+for _need44 in ("renderSettingsPanel", "saveSettingsPanel", "bindSettingsActions",
+                "setSettingsCollapsed"):
+    assert _need44 in _js44, f"前端缺少 {_need44}"
+assert "ms-auto-refresh" not in _js44 and "ms-terminal-days" not in _js44, (
+    "监控设置不应再读写已迁出的控件"
+)
+assert "settings_collapsed" in _js44 and "auto_refresh_interval" in _js44
+assert ".settings-panel" in _css44, "缺少设置面板样式"
+print("OK  AI 字段条目顶层读写(不污染 server 子对象) / 前缀置空与字符串布尔 / "
+      "自动刷新间隔与折叠状态钳制·合并·落盘 / 监控弹窗控件迁移与前端静态守卫")

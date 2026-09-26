@@ -759,12 +759,10 @@ class WebApiController:
             }
         )
 
-    async def _persist_config(self, new_conf: dict[str, Any]) -> None:
-        """备份当前配置 → 原子落盘（utf-8-sig）→ 热重载。
+    async def _write_config(self, new_conf: dict[str, Any]) -> None:
+        """备份当前配置 → 原子落盘（utf-8-sig），不触发热重载。
 
-        Pages 面板改配置的唯一落盘链路：``/config/save`` 与服务器条目
-        增删改（``/config/server/*``）共用，保证行为一致（含失败不阻断
-        保存的备份容错）。
+        备份失败不阻断保存（磁盘满 / 权限异常时仍要让配置落盘）。
         """
         data_dir = Path(getattr(self.plugin, "_data_dir", "") or ".")
         bak_dir = data_dir / "conf_backups"
@@ -778,6 +776,15 @@ class WebApiController:
         except Exception:
             logger.warning(f"[{PLUGIN_NAME}] 配置备份失败（不阻断保存）", exc_info=True)
         await self.plugin.config.save_config_async(new_conf)
+
+    async def _persist_config(self, new_conf: dict[str, Any]) -> None:
+        """备份 → 落盘 → 热重载（连接结构变化的改动走这里）。
+
+        Pages 面板改配置的落盘链路：``/config/save`` 与服务器条目增删改
+        （``/config/server/*``）共用，保证行为一致；仅「不影响连接」的开关
+        改动可走 ``_write_config`` + 就地生效，见 update_config_server。
+        """
+        await self._write_config(new_conf)
         await self.plugin.reload_config()
 
     async def save_config_full(self) -> Any:
@@ -893,6 +900,11 @@ class WebApiController:
                     # 不返回 access_token 明文，只暴露「是否已设置」
                     "access_token_set": bool(str(server.get("access_token") or "").strip()),
                     "target_sessions": _as_str_list(entry.get("target_sessions")),
+                    # AI 对话开关（每台服务器独立）：面板「功能设置」直接读写，
+                    # 字段与 main 层 _match_ai_prefix / _handle_ai_chat 同源，
+                    # 注意落在条目顶层（与 server 子对象平级，ServerConfig 读整条）
+                    "enable_ai_chat": _as_bool(entry.get("enable_ai_chat"), True),
+                    "ai_chat_prefix": str(entry.get("ai_chat_prefix") or ""),
                     "running": server_name in self.configs,
                     "connected": bool(instance.connected) if instance is not None else False,
                 }
@@ -1038,20 +1050,53 @@ class WebApiController:
             )
         if "target_sessions" in payload:
             entry["target_sessions"] = _as_str_list(payload.get("target_sessions"))
+        # AI 对话开关（面板「功能设置」）：字段位于条目顶层（与 server 子对象
+        # 平级，main 层用整条 entry 构造 ServerConfig），不可写进 server 内
+        if "enable_ai_chat" in payload:
+            entry["enable_ai_chat"] = _as_bool(payload.get("enable_ai_chat"), True)
+        if "ai_chat_prefix" in payload:
+            entry["ai_chat_prefix"] = str(payload.get("ai_chat_prefix") or "").strip()
         if "enabled" in payload:
             entry["enabled"] = _as_bool(payload.get("enabled"), True)
 
+        # 仅改动「不影响连接」的开关（面板「功能设置」的 AI 对话项）时走落盘
+        # + 就地生效：热重载会断开全部连接、重启监控采集与内置图床，代价与
+        # 收益不匹配。定位键（index / server_name）不计入改动集合。
+        soft_keys = tuple(
+            getattr(self.plugin, "SOFT_CONFIG_KEYS", ("enable_ai_chat", "ai_chat_prefix"))
+        )
+        changed_keys = set(payload) - {"index", "server_name"}
+        soft_only = bool(changed_keys) and changed_keys.issubset(set(soft_keys))
+        reloaded = True
         try:
-            await self._persist_config(self._conf_with_servers(entries))
+            if soft_only:
+                soft_fields = {key: payload[key] for key in soft_keys if key in payload}
+                await self._write_config(self._conf_with_servers(entries))
+                applier = getattr(self.plugin, "apply_soft_config", None)
+                applied = bool(
+                    callable(applier)
+                    and applier(str(server.get("server_name") or ""), soft_fields)
+                )
+                if applied:
+                    reloaded = False
+                else:
+                    # 运行时未命中（该服务器未启用 / 无实例）：补一次热重载，
+                    # 保证磁盘配置与运行态一致
+                    await self.plugin.reload_config()
+            else:
+                await self._persist_config(self._conf_with_servers(entries))
         except Exception as exc:
             logger.exception(f"[{PLUGIN_NAME}] 更新服务器配置失败")
             return error_response(f"更新服务器配置失败: {exc}", status_code=500)
         logger.info(
             f"[{PLUGIN_NAME}] 面板更新服务器: "
             f"{server.get('server_name') or '#' + str(position)}"
+            f"{'' if reloaded else '（免重载）'}"
         )
         return self._config_servers_response(
-            saved=True, server_name=str(server.get("server_name") or "")
+            saved=True,
+            server_name=str(server.get("server_name") or ""),
+            reloaded=reloaded,
         )
 
     async def delete_config_server(self) -> Any:
@@ -1097,7 +1142,10 @@ class WebApiController:
         """保存面板级偏好（合并写入并原子落盘）。
 
         当前支持字段：``terminal_days``（互通终端加载天数，0~30，0=全部）、
-        ``auto_refresh``（顶部自动刷新开关，布尔）。
+        ``auto_refresh``（顶部自动刷新开关，布尔）、
+        ``auto_refresh_interval``（仪表盘自动刷新间隔秒数，10~3600）、
+        ``settings_collapsed``（仪表盘「功能设置」面板是否折叠，布尔）、
+        ``active_tab``（当前打开的服务器视图，'all' 或服务器名，≤64 字符）。
         """
         if self.panel_prefs is None:
             return error_response("面板偏好存储未接入", status_code=503)
@@ -1120,6 +1168,33 @@ class WebApiController:
                 fields["auto_refresh"] = raw_ar.strip().lower() == "true"
             else:
                 return error_response("auto_refresh 需为布尔值", status_code=400)
+        if "auto_refresh_interval" in raw:
+            raw_ari = raw["auto_refresh_interval"]
+            if isinstance(raw_ari, bool) or not isinstance(raw_ari, (int, str)):
+                return error_response("auto_refresh_interval 需为数字", status_code=400)
+            try:
+                ari_value = int(raw_ari)
+            except (TypeError, ValueError):
+                return error_response("auto_refresh_interval 需为数字", status_code=400)
+            # 与前端 setupAutoRefresh 的钳制口径一致（10~3600 秒）
+            fields["auto_refresh_interval"] = max(10, min(3600, ari_value))
+        if "settings_collapsed" in raw:
+            raw_sc = raw["settings_collapsed"]
+            if isinstance(raw_sc, bool):
+                fields["settings_collapsed"] = raw_sc
+            elif isinstance(raw_sc, str) and raw_sc.strip().lower() in ("true", "false"):
+                fields["settings_collapsed"] = raw_sc.strip().lower() == "true"
+            else:
+                return error_response("settings_collapsed 需为布尔值", status_code=400)
+        if "active_tab" in raw:
+            raw_at = raw["active_tab"]
+            if not isinstance(raw_at, str):
+                return error_response("active_tab 需为字符串", status_code=400)
+            at_value = raw_at.strip()
+            if len(at_value) > 64:
+                return error_response("active_tab 过长（≤64 字符）", status_code=400)
+            if at_value:
+                fields["active_tab"] = at_value
         if not fields:
             return json_response({"prefs": self.panel_prefs.all()})
         self.panel_prefs.update(fields)

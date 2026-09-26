@@ -185,6 +185,39 @@ class MinecraftQueQiaoPlugin(Star):
         await self.server_manager.stop_all()
         await self.monitor.stop()
 
+    # 面板「功能设置」维护的纯逻辑开关：就地更新运行时配置即可生效，无需
+    # 热重载（热重载会断开全部连接、重启监控采集与内置图床，代价与收益不
+    # 匹配）。键名与 ServerConfig 属性一一对应。
+    SOFT_CONFIG_KEYS = ("enable_ai_chat", "ai_chat_prefix")
+
+    def apply_soft_config(self, server_name: str, fields: dict) -> bool:
+        """把「不影响连接」的开关就地写入运行时配置，返回是否命中实例。
+
+        未命中（服务器未启用 / 无运行时实例）返回 False，调用方退回完整
+        热重载，保证磁盘配置与运行态一致。
+        """
+        config = self._configs.get(str(server_name or "").strip())
+        if config is None or not isinstance(fields, dict):
+            return False
+        applied = False
+        for key in self.SOFT_CONFIG_KEYS:
+            if key not in fields:
+                continue
+            if key == "enable_ai_chat":
+                config.enable_ai_chat = _to_bool(fields.get(key), True)
+            else:
+                config.ai_chat_prefix = str(fields.get(key) or "").strip()
+            applied = True
+        if not applied:
+            return False
+        self._warn_prefix_conflict(config)
+        logger.info(
+            f"[{PLUGIN_NAME}][{config.server_name}] 面板更新开关（免重载）: "
+            f"AI 对话={'开' if config.enable_ai_chat else '关'} "
+            f"前缀={config.ai_chat_prefix or '（空）'}"
+        )
+        return True
+
     async def reload_config(self) -> None:
         """热重载配置：按 self.config 当前值重建全部运行时。
 

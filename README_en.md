@@ -64,6 +64,18 @@ The dashboard (plugin Pages) manages the servers in your config directly — no 
 - **Inactive entries stay visible**: an entry with an empty or duplicate server name is skipped by the main flow; it is shown as a grey “未生效” card so the problem is easy to spot
 - Every save backs up the previous config to `data_dir/conf_backups/`, writes it atomically and **hot-reloads** (old connections are dropped and rebuilt from the new config); a failure never corrupts the in-memory config
 
+### Dashboard feature-settings panel
+
+Below the server cards and the performance-monitoring panel, the dashboard has a collapsible “⚙ 功能设置” (feature settings) panel that groups everything **not** monitoring-related; its collapsed state is remembered by the backend (and the panel is hidden in the “全部服务器” all-servers view):
+
+- **AI chat** (per server): turn in-game AI chat on / off and set its trigger prefix. A chat message starting with the prefix goes to the AI only — the reply is sent to that player as a private message and the message is not forwarded to the group; an empty prefix disables AI triggering and leaves normal chat untouched. Saving writes the plugin config and takes effect immediately without rebuilding connections, so it is the same setting as `enable_ai_chat` / `ai_chat_prefix` in the WebUI
+- **Terminal window** (global): how many days of interop-terminal logs to load
+- Monitoring parameters themselves (enabled, sample interval, realtime rate, retention, TPS command, latency probe, default view) still live in the “⚙ 设置” dialog of the monitoring panel
+
+### Top-right “⚙ 设置” global-settings dialog
+
+The “⚙ 设置” button at the top right (next to the auto-refresh toggle) opens a dialog for preferences independent of any single server: the dashboard auto-refresh interval in seconds (10–3600, applied while the “自动刷新” toggle is on, takes effect immediately). Refreshing or reopening the page keeps the last opened server tab instead of returning to “全部服务器”.
+
 ### Connection
 
 <details>

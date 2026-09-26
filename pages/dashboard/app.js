@@ -101,7 +101,17 @@ class DashboardApp {
     this.stats = null;
     this.refreshInterval = null;
     this.isRefreshing = false;
-    this.activeServerTab = 'all'; // 当前激活的服务器视图标签（'all' 或 server_name）
+    // 当前激活的服务器视图标签（'all' 或 server_name）。刷新页面时保留
+    // 上一次打开的服务器视图（localStorage 加速首屏，后端无此状态）。
+    // 受限 iframe 下 localStorage 可能被沙箱禁止，一律 try/catch 兜底；
+    // 服务器被删除时 renderServerTabs 的 valid 检查会回退全局视图
+    this.activeServerTab = 'all';
+    try {
+      const savedTab = localStorage.getItem('queqiao_active_tab');
+      if (savedTab && savedTab !== 'all') this.activeServerTab = savedTab;
+    } catch (e) {
+      this.activeServerTab = 'all';
+    }
     this.defaultServerIcon = './default-server-icon.png';
     // 性能监控状态
     this.monitorRange = '24'; // 分析时间窗（小时）
@@ -154,6 +164,14 @@ class DashboardApp {
       savedAuto = null;
     }
     this.autoRefreshPref = savedAuto;
+    // 自动刷新间隔的**全局偏好**（后端 panel_prefs.json 的
+    // auto_refresh_interval）：null 时回落每台服务器监控设置里的
+    // auto_refresh_interval。该间隔不再属于监控参数（监控弹窗已瘦身），
+    // 改由「功能设置」面板维护
+    this.autoRefreshIntervalPref = null;
+    // 「功能设置」面板折叠状态（后端 panel_prefs.json 的 settings_collapsed）：
+    // 默认展开——开关存在的意义就是被看见，折叠只用于临时腾出纵向空间
+    this.settingsCollapsed = false;
     // conf（mc_servers）里的服务器条目，含**未启用**的条目：来自
     // /config/servers。未启用条目在运行时不会建实例（main 层启动时跳过），
     // 此前在这块面板上完全不可见，只能改配置文件才能启用。现在以灰色卡片
@@ -168,6 +186,7 @@ class DashboardApp {
     this.bindEvents();
     this.bindTerminalActions();
     this.bindMonitorActions();
+    this.bindSettingsActions();
 
     if (this.bridge) {
       try {
@@ -387,6 +406,7 @@ class DashboardApp {
       this.renderServers();
       await this.renderTerminal();
       this.renderMonitorPanel();
+      this.renderSettingsPanel();
       this.updateLastRefreshTime();
     } catch (err) {
       console.error('Refresh failed:', err);
@@ -425,7 +445,12 @@ class DashboardApp {
     const server = this.activeServerObject() ||
       (this.servers && this.servers[0]) || null;
     const m = server && server.monitor;
-    if (m && Number.isFinite(m.auto_refresh_interval)) {
+    // 自动刷新间隔：优先「功能设置」面板的全局偏好（panel_prefs.json），
+    // 未设置时回落该服监控设置里的同名字段（历史配置继续生效，不回退默认值）
+    if (Number.isFinite(this.autoRefreshIntervalPref)) {
+      this.autoRefreshInterval =
+        Math.max(10, Math.min(3600, this.autoRefreshIntervalPref));
+    } else if (m && Number.isFinite(m.auto_refresh_interval)) {
       this.autoRefreshInterval =
         Math.max(10, Math.min(3600, m.auto_refresh_interval));
     }
@@ -462,11 +487,38 @@ class DashboardApp {
           }
         }
       }
+      // 自动刷新间隔（全局偏好，10~3600）：后端为权威，覆盖启动缓存并
+      // 按新间隔重建定时器（保持当前开关状态），顶部标签同步刷新
+      if (Number.isFinite(prefs.auto_refresh_interval)) {
+        this.autoRefreshIntervalPref =
+          Math.max(10, Math.min(3600, prefs.auto_refresh_interval));
+        this.autoRefreshInterval = this.autoRefreshIntervalPref;
+        this.syncAutoRefreshLabel();
+        this.setupAutoRefresh(
+          document.getElementById('auto-refresh-toggle')?.checked || false
+        );
+      }
+      // 「功能设置」面板折叠状态：后端记忆（不反向回写，避免加载即覆盖）
+      if (typeof prefs.settings_collapsed === 'boolean') {
+        this.setSettingsCollapsed(prefs.settings_collapsed, { persist: false });
+      }
       // 自动刷新开关：后端为权威，覆盖启动缓存并重建定时器
       if (typeof prefs.auto_refresh === 'boolean') {
         const toggle = document.getElementById('auto-refresh-toggle');
         if (toggle) toggle.checked = prefs.auto_refresh;
         this.setupAutoRefresh(prefs.auto_refresh);
+      }
+      // 恢复上次打开的服务器视图：权威在后端（localStorage 在沙箱
+      // iframe 下不可用）。此时 refreshAll 已完成、servers 已填充；
+      // 无效值（服务器已被删除）由 renderServerTabs 的 valid 检查兜底
+      // 回退全局视图。仅切视图不回写，避免「读取即覆盖」
+      if (typeof prefs.active_tab === 'string') {
+        const savedTab = prefs.active_tab.trim();
+        const valid = savedTab === 'all' ||
+          this.servers.some(s => s.server_name === savedTab);
+        if (savedTab && valid && savedTab !== this.activeServerTab) {
+          this.activateServerTab(savedTab, { persist: false });
+        }
       }
     } catch (e) {
       console.warn('拉取面板偏好失败:', e);
@@ -1241,8 +1293,9 @@ class DashboardApp {
       this.servers.some(s => s.server_name === this.activeServerTab);
     if (!valid) this.activeServerTab = 'all';
 
-    // 仅同步高亮，实际渲染交由 refreshAll 统一执行
-    this.activateServerTab(this.activeServerTab, { render: false });
+    // 仅同步高亮，实际渲染交由 refreshAll 统一执行；不加持久化写入，
+    // 避免每轮自动刷新都向后端重复写当前值
+    this.activateServerTab(this.activeServerTab, { render: false, persist: false });
   }
 
   buildServerTab(key, label, connected) {
@@ -1263,8 +1316,16 @@ class DashboardApp {
   }
 
   // 切换服务器视图：统计卡片、服务器面板与终端一并跟随
-  activateServerTab(key, { render = true } = {}) {
+  activateServerTab(key, { render = true, persist = true } = {}) {
     this.activeServerTab = key;
+    // 刷新页面后仍停留在当前打开的服务器视图
+    try {
+      localStorage.setItem('queqiao_active_tab', key);
+    } catch (e) {
+      // AstrBot 插件页 iframe 沙箱无 allow-same-origin 时 localStorage
+      // 不可用，此处仅失去首屏缓存，权威值由 persistActiveTab 走后端兜底
+    }
+    if (persist) this.persistActiveTab(key);
     document.querySelectorAll('#server-tabs .server-tab').forEach(b => {
       b.classList.toggle('active', b.dataset.view === key);
     });
@@ -1275,10 +1336,29 @@ class DashboardApp {
       // 异步拉取后端历史日志；内部已捕获异常，无需等待
       this.renderTerminal();
       this.renderMonitorPanel();
+      this.renderSettingsPanel();
     }
     // 自动刷新间隔/实时频率为每台服务器独立持久化的设置：切换视图后
     // 重读该服（或回落第一台）的后端值，顶部按钮与状态行实时跟随
     this.syncMonitorFreqFromBackend();
+  }
+
+  // 服务器视图持久化：localStorage 在 AstrBot 沙箱 iframe（无
+  // allow-same-origin）下不可用，权威落在后端 panel_prefs.json。
+  // 防抖 800ms 合并连续切换；值未变不发请求；写失败只记日志
+  persistActiveTab(key) {
+    if (this._persistTabTimer) {
+      clearTimeout(this._persistTabTimer);
+      this._persistTabTimer = null;
+    }
+    this._persistTabTimer = setTimeout(() => {
+      this._persistTabTimer = null;
+      if (this._lastPersistedTab === key) return;
+      this._lastPersistedTab = key;
+      this.apiPost('panel/prefs', { active_tab: key }).catch((e) => {
+        console.warn('保存服务器视图偏好失败:', e);
+      });
+    }, 800);
   }
 
   // 全局视图下对某台服务器执行操作时，切到该服视图以展示终端反馈
@@ -2183,6 +2263,238 @@ class DashboardApp {
     }
   }
 
+  // ---------- 「功能设置」折叠面板（AI 对话 / 面板偏好） ----------
+  // 折叠状态由后端 panel_prefs.json 记忆（换设备 / 刷新后保持）
+  setSettingsCollapsed(collapsed, { persist = true } = {}) {
+    const panel = document.getElementById('settings-panel');
+    if (!panel) return;
+    const on = !!collapsed;
+    this.settingsCollapsed = on;
+    panel.classList.toggle('collapsed', on);
+    const caret = document.getElementById('settings-caret');
+    if (caret) caret.textContent = on ? '▸' : '▾';
+    const toggle = document.getElementById('settings-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', on ? 'false' : 'true');
+    if (!persist) return;
+    // 后端为权威；写失败只记日志，不阻塞交互（下次加载以后端为准）
+    this.apiPost('panel/prefs', { settings_collapsed: on }).catch((e) => {
+      console.warn('保存面板折叠状态失败:', e);
+    });
+  }
+
+  // 填充设置面板：AI 组按当前服务器（来自 conf 条目，回落服务器摘要），
+  // 全局视图下无目标服务器时整组禁用；偏好组为全局值
+  renderSettingsPanel() {
+    const panel = document.getElementById('settings-panel');
+    if (!panel) return;
+    const server = this.activeServerObject();
+    // 全部服务器视图：整块隐藏。AI 开关与互通终端天数都需落在具体服务器上，
+    // 全局视图不展示也不可保存（自动刷新间隔已迁至右上角「⚙ 设置」弹窗）
+    if (!server) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.remove('hidden');
+    if (typeof this.settingsCollapsed === 'boolean') {
+      panel.classList.toggle('collapsed', this.settingsCollapsed);
+      const caret = document.getElementById('settings-caret');
+      if (caret) caret.textContent = this.settingsCollapsed ? '▸' : '▾';
+      const toggle = document.getElementById('settings-toggle');
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', this.settingsCollapsed ? 'false' : 'true');
+      }
+    }
+    const aiGroup = document.getElementById('settings-group-ai');
+    const aiNote = document.getElementById('st-ai-note');
+    const enabledBox = document.getElementById('st-ai-enabled');
+    const prefixBox = document.getElementById('st-ai-prefix');
+    const saveBtn = document.getElementById('settings-save');
+    const status = document.getElementById('settings-status');
+    const confItem = (this.configServers || [])
+      .find((s) => s.server_name === server.server_name) || null;
+    if (enabledBox && prefixBox) {
+      enabledBox.checked = confItem && typeof confItem.enable_ai_chat === 'boolean'
+        ? confItem.enable_ai_chat
+        : server.enable_ai_chat !== false;
+      prefixBox.value = confItem && typeof confItem.ai_chat_prefix === 'string'
+        ? confItem.ai_chat_prefix
+        : (server.ai_chat_prefix || '');
+      enabledBox.disabled = false;
+      prefixBox.disabled = false;
+      if (aiGroup) aiGroup.classList.remove('disabled');
+      if (aiNote) {
+        aiNote.textContent = `按服务器配置：${server.display_name || server.server_name}`;
+      }
+      if (saveBtn) saveBtn.disabled = false;
+      if (status) status.textContent = '';
+    }
+    // 互通终端天数：正在编辑的输入框不回写，避免打断输入
+    const daysBox = document.getElementById('st-terminal-days');
+    if (daysBox && document.activeElement !== daysBox) {
+      daysBox.value = String(Number.isFinite(this.terminalDays) ? this.terminalDays : 2);
+    }
+  }
+
+  async saveSettingsPanel() {
+    const server = this.activeServerObject();
+    const saveBtn = document.getElementById('settings-save');
+    const status = document.getElementById('settings-status');
+    const daysBox = document.getElementById('st-terminal-days');
+    const daysVal = parseInt(daysBox ? daysBox.value : '', 10);
+    // 后端会防御式钳制，这里提前提示常见误配
+    if (!Number.isFinite(daysVal) || daysVal < 0 || daysVal > 30) {
+      this.showToast('互通终端加载天数需在 0-30 之间', 'error');
+      return;
+    }
+    const enabledBox = document.getElementById('st-ai-enabled');
+    const prefixBox = document.getElementById('st-ai-prefix');
+    const aiEnabled = !!(enabledBox && enabledBox.checked);
+    const aiPrefix = prefixBox ? prefixBox.value.trim() : '';
+    const confItem = server
+      ? (this.configServers || []).find((s) => s.server_name === server.server_name) || null
+      : null;
+    // 前缀冲突预检：AI 前缀与自动转发前缀互相包含时，同一条消息会命中两条
+    // 路径（启动时后端也会告警），这里提前拦截
+    const forwardPrefix = (confItem && confItem.auto_forward_prefix) ||
+      (server && server.auto_forward_prefix) || '';
+    if (server && aiEnabled && aiPrefix && forwardPrefix &&
+        (aiPrefix.startsWith(forwardPrefix) || forwardPrefix.startsWith(aiPrefix))) {
+      this.showToast('AI 触发前缀与自动转发前缀互相包含，请改成互不包含的前缀', 'error');
+      return;
+    }
+    if (saveBtn) saveBtn.disabled = true;
+    if (status) status.textContent = '保存中…';
+    try {
+      // 1) 互通终端天数（全局，panel_prefs.json）：保存后即时生效
+      await this.apiPost('panel/prefs', {
+        terminal_days: daysVal,
+      });
+      const daysChanged = daysVal !== this.terminalDays;
+      this.terminalDays = daysVal;
+      try {
+        localStorage.setItem('queqiao_terminal_days', String(daysVal));
+      } catch (e) {
+        // 受限 iframe 下 localStorage 不可用时忽略（后端仍为权威）
+      }
+      if (daysChanged) {
+        // 展示窗口变化：清空当前终端流，下一次渲染按新窗口重拉
+        const curKey = this.activeServerTab;
+        if (curKey && curKey !== 'all') {
+          const stream = this.ensureTerminalStream(curKey);
+          if (stream) {
+            stream.innerHTML = '';
+            stream.dataset.rendered = '0';
+            stream.dataset.lastDate = '';
+          }
+        }
+      }
+      // 2) AI 对话开关：写插件 conf（仅具体服务器视图可改）。后端对「只改
+      //    AI 开关」的保存走落盘 + 就地生效，不重建连接（reloaded=false）；
+      //    一旦带上连接类字段才热重载
+      let reloaded = false;
+      if (server) {
+        const payload = { enable_ai_chat: aiEnabled, ai_chat_prefix: aiPrefix };
+        if (confItem && Number.isFinite(confItem.index)) {
+          payload.index = confItem.index;
+        } else {
+          payload.server_name = server.server_name;
+        }
+        const resp = await this.apiPost('config/server/update', payload);
+        if (resp && Array.isArray(resp.servers)) this.configServers = resp.servers;
+        reloaded = !!(resp && resp.reloaded);
+      }
+      if (status) status.textContent = '已保存';
+      this.showToast(
+        server
+          ? (reloaded
+            ? '功能设置已保存（连接配置变更，已重连）'
+            : '功能设置已保存并即时生效（未重连）')
+          : '互通终端天数已保存',
+        'success'
+      );
+      await this.refreshAll(true);
+    } catch (e) {
+      if (status) status.textContent = '';
+      this.showToast('保存功能设置失败: ' + (e.message || '网络错误'), 'error');
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  bindSettingsActions() {
+    document.getElementById('settings-toggle')?.addEventListener('click', () => {
+      this.setSettingsCollapsed(!this.settingsCollapsed);
+    });
+    document.getElementById('settings-save')?.addEventListener('click', () => {
+      this.saveSettingsPanel();
+    });
+    // 右上角「⚙ 设置」：总设置弹窗（自动刷新间隔等全局偏好）
+    document.getElementById('btn-config-link')?.addEventListener('click', () => {
+      this.openSettingsModal();
+    });
+    document.getElementById('gs-close')?.addEventListener('click', () => {
+      this.closeSettingsModal();
+    });
+    document.getElementById('gs-cancel')?.addEventListener('click', () => {
+      this.closeSettingsModal();
+    });
+    document.getElementById('gs-save')?.addEventListener('click', () => {
+      this.saveSettingsModal();
+    });
+    // 点击遮罩空白处关闭（与监控设置弹窗行为一致）
+    document.getElementById('settings-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.closeSettingsModal();
+    });
+  }
+
+  // 打开右上角总设置弹窗：回写当前生效的自动刷新间隔
+  openSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+    const refreshBox = document.getElementById('st-auto-refresh');
+    if (refreshBox) {
+      refreshBox.value = String(
+        Number.isFinite(this.autoRefreshIntervalPref)
+          ? this.autoRefreshIntervalPref
+          : (this.autoRefreshInterval || 10));
+    }
+    modal.classList.remove('hidden');
+  }
+
+  closeSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  // 保存总设置：自动刷新间隔写 panel_prefs.json，保存后即时生效（不重连）
+  async saveSettingsModal() {
+    const refreshBox = document.getElementById('st-auto-refresh');
+    const refreshVal = parseInt(refreshBox ? refreshBox.value : '', 10);
+    if (!Number.isFinite(refreshVal) || refreshVal < 10 || refreshVal > 3600) {
+      this.showToast('自动刷新间隔需在 10-3600 秒之间', 'error');
+      return;
+    }
+    const saveBtn = document.getElementById('gs-save');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      await this.apiPost('panel/prefs', {
+        auto_refresh_interval: refreshVal,
+      });
+      this.autoRefreshIntervalPref = refreshVal;
+      this.autoRefreshInterval = refreshVal;
+      this.syncAutoRefreshLabel();
+      this.setupAutoRefresh(
+        document.getElementById('auto-refresh-toggle')?.checked || false
+      );
+      this.showToast('总设置已保存并即时生效', 'success');
+      this.closeSettingsModal();
+    } catch (e) {
+      this.showToast('保存总设置失败: ' + (e.message || '网络错误'), 'error');
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
   bindTerminalActions() {
     const input = document.getElementById('terminal-input');
     if (input) {
@@ -2271,12 +2583,8 @@ class DashboardApp {
     // 实时采集频率（秒）：随设置持久化，1~60
     document.getElementById('ms-realtime-interval').value =
       (m.realtime_interval >= 1 && m.realtime_interval <= 60) ? m.realtime_interval : 5;
-    // 自动刷新间隔（秒）：随设置持久化，10~3600
-    document.getElementById('ms-auto-refresh').value =
-      (m.auto_refresh_interval >= 10 && m.auto_refresh_interval <= 3600)
-        ? m.auto_refresh_interval : 10;
-    // 互通终端加载天数：面板级偏好（后端 panel_prefs 长期存储 + localStorage 缓存），0=全部保留分片
-    document.getElementById('ms-terminal-days').value = this.terminalDays;
+    // 自动刷新间隔与互通终端加载天数属面板偏好（非监控参数），已迁至
+    // 「功能设置」面板维护，这里不再填充
     // 清除按钮提示当前已采集条数，明确删除范围
     const clearBtn = document.getElementById('ms-clear-data');
     if (clearBtn) {
@@ -2368,9 +2676,8 @@ class DashboardApp {
     // 实时采集频率（秒）：1~60，越界时按当前值提交（后端会防御钳制）
     const realtimeInterval = parseInt(
       document.getElementById('ms-realtime-interval').value, 10);
-    // 自动刷新间隔（秒）：10~3600，越界时按当前值提交（后端会防御钳制）
-    const autoRefresh = parseInt(
-      document.getElementById('ms-auto-refresh').value, 10);
+    // 自动刷新间隔与互通终端加载天数属面板偏好（非监控参数），
+    // 已迁至「功能设置」面板维护，这里不再读取
     // 默认展示项：提交后端持久化（存 settings.json），不依赖浏览器存储；
     // 立即切到所选子页面，刷新/重开面板后按该默认恢复
     const defaultTab = document.getElementById('ms-default-tab').value === 'latency' ? 'latency' : 'tps';
@@ -2404,49 +2711,15 @@ class DashboardApp {
         ping_port: pingPort,
         default_tab: defaultTab,
         realtime_interval: realtimeInterval,
-        auto_refresh_interval: autoRefresh,
       });
       // 保存后立即用新频率（若正在实时模式，下一轮按新频率排期）
       if (Number.isFinite(realtimeInterval) &&
           realtimeInterval >= 1 && realtimeInterval <= 60) {
         this.realtimeInterval = realtimeInterval;
       }
-      // 自动刷新间隔即时应用：若正在自动刷新，用新间隔重启定时器
-      if (Number.isFinite(autoRefresh) &&
-          autoRefresh >= 10 && autoRefresh <= 3600) {
-        this.autoRefreshInterval = autoRefresh;
-        this.setupAutoRefresh(
-          document.getElementById('auto-refresh-toggle')?.checked || false
-        );
-      }
-      // 自动刷新间隔 / 实时频率后端已按服务器持久化（settings.json），
-      // 无需 localStorage——刷新/换设备都以后端为准
+      // 自动刷新间隔 / 实时频率后端已持久化，无需 localStorage——刷新/换设备
+      // 都以后端为准（自动刷新间隔现由「功能设置」面板维护）
       this.syncAutoRefreshLabel();
-      // 互通终端加载天数：0=全部保留分片，1~30=最近 N 天；保存后立即重拉当前终端
-      const terminalDays = parseInt(
-        document.getElementById('ms-terminal-days').value, 10);
-      if (Number.isFinite(terminalDays) && terminalDays >= 0 && terminalDays <= 30) {
-        this.terminalDays = terminalDays;
-        // 长期存储在后端 panel_prefs.json（权威）；localStorage 仅作启动缓存
-        try {
-          localStorage.setItem('queqiao_terminal_days', String(terminalDays));
-        } catch (e) {
-          // 受限 iframe 下 localStorage 不可用时忽略（仅本次会话生效）
-        }
-        try {
-          await this.apiPost('panel/prefs', { terminal_days: terminalDays });
-        } catch (e) {
-          console.warn('保存面板偏好失败:', e);
-        }
-        const curKey = this.activeServerTab;
-        if (curKey && curKey !== 'all') {
-          const stream = this.ensureTerminalStream(curKey);
-          stream.innerHTML = '';
-          stream.dataset.rendered = '0';
-          stream.dataset.lastDate = '';
-          await this.loadTerminalLogs(curKey, stream);
-        }
-      }
       this.closeMonitorSettings();
       this.showToast(`监控设置已保存：${enabled ? '已启用' : '已停用'}（间隔 ${resp?.settings?.interval ?? interval}s）`, 'success');
       // 设置变更后重拉服务器摘要（含最新开关/采样），面板与卡片同步刷新

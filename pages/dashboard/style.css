@@ -569,12 +569,13 @@ body {
 
 .layout-main {
   /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控（各占一半，
-     紧贴排列），第 3 行终端通栏。align-items: start → 服务器面板按内容
-     自然高度排布（玩家进出时如实变高）；监控面板由 JS 显式 height 跟随
-     服务器面板（双向等高、底部对齐），见 app.js syncMonitorPanelHeight */
+     紧贴排列），第 3 行「功能设置」折叠面板通栏，第 4 行终端通栏。
+     align-items: start → 服务器面板按内容自然高度排布（玩家进出时如实
+     变高）；监控面板由 JS 显式 height 跟随服务器面板（双向等高、底部
+     对齐），见 app.js syncMonitorPanelHeight */
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto auto auto;
   gap: 12px;
   align-items: start;
 }
@@ -984,9 +985,175 @@ body {
    7. 互通终端 (Interactive Terminal Panel)
    -------------------------------------------------------------------------- */
 
-.terminal-panel {
+/* --------------------------------------------------------------------------
+   10b. 功能设置面板（可折叠）：AI 对话开关 + 面板偏好
+   -------------------------------------------------------------------------- */
+
+.settings-panel {
   grid-column: 1 / -1;
   grid-row: 3;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 标题即折叠开关：整块可点，键盘可聚焦（button 原生语义） */
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-toggle:hover .settings-title {
+  color: var(--mc-green);
+}
+
+.settings-caret {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.settings-panel.collapsed .settings-caret {
+  transform: rotate(-90deg);
+}
+
+.settings-panel.collapsed .settings-header {
+  border-bottom-color: transparent;
+}
+
+.settings-panel.collapsed .settings-body {
+  display: none;
+}
+
+.settings-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-spacer {
+  flex: 1 1 auto;
+}
+
+.settings-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 14px 14px;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.settings-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.settings-group-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 130px 200px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.settings-row-label {
+  color: var(--text-secondary);
+}
+
+.settings-row-control input[type='number'],
+.settings-row-control input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-tertiary));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.settings-row-control input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--mc-green);
+  cursor: pointer;
+}
+
+.settings-row-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* 全局视图（无目标服务器）下 AI 组置灰只读：开关是每台服务器独立配置 */
+.settings-group.disabled .settings-row-control input {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.settings-group.disabled .settings-group-note {
+  color: var(--warning-color, #e6a23c);
+}
+
+@media (max-width: 480px) {
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .settings-row-hint { margin-bottom: 8px; }
+}
+
+.terminal-panel {
+  grid-column: 1 / -1;
+  grid-row: 4;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1556,7 +1723,7 @@ body {
 @media (max-width: 900px) {
   /* 单列布局：按 DOM 顺序自然排布（标题 → 服务器 → 监控 → 终端），各面板占满宽度 */
   .layout-main { grid-template-columns: minmax(0, 1fr); }
-  .servers-section-title, .servers-panel, .terminal-panel, .monitor-panel { grid-column: 1; grid-row: auto; }
+  .servers-section-title, .servers-panel, .terminal-panel, .monitor-panel, .settings-panel { grid-column: 1; grid-row: auto; }
   .monitor-panel { margin-top: 0; }
   .monitor-summary { grid-template-columns: repeat(3, 1fr); }
 }
@@ -1595,15 +1762,28 @@ body {
   overflow: auto;
 }
 
-/* 监控设置弹窗：字段较多（采集/保留/指令/探测/展示/实时频率），加宽便于阅读 */
-#monitor-settings-modal .modal-card {
-  width: min(560px, 94vw);
+/* 服务器配置 / 监控设置 / 总设置 三个弹窗统一宽度（以性能监控设置为准）：
+   三列（标签 / 控件 / 说明）挤在窄宽度里时右侧说明会被压成窄竖条 */
+#monitor-settings-modal .modal-card,
+#server-form-modal .modal-card,
+#settings-modal .modal-card {
+  width: min(860px, 94vw);
 }
 
-/* 服务器配置弹窗：含较长的 WS 地址与目标会话，加宽以保证输入框整列等宽
-   且右侧说明文字仍有可读宽度 */
-#server-form-modal .modal-card {
-  width: min(720px, 94vw);
+/* 弹窗变宽后行内控件同步加宽，避免控件列与说明列之间留出大片空白。
+   #sf-row-reverse（反向监听行）的 150px 并排规则在后文仍生效 */
+#monitor-settings-modal .modal-row-control input[type='number'],
+#monitor-settings-modal .modal-row-control input[type='text'],
+#monitor-settings-modal .modal-row-control select,
+#server-form-modal .modal-row-control input[type='number'],
+#server-form-modal .modal-row-control input[type='text'],
+#server-form-modal .modal-row-control input[type='password'],
+#server-form-modal .modal-row-control select,
+#server-form-modal .modal-row-control textarea,
+#settings-modal .modal-row-control input[type='number'],
+#settings-modal .modal-row-control input[type='text'],
+#settings-modal .modal-row-control select {
+  width: 380px;
 }
 
 .modal-header {

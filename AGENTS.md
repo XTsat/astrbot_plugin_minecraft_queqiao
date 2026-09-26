@@ -194,9 +194,31 @@ astrbot_plugin_minecraft_queqiao/
   **禁止直接用 `str.startswith`**：短前缀（`ai`）必须做词边界判断，
   否则 `aim`、`airport` 会被误判；纯字母前缀忽略大小写
 
-### 4.7 自检
+### 4.7 前端页面持久化约束（改 pages/ 前必读）
 
-改动纯逻辑后运行 `python3 tests_offline.py`（23 组断言，覆盖配置解析、事件模型、
+AstrBot 插件页面运行在**沙箱 iframe**（`dashboard/src/views/PluginPagePage.vue`：
+`sandbox="allow-scripts allow-forms allow-downloads"`，**没有 `allow-same-origin`**）。
+这种沙箱下访问 `localStorage` / `sessionStorage` / `document.cookie` 会**直接抛
+SecurityError**，不是返回空——任何「try/catch 包一下就能用」的假设都无效
+（实测：tab 记忆写不进也读不出，静默回退默认值）。
+
+因此：
+
+- **前端任何需要「跨刷新 / 跨设备保持」的状态，权威值一律走后端落盘**
+  （本项目用 `panel_prefs.json` + `/panel/prefs` API，见
+  `services/web_api.py::set_panel_prefs`：白名单字段、钳制校验、合并原子落盘）
+- 已按此模式落盘的偏好：`active_tab`（当前服务器视图）、`auto_refresh`
+  （自动刷新开关）、`auto_refresh_interval`（间隔秒数）、
+  `settings_collapsed`（功能设置面板折叠）、`terminal_days`（终端加载天数）
+- 浏览器存储最多作「启动缓存」：访问必须 try/catch，加载后以异步拉回的后端
+  值为准覆盖；**不得**把用户可见状态只存在浏览器
+- 新增需持久化的前端状态时：先在后端 `set_panel_prefs` 加白名单字段（含
+  类型/长度校验与钳制），再在前端异步写 + 异步恢复；不要在 iframe 里依赖
+  任何本地存储
+
+### 4.8 自检
+
+改动纯逻辑后运行 `python3 tests_offline.py`（47 组断言，覆盖配置解析、事件模型、
 转发/回声抑制、自定义指令、绑定持久化、AI 触发方式与前缀互斥语义、
 端到端事件流、main 导入、AstrBot 导入路径校验、显示名称与格式默认值、
 conf 模板↔代码默认值一致性守卫、API 超时语义「未知 ≠ 失败，禁止重发」）。
