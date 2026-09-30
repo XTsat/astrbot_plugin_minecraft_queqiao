@@ -1,8 +1,17 @@
-/* Minecraft 鹊桥互通 - 配置管理页
+/* Minecraft 鹊桥互通 - 配置管理（内嵌面板，顶部「⚙️ 设置」旁的「⚙️ 配置管理」按钮进入）
  * 通过 AstrBot Plugin Page Bridge 调用后端 Web API：
  *   GET  config/full  → { conf, schema, active_servers, data_dir }
  *   POST config/save  → { conf } → { saved, active_servers }
  * 可视化表单由 _conf_schema.json 驱动；JSON 模式直接编辑完整配置。
+ * 面板显隐由 app.js 的视图切换（activateServerTab）控制；按钮三态循环：
+ *   ① 非配置视图点击 → 进入配置表单视图（监听 queqiao:config-view-open 触发
+ *      加载，detail.view 为进入前的视图，表单只渲染该视图对应部分：
+ *      图床→图床配置、服务器→该服务器条目、全局→基本设置）；
+ *   ② 表单态再点同一按钮 → 切全部 JSON（监听 queqiao:config-toggle-json，
+ *      由 app.js 派发，此处执行 switchMode(true)）；
+ *   ③ JSON 态再点 → 派发 queqiao:config-view-return，app.js 回到进入前的视图。
+ * 面板内「📝 JSON 模式」按钮保留双向手动切换（不触发返回）。
+ * 保存成功后派发 queqiao:config-saved 事件，dashboard 监听后刷新面板。
  */
 const PLUGIN_PATH = 'astrbot_plugin_minecraft_queqiao';
 
@@ -13,10 +22,12 @@ const state = {
   conf: {},
   schema: {},
   activeServers: [],
+  currentView: 'all', // 进入配置前的视图：'all' | 'image_bed' | 服务器 server_name
   dirty: false,
   jsonMode: false,
   jsonTouched: false,
   loading: true,
+  loaded: false,
 };
 
 /* ---------- API ---------- */
@@ -64,7 +75,9 @@ function renderDesc(text) {
 
 function makeDefault(spec) {
   if (!spec || typeof spec !== 'object') return null;
-  switch (spec.type) {
+  // integer 与 int 同义（terminal_days 等），统一处理
+  const type = spec.type === 'integer' ? 'int' : spec.type;
+  switch (type) {
     case 'bool':
       return !!spec.default;
     case 'int':
@@ -101,8 +114,11 @@ function displayPathValue(entry, path) {
 }
 
 /* ---------- 控件 ---------- */
+// schema 里整数同时存在 int / integer 两种写法（terminal_days 等），
+// 前端统一归一化为 int 再走控件分支
 function createControl(spec, onchange) {
-  switch (spec.type) {
+  const type = spec.type === 'integer' ? 'int' : spec.type;
+  switch (type) {
     case 'bool': {
       const el = document.createElement('input');
       el.type = 'checkbox';
@@ -185,81 +201,70 @@ function createControl(spec, onchange) {
   }
 }
 
-/* ---------- 字段渲染 ---------- */
+/* ---------- 字段渲染（复用主页面 settings-* 表单体系） ---------- */
 function buildFieldRow(key, spec, target, onchange, opts = {}) {
-  const { compact = false, noLabelDesc = false } = opts;
-  const row = document.createElement('div');
-  row.className = 'field-row' + (compact ? ' compact' : '');
-
-  const label = document.createElement('div');
-  label.className = 'field-label';
-  const name = document.createElement('div');
-  name.className = 'field-name';
-  name.textContent = key;
-  label.appendChild(name);
-  if (!noLabelDesc && spec.description) {
-    const d = document.createElement('div');
-    d.className = 'field-desc';
-    d.appendChild(renderDesc(spec.description));
-    label.appendChild(d);
-  }
-  row.appendChild(label);
-
-  const ctrl = document.createElement('div');
-  ctrl.className = 'field-control';
-
+  const { noLabelDesc = false } = opts;
+  // object：分组卡片（settings-group 容器 + 子字段行）
   if (spec.type === 'object') {
     const grp = document.createElement('div');
-    grp.className = 'field-group';
+    grp.className = 'settings-group';
     const hdr = document.createElement('div');
-    hdr.className = 'field-group-header';
+    hdr.className = 'settings-group-head';
     const t = document.createElement('span');
-    t.className = 'group-title';
+    t.className = 'settings-group-title';
     t.textContent = key;
     hdr.appendChild(t);
     if (spec.hint) {
-      const h = document.createElement('span');
-      h.className = 'group-hint';
-      h.textContent = spec.hint;
-      hdr.appendChild(h);
+      const n = document.createElement('span');
+      n.className = 'settings-group-note';
+      n.textContent = spec.hint;
+      hdr.appendChild(n);
     }
     grp.appendChild(hdr);
-    const body = document.createElement('div');
-    body.className = 'field-group-body';
     if (typeof target[key] !== 'object' || target[key] === null) target[key] = {};
-    buildObjectFields(body, spec.items || {}, target[key], onchange, compact);
-    grp.appendChild(body);
-    ctrl.appendChild(grp);
-  } else if (spec.type === 'template_list') {
-    if (!Array.isArray(target[key])) target[key] = [];
-    ctrl.appendChild(buildTemplateList(spec, target[key], onchange, opts.entryIdPrefix));
-  } else {
-    const control = createControl(spec, onchange);
-    control.set(target[key]);
-    control.el.dataset.fieldKey = key;
-    // 控件变更时写回 target，保持 conf 与界面同步
-    control.el.addEventListener('input', () => {
-      target[key] = control.get();
-    });
-    control.el.addEventListener('change', () => {
-      target[key] = control.get();
-    });
-    ctrl.appendChild(control.el);
-    if (spec.hint) {
-      const h = document.createElement('div');
-      h.className = 'field-hint';
-      h.textContent = spec.hint;
-      ctrl.appendChild(h);
-    }
+    buildObjectFields(grp, spec.items || {}, target[key], onchange);
+    return grp;
   }
-
+  // template_list：条目卡片列表（保留原卡片样式）
+  if (spec.type === 'template_list') {
+    if (!Array.isArray(target[key])) target[key] = [];
+    return buildTemplateList(spec, target[key], onchange, opts.entryIdPrefix);
+  }
+  // 标量字段：settings-row 三列（label / control / hint）
+  const row = document.createElement('div');
+  row.className = 'settings-row';
+  const label = document.createElement('span');
+  label.className = 'settings-row-label';
+  label.textContent = key;
+  row.appendChild(label);
+  const ctrl = document.createElement('span');
+  ctrl.className = 'settings-row-control';
+  const control = createControl(spec, onchange);
+  control.set(target[key]);
+  control.el.dataset.fieldKey = key;
+  // 控件变更时写回 target，保持 conf 与界面同步
+  control.el.addEventListener('input', () => {
+    target[key] = control.get();
+  });
+  control.el.addEventListener('change', () => {
+    target[key] = control.get();
+  });
+  ctrl.appendChild(control.el);
   row.appendChild(ctrl);
+  const hint = document.createElement('span');
+  hint.className = 'settings-row-hint';
+  if (!noLabelDesc && spec.description) hint.appendChild(renderDesc(spec.description));
+  if (spec.hint) {
+    if (hint.childNodes.length) hint.appendChild(document.createTextNode(' '));
+    hint.appendChild(document.createTextNode(spec.hint));
+  }
+  row.appendChild(hint);
   return row;
 }
 
-function buildObjectFields(container, itemsSpec, target, onchange, compact = false) {
+function buildObjectFields(container, itemsSpec, target, onchange) {
   for (const [key, spec] of Object.entries(itemsSpec || {})) {
-    container.appendChild(buildFieldRow(key, spec, target, onchange, { compact }));
+    container.appendChild(buildFieldRow(key, spec, target, onchange, {}));
   }
 }
 
@@ -314,7 +319,6 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
         arr.splice(idx, 1);
         renderEntries();
         onchange();
-        refreshNavTitles();
       });
       hdr.appendChild(del);
 
@@ -325,8 +329,7 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
       buildObjectFields(body, tmpl.items || {}, entry, () => {
         refreshTitle();
         onchange();
-        refreshNavTitles();
-      }, true);
+      });
       card.appendChild(body);
 
       wrap.appendChild(card);
@@ -360,7 +363,6 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
         arr.push(fresh);
         renderEntries();
         onchange();
-        refreshNavTitles();
         if (entryIdPrefix) {
           const cardEl = document.getElementById(`${entryIdPrefix}-${arr.length - 1}`);
           cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -405,121 +407,78 @@ function toast(msg, type = '') {
   t._timer = setTimeout(() => t.classList.add('hidden'), 3200);
 }
 
-function scrollToSection(id) {
-  const node = document.getElementById(id);
-  if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-function navGroup(title) {
-  const g = document.createElement('div');
-  g.className = 'nav-group-title';
-  g.textContent = title;
-  return g;
-}
-
-function navItem(label, onClick, active = false) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'nav-item' + (active ? ' active' : '');
-  b.textContent = label;
-  b.addEventListener('click', onClick);
-  return b;
-}
-
-const navServerLabels = {};
-
-function renderNav() {
-  const nav = el('cfg-nav');
-  nav.innerHTML = '';
-  nav.appendChild(navGroup('配置'));
-  nav.appendChild(navItem('基本设置', () => scrollToSection('sec-root'), true));
-
-  const servers = Array.isArray(state.conf.mc_servers) ? state.conf.mc_servers : [];
-  if (servers.length) {
-    nav.appendChild(navGroup('MC 服务器'));
-    servers.forEach((s, i) => {
-      const label = displayPathValue(s, 'server.display_name') || s.server_name || `服务器 #${i + 1}`;
-      navServerLabels[i] = label;
-      nav.appendChild(navItem(`🖥️ ${label}`, () => scrollToSection(`sec-server-${i}`)));
-    });
-  }
-  if (state.schema.image_upload_services) {
-    nav.appendChild(navGroup('图片转存'));
-    nav.appendChild(navItem('图片转存服务', () => scrollToSection('sec-image')));
-  }
-}
-
-function refreshNavTitles() {
-  const servers = Array.isArray(state.conf.mc_servers) ? state.conf.mc_servers : [];
-  servers.forEach((s, i) => {
-    const label = displayPathValue(s, 'server.display_name') || s.server_name || `服务器 #${i + 1}`;
-    if (navServerLabels[i] === label) return;
-    navServerLabels[i] = label;
-  });
-  renderNav();
-}
-
-function buildForm() {
+/* ---------- 主渲染（按进入前的视图只渲染对应部分） ---------- */
+function buildViewForm() {
   const form = el('cfg-form');
   form.innerHTML = '';
   const schema = state.schema;
+  const view = state.currentView;
+  const conf = state.conf;
+  const sectionTitle = (text) => {
+    const sec = document.createElement('section');
+    sec.className = 'cfg-section';
+    const title = document.createElement('div');
+    title.className = 'cfg-section-title';
+    const h = document.createElement('h2');
+    h.textContent = text;
+    title.appendChild(h);
+    sec.appendChild(title);
+    return sec;
+  };
 
-  // 分区 1：基本设置（非列表类顶层字段）
+  // 图床视图：只渲染图床配置（开关 + 超时 + 服务列表）
+  if (view === 'image_bed') {
+    const sec = sectionTitle('图床配置');
+    sec.id = 'sec-image';
+    const imgKeys = ['enable_image_upload', 'image_upload_timeout'].filter((k) => schema[k]);
+    if (imgKeys.length) {
+      buildObjectFields(sec, Object.fromEntries(imgKeys.map((k) => [k, schema[k]])), conf, () => setDirty(true));
+    }
+    if (schema.image_upload_services) {
+      sec.appendChild(buildTemplateList(schema.image_upload_services, conf.image_upload_services, () => setDirty(true), 'sec-image'));
+    }
+    form.appendChild(sec);
+    return;
+  }
+
+  // 服务器视图：只渲染该服务器条目（server_name 位于条目的 server 子对象）
+  if (view !== 'all' && schema.mc_servers) {
+    const servers = Array.isArray(conf.mc_servers) ? conf.mc_servers : [];
+    const entry = servers.find(
+      (s) => (s.server && s.server.server_name) === view || s.server_name === view
+    );
+    const tks = Object.keys(schema.mc_servers.templates || {});
+    const tk = entry && entry.__template_key && schema.mc_servers.templates[entry.__template_key]
+      ? entry.__template_key
+      : tks[0];
+    const tmpl = entry && schema.mc_servers.templates[tk];
+    if (entry && tmpl) {
+      const sec = sectionTitle(
+        displayPathValue(entry, 'server.display_name')
+        || displayPathValue(entry, 'server.server_name')
+        || tmpl.name || tk
+      );
+      sec.id = 'sec-server-current';
+      const card = document.createElement('div');
+      card.className = 'entry-card';
+      const body = document.createElement('div');
+      body.className = 'entry-card-body';
+      buildObjectFields(body, tmpl.items || {}, entry, () => setDirty(true));
+      card.appendChild(body);
+      sec.appendChild(card);
+      form.appendChild(sec);
+    }
+    return;
+  }
+
+  // 全局视图（默认 / 其它）：基本设置 = 非列表类顶层字段
   const rootKeys = Object.keys(schema).filter(
     (k) => !['mc_servers', 'image_upload_services'].includes(k)
   );
   if (rootKeys.length) {
-    const sec = document.createElement('section');
-    sec.className = 'cfg-section';
+    const sec = sectionTitle('基本设置');
     sec.id = 'sec-root';
-    const title = document.createElement('div');
-    title.className = 'cfg-section-title';
-    title.innerHTML = '<h2>基本设置</h2>';
-    sec.appendChild(title);
-    const target = state.conf;
-    buildObjectFields(sec, Object.fromEntries(rootKeys.map((k) => [k, schema[k]])), target, () => setDirty(true));
-    form.appendChild(sec);
-  }
-
-  // 分区 2：MC 服务器列表
-  if (schema.mc_servers) {
-    const sec = document.createElement('section');
-    sec.className = 'cfg-section';
-    sec.id = 'sec-servers';
-    const title = document.createElement('div');
-    title.className = 'cfg-section-title';
-    const h = document.createElement('h2');
-    h.textContent = 'MC 服务器列表';
-    title.appendChild(h);
-    if (schema.mc_servers.description) {
-      const d = document.createElement('span');
-      d.className = 'cfg-section-desc';
-      d.textContent = schema.mc_servers.description;
-      title.appendChild(d);
-    }
-    sec.appendChild(title);
-    sec.appendChild(buildTemplateList(schema.mc_servers, state.conf.mc_servers, () => setDirty(true), 'sec-server'));
-    form.appendChild(sec);
-  }
-
-  // 分区 3：图片转存服务
-  if (schema.image_upload_services) {
-    const sec = document.createElement('section');
-    sec.className = 'cfg-section';
-    sec.id = 'sec-image';
-    const title = document.createElement('div');
-    title.className = 'cfg-section-title';
-    const h = document.createElement('h2');
-    h.textContent = '图片转存服务';
-    title.appendChild(h);
-    if (schema.image_upload_services.description) {
-      const d = document.createElement('span');
-      d.className = 'cfg-section-desc';
-      d.textContent = schema.image_upload_services.description;
-      title.appendChild(d);
-    }
-    sec.appendChild(title);
-    sec.appendChild(buildTemplateList(schema.image_upload_services, state.conf.image_upload_services, () => setDirty(true), 'sec-image'));
+    buildObjectFields(sec, Object.fromEntries(rootKeys.map((k) => [k, schema[k]])), conf, () => setDirty(true));
     form.appendChild(sec);
   }
 }
@@ -557,8 +516,7 @@ function switchMode(toJson) {
     formPanel.classList.remove('hidden');
     btn.textContent = '📝 JSON 模式';
     state.jsonMode = false;
-    buildForm();
-    renderNav();
+    buildViewForm();
   }
 }
 
@@ -566,6 +524,7 @@ function switchMode(toJson) {
 async function load() {
   el('cfg-loading').classList.remove('hidden');
   el('cfg-form').classList.add('hidden');
+  state.loading = true;
   try {
     const data = await apiGet('config/full');
     state.conf = data.conf || {};
@@ -575,12 +534,12 @@ async function load() {
     if (!Array.isArray(state.conf.mc_servers)) state.conf.mc_servers = [];
     if (!Array.isArray(state.conf.image_upload_services)) state.conf.image_upload_services = [];
     updateSubtitle();
-    renderNav();
-    buildForm();
+    buildViewForm();
     el('cfg-loading').classList.add('hidden');
     el('cfg-form').classList.remove('hidden');
     setDirty(false);
     state.loading = false;
+    state.loaded = true;
   } catch (e) {
     console.error('Failed to load config:', e);
     el('cfg-loading').textContent = `加载配置失败：${e.message}`;
@@ -613,6 +572,8 @@ async function save() {
       updateSubtitle();
       setDirty(false);
       toast(`✅ 配置已保存并热重载（${state.activeServers.length} 台服务器生效）`, 'ok');
+      // 通知 dashboard 面板刷新（服务器列表 / 统计 / 终端可能已变化）
+      window.dispatchEvent(new CustomEvent('queqiao:config-saved'));
     } else {
       const msg = (resp && (resp.message || resp.error)) || '保存失败（未知错误）';
       toast(`❌ ${msg}`, 'err');
@@ -624,12 +585,51 @@ async function save() {
   }
 }
 
-/* ---------- 事件绑定 ---------- */
-el('btn-json-toggle').addEventListener('click', () => switchMode(!state.jsonMode));
-el('btn-save').addEventListener('click', save);
-el('cfg-json-text').addEventListener('input', () => {
-  state.jsonTouched = true;
-  setDirty(true);
-});
+/* ---------- 视图联动（面板显隐由 app.js 标签切换控制） ---------- */
+// dashboard（app.js）切到「⚙ 配置管理」视图时派发 queqiao:config-view-open，
+// detail.view 为进入前的视图（'all' | 'image_bed' | 服务器 server_name）；
+// 本模块据此只渲染对应部分的表单，同时重新拉取配置
+// （首次与每次打开都拉，配置可能被其它入口改动）
+function onConfigViewOpen(e) {
+  const view = (e && e.detail && e.detail.view) || 'all';
+  state.currentView = view || 'all';
+  // 每次进入配置视图都从表单态开始（三态循环第①步），即使上次离开时
+  // 停留在 JSON 模式：复位面板显隐与切换按钮文案
+  state.jsonMode = false;
+  state.jsonTouched = false;
+  const formPanel = el('cfg-form-panel');
+  const jsonPanel = el('cfg-json-panel');
+  if (formPanel) formPanel.classList.remove('hidden');
+  if (jsonPanel) jsonPanel.classList.add('hidden');
+  const btn = el('btn-json-toggle');
+  if (btn) btn.textContent = '📝 JSON 模式';
+  load();
+}
 
-load();
+/* ---------- 事件绑定 ---------- */
+function bindEvents() {
+  // 入口：顶部「⚙️ 设置」旁的「⚙️ 配置管理」按钮，三态循环：
+  //   ① 非配置视图点击 → 进入配置表单视图（app.js 记录进入前视图并派发
+  //      queqiao:config-view-open，表单只渲染对应部分）；
+  //   ② 配置表单态再点 → app.js 派发 queqiao:config-toggle-json，切全部 JSON；
+  //   ③ 配置 JSON 态再点 → 派发 queqiao:config-view-return，app.js 返回原视图。
+  // 面板内「📝 JSON 模式」按钮为双向手动切换，不参与返回。
+  window.addEventListener('queqiao:config-view-open', onConfigViewOpen);
+  window.addEventListener('queqiao:config-toggle-json', () => {
+    if (state.jsonMode) {
+      window.dispatchEvent(new CustomEvent('queqiao:config-view-return'));
+    } else {
+      switchMode(true);
+    }
+  });
+  el('btn-json-toggle')?.addEventListener('click', () => switchMode(!state.jsonMode));
+  el('btn-save')?.addEventListener('click', save);
+  el('cfg-json-text')?.addEventListener('input', () => {
+    state.jsonTouched = true;
+    setDirty(true);
+  });
+}
+
+// dashboard（app.js）在 DOMContentLoaded 中加载 config-view；本模块此时
+// DOM 已就绪，直接绑定
+bindEvents();

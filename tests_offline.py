@@ -2851,7 +2851,11 @@ _wac34 = _WAC34(
     terminal_logs=_tls34,
 )
 _wac34.register_routes()
-assert len(_mock_ctx34.routes) == 25, f"注册路由数不符: {len(_mock_ctx34.routes)}"
+# 25 条原有（其中 /config、/page/switch 已随配置独立页移除；/config/full 与
+# /config/save 恢复，配置功能收进 dashboard 右上角配置视图）
+# + 7 条图床面板新增路由（/image_bed/test|switch|templates、
+# /config/image_bed 及 create/update/delete）；/page/switch 互切路由已移除
+assert len(_mock_ctx34.routes) == 31, f"注册路由数不符: {len(_mock_ctx34.routes)}"
 _route_paths = [r[0] for r in _mock_ctx34.routes]
 assert "/astrbot_plugin_minecraft_queqiao/servers" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/stats" in _route_paths
@@ -2861,6 +2865,8 @@ assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/command" in _rout
 assert "/astrbot_plugin_minecraft_queqiao/server/<server_name>/broadcast" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/terminal_logs" in _route_paths
 assert "/astrbot_plugin_minecraft_queqiao/terminal_logs/clear" in _route_paths
+assert "/astrbot_plugin_minecraft_queqiao/image_bed/templates" in _route_paths, \
+    "web_api 缺少 /image_bed/templates 模板默认值路由"
 
 # 测试 get_servers 与 get_stats 响应格式
 _res_servers = _asyncio34.run(_wac34.get_servers())
@@ -3620,7 +3626,10 @@ _ctx35 = _MockCtx35()
 _wac35 = _WAC35(_ctx35, _sm35, None, None, None,
                 {"Srv": _cfg35_on, "Srv2": _SC35.from_dict({})}, None, _col35)
 _wac35.register_routes()
-assert len(_ctx35.routes) == 30, f"监控注入后应注册 30 条路由, 实际 {len(_ctx35.routes)}"
+# 31 条基础路由（/config、/page/switch 已随配置独立页移除；/config/full 与
+# /config/save 恢复供 dashboard 配置视图使用）
+# + 5 条监控路由；无互切路由
+assert len(_ctx35.routes) == 36, f"监控注入后应注册 36 条路由, 实际 {len(_ctx35.routes)}"
 _rp35 = [r[0] for r in _ctx35.routes]
 assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
@@ -4726,11 +4735,19 @@ _js44 = (_web44 / "app.js").read_text(encoding="utf-8")
 _css44 = (_web44 / "style.css").read_text(encoding="utf-8")
 for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"',
                 'id="st-fwd-chat"', 'id="st-fwd-chat-format"', 'id="st-fwd-joinleave"',
-                'id="st-fwd-death"', 'id="st-fwd-achievement"', 'id="st-fwd-prefix"',
+                'id="st-fwd-death"', 'id="st-fwd-achievement"', 'id="st-fwd-image"',
+                'id="st-fwd-image-to-mc"', 'id="st-fwd-image-from-mc"',
+                'id="st-fwd-image-toggle"', 'id="st-fwd-image-subgroup"',
+                'id="st-fwd-prefix"',
                 'id="st-fwd-sessions"',
                 'id="st-auto-refresh"', 'id="st-terminal-days"', 'id="settings-save"',
                 'id="settings-toggle"'):
     assert _need44 in _html44, f"设置面板缺少 {_need44}"
+assert 'id="tab-image-bed"' in _html44 and 'id="btn-config-view"' in _html44, (
+    "顶部标签栏保留图床入口，配置管理入口为「⚙️ 设置」旁的按钮"
+)
+assert 'id="tab-config-view"' not in _html44, "配置管理不应再占标签栏，改由顶部按钮进入"
+assert 'id="btn-open-config-view"' not in _html44, "右上角「📝 配置」按钮应已移除，配置入口改「⚙️ 设置」旁的「⚙️ 配置管理」按钮"
 assert 'id="ms-auto-refresh"' not in _html44, "自动刷新间隔应迁出监控设置弹窗"
 assert 'id="ms-terminal-days"' not in _html44, "互通终端加载天数应迁出监控设置弹窗"
 for _need44 in ("renderSettingsPanel", "saveSettingsPanel", "bindSettingsActions",
@@ -4743,9 +4760,514 @@ assert "settings_collapsed" in _js44 and "auto_refresh_interval" in _js44
 assert "forward_chat_to_astrbot" in _js44 and "target_sessions" in _js44, (
     "前端必须读写消息转发字段（message 子对象）"
 )
+assert "forward_image_to_mc" in _js44 and "forward_image_from_mc" in _js44, (
+    "前端必须读写双向图片转发字段（转发图片总开关同时控制两个方向）"
+)
 assert "terminalDaysFor" in _js44, "前端必须按当前服务器读取 terminal_days"
 assert "queqiao_terminal_days" not in _js44, "terminal_days 已迁 conf，不得再写 localStorage"
 assert ".settings-panel" in _css44, "缺少设置面板样式"
+# 配置视图守卫：独立 config 页已移除，完整配置管理收进 dashboard
+# 顶部「⚙️ 设置」旁「⚙️ 配置管理」按钮三态循环进入的内嵌面板：
+# ① 进入当前页面的表单配置（复用主页面 settings-* UI，只渲染对应部分）
+# ② 全部 JSON（新 UI） ③ 返回进入前视图；保存后刷新联动
+_cvjs44 = (_web44 / "config-view.js").read_text(encoding="utf-8")
+for _need44 in ('id="config-view"', 'id="btn-json-toggle"',
+                'id="btn-save"', 'id="cfg-json-text"'):
+    assert _need44 in _html44, f"配置视图缺少 {_need44}"
+assert 'id="cfg-nav"' not in _html44, "侧边分区导航已移除（表单按进入前视图只渲染对应部分）"
+for _need44 in ("config/full", "config/save", "buildViewForm", "switchMode",
+                "settings-row", "currentView",
+                "queqiao:config-saved", "queqiao:config-view-open",
+                "queqiao:config-toggle-json", "queqiao:config-view-return"):
+    assert _need44 in _cvjs44, f"config-view.js 缺少 {_need44}"
+assert "btn-config-view" in _js44 and "CONFIG_VIEW" in _js44, (
+    "dashboard app.js 必须接管配置管理按钮的视图切换（activateServerTab）"
+)
+assert "_configReturnView" in _js44, "app.js 必须记录进入配置视图前的视图以三态返回"
+assert "queqiao:config-saved" in _js44, "dashboard app.js 必须监听配置保存事件刷新面板"
+assert "queqiao:config-view-open" in _js44, "dashboard app.js 必须派发配置视图打开事件"
+assert "queqiao:config-toggle-json" in _js44, (
+    "dashboard app.js 必须在配置表单态再点按钮时派发 JSON 切换事件"
+)
+assert "queqiao:config-view-return" in _js44, (
+    "dashboard app.js 必须监听配置视图返回事件以回到进入前的视图"
+)
+assert 'id="btn-close-config-view"' not in _html44, "内嵌面板无需「返回监控」按钮，由标签切换离开"
+assert ".config-view" in _css44, "缺少配置视图内嵌面板样式"
+assert (_web44.parent / "config").exists() is False, "独立 config 页面目录应已移除"
+# 配置 schema 守卫：terminal_days 用 JSON Schema 标准类型 integer 定义
+# （_conf_schema.json），服务器模板渲染时必须与 int 同等对待
+_cfgschema44 = json.loads(
+    (_pl44.Path(__file__).resolve().parent / "_conf_schema.json").read_text(encoding="utf-8")
+)
+assert _cfgschema44["mc_servers"]["templates"]["server"]["items"][
+    "terminal_days"
+]["type"] == "integer", "terminal_days 在 schema 中应是 integer（前端已兼容）"
 print("OK  AI 字段条目顶层读写(不污染 server 子对象) / 前缀置空与字符串布尔 / "
       "消息转发 message 子对象读写·漏传合并·运行时就地生效 / 目标会话软更新 / "
       "自动刷新间隔与折叠状态钳制·合并·落盘 / 监控弹窗控件迁移与前端静态守卫")
+
+
+print("\n=== 29. 图床面板（路由 / 局部生效不重连 / 条目 CRUD / 内置运行态 / 状态视图） ===")
+import shutil as _sh29
+import pathlib as _pl29
+from astrbot_plugin_minecraft_queqiao.services.web_api import WebApiController as _WAC29
+from astrbot_plugin_minecraft_queqiao.services.image_bed import (
+    BuiltinHttpUploader as _BH29,
+    ImageBedUploaderGroup as _IBG29,
+)
+import astrbot_plugin_minecraft_queqiao.services.web_api as _wa29
+
+class _Host29Stub:
+    """内置服务生命周期桩：不真开端口，记录 start/stop 调用。"""
+    def __init__(self, base_url=""):
+        self.base_url = base_url
+        self.started = None
+    @property
+    def enabled(self):
+        return bool(self.base_url)
+    async def start(self, host, port):
+        self.started = (host, port)
+    async def stop(self):
+        pass
+
+class _FakeConfig29(dict):
+    def __init__(self, conf):
+        super().__init__(conf)
+        self.saves = []
+    async def save_config_async(self, replace_config=None, **kwargs):
+        self.saves.append(_copy43.deepcopy(replace_config))
+        if replace_config:
+            self.update(replace_config)
+        return True
+
+class _FakePlugin29:
+    """插件桩：reload_config 与 apply_image_bed_config 各自计数。"""
+    def __init__(self, conf, data_dir):
+        self.config = _FakeConfig29(conf)
+        self._data_dir = data_dir
+        self.reloads = 0
+        self.image_bed_applys = 0
+    async def reload_config(self):
+        self.reloads += 1
+    async def apply_image_bed_config(self):
+        self.image_bed_applys += 1
+
+class _FakeImageBed29:
+    """图床分组桩：upload 返回可注入结果，builtin_status 返回固定列表。"""
+    def __init__(self, upload_result=("https://img.example/x.png", ""),
+                 status_text="内置服务=开(本机)", service_names="本机, catbox",
+                 uploaders=("本机", "catbox"), builtin=()):
+        self._upload_result = upload_result
+        self.status_text = status_text
+        self.service_names = service_names
+        self.uploaders = list(uploaders)
+        self.enabled = True
+        self._builtin = builtin
+        self.upload_calls = 0
+        self.stop_calls = 0
+    async def upload(self, data):
+        self.upload_calls += 1
+        return self._upload_result
+    async def stop_builtin(self):
+        self.stop_calls += 1
+    def builtin_status(self):
+        return list(self._builtin)
+
+class _SM29:
+    def __init__(self):
+        self._inst = {}
+    def get(self, name):
+        return self._inst.get(name)
+
+class _Ctx29:
+    def __init__(self):
+        self.routes = []
+    def register_web_api(self, path, handler, methods, desc):
+        self.routes.append((path, handler, methods, desc))
+
+_tmp29 = _pl29.Path(tempfile.mkdtemp(prefix="queqiao_ibed29_"))
+_conf29 = {
+    "enable_image_upload": True,
+    "image_upload_timeout": "45",
+    "mc_servers": [
+        {"__template_key": "server", "enabled": True, "target_sessions": [],
+         "server": {"server_name": "MC", "display_name": "", "ws_mode": "forward",
+                    "ws_url": "ws://127.0.0.1:8080/minecraft/ws", "reverse_port": 8080}},
+        {"__template_key": "server", "enabled": False, "target_sessions": [],
+         "server": {"server_name": "MC2", "display_name": "", "ws_mode": "reverse",
+                    "reverse_port": "8180"}},
+    ],
+    "image_upload_services": [
+        {"__template_key": "builtin_http", "enabled": True, "name": "本机",
+         "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+        {"__template_key": "custom", "enabled": True, "name": "catbox",
+         "upload_url": "https://catbox.moe/user/api.php", "token": "",
+         "response": "text", "file_field": "file", "headers": "", "form_fields": ""},
+        {"__template_key": "custom", "enabled": True, "name": "坏条目",
+         "upload_url": "not-a-url", "token": "", "response": "text",
+         "file_field": "file", "headers": "", "form_fields": ""},
+    ],
+}
+_mc_before29 = _copy43.deepcopy(_conf29["mc_servers"])
+_ibed_before29 = _copy43.deepcopy(_conf29["image_upload_services"])
+_plugin29 = _FakePlugin29(_conf29, str(_tmp29))
+_imagebed29 = _FakeImageBed29(
+    builtin=[{"name": "本机", "host": "0.0.0.0", "port": 8765,
+              "base_url": "http://1.2.3.4:8765", "running": True}],
+)
+_ctx29 = _Ctx29()
+_wac29 = _WAC29(
+    _ctx29, _SM29(), None, _imagebed29, None,
+    {"MC": ServerConfig.from_dict({})}, None, None, None, _plugin29,
+)
+_wac29.register_routes()
+_rp29 = [r[0] for r in _ctx29.routes]
+for _p29 in (
+    "/astrbot_plugin_minecraft_queqiao/image_bed/status",
+    "/astrbot_plugin_minecraft_queqiao/image_bed/test",
+    "/astrbot_plugin_minecraft_queqiao/image_bed/switch",
+    "/astrbot_plugin_minecraft_queqiao/config/image_bed",
+    "/astrbot_plugin_minecraft_queqiao/config/image_bed/create",
+    "/astrbot_plugin_minecraft_queqiao/config/image_bed/update",
+    "/astrbot_plugin_minecraft_queqiao/config/image_bed/delete",
+):
+    assert _p29 in _rp29, f"缺少图床路由 {_p29}"
+
+# (a) 状态视图：既有 4 字段保留，新增 timeout/items/builtin_running
+_res29 = asyncio.run(_wac29.get_image_bed_status())
+for _old29 in ("enabled", "status_text", "service_names", "uploaders_count"):
+    assert _old29 in _res29["data"], f"状态响应缺失既有字段 {_old29}"
+assert _res29["data"]["timeout"] == 45, "timeout 应为 conf 的 image_upload_timeout"
+assert _res29["data"]["builtin_running"][0]["running"] is True
+_items29 = _res29["data"]["items"]
+assert len(_items29) == 3, "含未启用/未生效条目必须返回"
+assert _items29[0]["kind"] == "builtin" and _items29[0]["active"] is True and \
+    _items29[0]["reason"] == "", _items29[0]
+assert _items29[1]["kind"] == "third_party" and _items29[1]["active"] is True
+assert _items29[2]["active"] is False and "upload_url" in _items29[2]["reason"], \
+    "非法 upload_url 条目必须给出未生效原因: " + _items29[2]["reason"]
+assert _items29[0]["detail"] == "http://1.2.3.4:8765" and \
+    _items29[1]["detail"] == "https://catbox.moe/user/api.php"
+
+# (b) 总开关关闭 → 全部条目 active=False + 原因说明
+_plugin29.config["enable_image_upload"] = False
+_res29b = asyncio.run(_wac29.get_image_bed_status())
+assert all(not it["active"] and it["reason"] == "总开关未开启"
+           for it in _res29b["data"]["items"]), _res29b["data"]["items"]
+_plugin29.config["enable_image_upload"] = True
+
+# (b2) 模板清单：/image_bed/templates 返回各模板 name/hint/defaults，
+# 与后端 _new_image_entry 生成的新条目默认值同源（catbox 的 file_field 应
+# 为 fileToUpload、upload_url 为官方接口；builtin_http 的 host/port 默认）
+_res29t = asyncio.run(_wac29.get_image_bed_templates())
+_tpl29 = _res29t["data"]
+for _need29t in ("builtin_http", "custom", "catbox"):
+    assert _need29t in _tpl29, f"模板清单缺少 {_need29t}"
+assert _tpl29["builtin_http"]["defaults"]["host"] == "0.0.0.0" and \
+    _tpl29["builtin_http"]["defaults"]["port"] == 8765, _tpl29["builtin_http"]
+assert _tpl29["catbox"]["defaults"]["file_field"] == "fileToUpload", \
+    "catbox 模板默认 file_field 应为 fileToUpload"
+assert _tpl29["catbox"]["defaults"]["upload_url"] == "https://catbox.moe/user/api.php", \
+    "catbox 模板默认 upload_url 应为官方接口"
+
+# (c) 新建：默认值取自 schema 模板，且不得触碰 mc_servers
+_orig_json29 = _wa29.request.json
+async def _fake_json29(default=None):
+    return {"template_key": "catbox", "name": "猫盒"}
+_wa29.request.json = _fake_json29
+_res29c = asyncio.run(_wac29.create_config_image_bed())
+assert _res29c["data"]["saved"] is True
+assert _plugin29.config["image_upload_services"][3]["__template_key"] == "catbox"
+assert _plugin29.config["image_upload_services"][3]["file_field"] == "fileToUpload", \
+    "catbox 模板默认值应取自 schema（file_field=fileToUpload）"
+assert _plugin29.reloads == 0 and _plugin29.image_bed_applys == 1, \
+    "图床保存必须走 apply_image_bed_config（免重连），不得 reload_config"
+assert _plugin29.config["mc_servers"] == _mc_before29, "图床 CRUD 不得触碰 mc_servers"
+
+# (d) 更新：显式字段合并 / 切启用态 / index 越界与非数字 → 400
+async def _fake_json29d(default=None):
+    return {"index": 2, "enabled": False}
+_wa29.request.json = _fake_json29d
+asyncio.run(_wac29.update_config_image_bed())
+assert _plugin29.config["image_upload_services"][2]["enabled"] is False
+assert _plugin29.config["mc_servers"] == _mc_before29
+async def _fake_json29e(default=None):
+    return {"index": 99, "enabled": True}
+_wa29.request.json = _fake_json29e
+assert asyncio.run(_wac29.update_config_image_bed())["status_code"] == 400
+async def _fake_json29f(default=None):
+    return {"index": "abc", "enabled": True}
+_wa29.request.json = _fake_json29f
+assert asyncio.run(_wac29.update_config_image_bed())["status_code"] == 400
+async def _fake_json29g(default=None):
+    return {"index": True, "enabled": True}
+_wa29.request.json = _fake_json29g
+assert asyncio.run(_wac29.update_config_image_bed())["status_code"] == 400
+
+# (e) 删除：按 index 删除且 mc_servers 不变；越界 → 400
+async def _fake_json29h(default=None):
+    return {"index": 2}
+_wa29.request.json = _fake_json29h
+_res29e = asyncio.run(_wac29.delete_config_image_bed())
+assert _res29e["data"]["saved"] is True and len(_plugin29.config["image_upload_services"]) == 3
+assert _plugin29.config["mc_servers"] == _mc_before29, "删除也不得触碰 mc_servers"
+async def _fake_json29i(default=None):
+    return {"index": 99}
+_wa29.request.json = _fake_json29i
+assert asyncio.run(_wac29.delete_config_image_bed())["status_code"] == 400
+_wa29.request.json = _orig_json29
+
+# (f) _new_image_entry 默认值 == schema 模板默认值
+_schema29 = _wac29._read_schema()
+_tpls29 = (_schema29.get("image_upload_services") or {}).get("templates") or {}
+_e29 = _wac29._new_image_entry("builtin_http")
+assert _e29["__template_key"] == "builtin_http" and _e29["enabled"] is True
+_tpl_items29 = _tpls29["builtin_http"]["items"]
+for _k29, _spec29 in _tpl_items29.items():
+    assert _k29 in _e29, f"新建条目缺少模板字段 {_k29}"
+    assert _e29[_k29] == _sd43(_spec29), \
+        f"字段 {_k29} 默认值须与 schema 一致"
+_e29c = _wac29._new_image_entry("catbox")
+assert _e29c["file_field"] == "fileToUpload" and _e29c["response"] == "text"
+assert _wac29._new_image_entry("ghost")["__template_key"] == "custom", \
+    "未知模板应回落 custom"
+
+# (g) switch：根级开关/超时局部生效；非法超时 → 400
+async def _fake_json29j(default=None):
+    return {"enable_image_upload": False, "image_upload_timeout": 90}
+_wa29.request.json = _fake_json29j
+_res29g = asyncio.run(_wac29.switch_image_bed())
+assert _plugin29.config["enable_image_upload"] is False and \
+    _plugin29.config["image_upload_timeout"] == 90
+assert _plugin29.reloads == 0 and _plugin29.image_bed_applys == 4, \
+    "switch 必须免重连（create/update/delete 三次成功 + 本次 switch）"
+async def _fake_json29k(default=None):
+    return {"image_upload_timeout": 0}
+_wa29.request.json = _fake_json29k
+assert asyncio.run(_wac29.switch_image_bed())["status_code"] == 400
+async def _fake_json29l(default=None):
+    return {"nonsense": 1}
+_wa29.request.json = _fake_json29l
+assert asyncio.run(_wac29.switch_image_bed())["status_code"] == 400
+_wa29.request.json = _orig_json29
+
+# (h) test：全量逐条结果透传 {ok, url, failures[], results[]}——每条目单独
+# 实测并返回 名称/可用/URL或原因/耗时(ms)/生效态，未生效条目只报原因不耗时。
+# (c)(d)(e) CRUD 与 (g) switch 已改动列表并关过总开关，此处显式重置
+class _FakeUploader29:
+    def __init__(self, name, result=("https://img.example/ok.png", "")):
+        self.name = name
+        self._result = result
+    async def upload(self, data):
+        return self._result
+
+_plugin29.config["enable_image_upload"] = True
+_plugin29.config["image_upload_services"] = [
+    {"__template_key": "builtin_http", "enabled": True, "name": "本机",
+     "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+    {"__template_key": "custom", "enabled": True, "name": "catbox",
+     "upload_url": "https://catbox.moe/user/api.php", "token": "",
+     "response": "text", "file_field": "file", "headers": "", "form_fields": ""},
+    {"__template_key": "custom", "enabled": True, "name": "坏条目",
+     "upload_url": "not-a-url", "token": "", "response": "text",
+     "file_field": "file", "headers": "", "form_fields": ""},
+]
+_imagebed29.uploaders = [
+    _FakeUploader29("本机", ("https://img.example/ok.png", "")),
+    _FakeUploader29("catbox", (None, "HTTP 403")),
+]
+_res29h = asyncio.run(_wac29.test_image_bed_upload())
+assert _res29h["data"]["ok"] is True, _res29h["data"]
+assert _res29h["data"]["url"] == "https://img.example/ok.png", _res29h["data"]
+assert _res29h["data"]["failures"] == [
+    "catbox: HTTP 403", "坏条目: upload_url 需为 http(s):// 开头"], \
+    _res29h["data"]["failures"]
+_res29h_results = _res29h["data"]["results"]
+assert len(_res29h_results) == 3, _res29h_results
+assert _res29h_results[0] == {
+    "name": "本机", "ok": True, "url": "https://img.example/ok.png",
+    "elapsed_ms": _res29h_results[0]["elapsed_ms"], "reason": "", "active": True,
+}
+assert isinstance(_res29h_results[0]["elapsed_ms"], int) and \
+    _res29h_results[0]["elapsed_ms"] >= 0, "耗时应为非负整数毫秒"
+assert _res29h_results[1] == {
+    "name": "catbox", "ok": False, "url": "",
+    "elapsed_ms": _res29h_results[1]["elapsed_ms"], "reason": "HTTP 403", "active": True,
+}
+assert _res29h_results[2] == {
+    "name": "坏条目", "ok": False, "url": "",
+    "elapsed_ms": 0, "reason": "upload_url 需为 http(s):// 开头", "active": False,
+}
+# 全部失败场景：ok=false 且 failures 汇总每条
+_imagebed29.uploaders = [
+    _FakeUploader29("本机", (None, "超时")),
+    _FakeUploader29("catbox", (None, "HTTP 500")),
+]
+_res29h2 = asyncio.run(_wac29.test_image_bed_upload())
+assert _res29h2["data"]["ok"] is False, _res29h2["data"]
+assert _res29h2["data"]["failures"] == [
+    "本机: 超时", "catbox: HTTP 500", "坏条目: upload_url 需为 http(s):// 开头"], \
+    _res29h2["data"]["failures"]
+
+# (h2) 单条目测试：index 生效 → 复用运行时实例（uploaders[k]）走真实链路；
+# index 未生效 → 直接返回未生效原因；index 越界/非整数 → 400。
+# 列表已由 (h) 重置为 3 条（0 本机内置 / 1 catbox / 2 坏条目 upload_url 非法）
+_plugin29.config["enable_image_upload"] = True  # (g) 段 switch 测试关过总开关，此处恢复
+_plugin29.config["image_upload_services"] = [
+    {"__template_key": "builtin_http", "enabled": True, "name": "本机",
+     "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+    {"__template_key": "custom", "enabled": True, "name": "catbox",
+     "upload_url": "https://catbox.moe/user/api.php", "token": "",
+     "response": "text", "file_field": "file", "headers": "", "form_fields": ""},
+    {"__template_key": "custom", "enabled": True, "name": "坏条目",
+     "upload_url": "not-a-url", "token": "", "response": "text",
+     "file_field": "file", "headers": "", "form_fields": ""},
+]
+class _FakeUploader29:
+    def __init__(self, name, result=("https://img.example/ok.png", "")):
+        self.name = name
+        self._result = result
+    async def upload(self, data):
+        return self._result
+
+_imagebed29.uploaders = [_FakeUploader29("本机"), _FakeUploader29("catbox")]
+async def _fake_json29m(default=None):
+    return {"index": 0}
+_wa29.request.json = _fake_json29m
+_res29m = asyncio.run(_wac29.test_image_bed_upload())
+assert _res29m["data"]["ok"] is True and \
+    _res29m["data"]["url"] == "https://img.example/ok.png", _res29m["data"]
+async def _fake_json29n(default=None):
+    return {"index": 2}  # 坏条目：upload_url 非法，未进入运行链路
+_wa29.request.json = _fake_json29n
+_res29n = asyncio.run(_wac29.test_image_bed_upload())
+assert _res29n["data"]["ok"] is False and \
+    _res29n["data"]["failures"] == ["坏条目: upload_url 需为 http(s):// 开头"], \
+    _res29n["data"]["failures"]
+async def _fake_json29o(default=None):
+    return {"index": 99}
+_wa29.request.json = _fake_json29o
+assert asyncio.run(_wac29.test_image_bed_upload())["status_code"] == 400
+async def _fake_json29p(default=None):
+    return {"index": "x"}
+_wa29.request.json = _fake_json29p
+assert asyncio.run(_wac29.test_image_bed_upload())["status_code"] == 400
+_wa29.request.json = _orig_json29
+
+# (i) builtin_status：未 start / start 后 / stop 后 running 翻转
+_bh29 = _BH29(base_url="http://1.2.3.4:8765", name="本机")
+_bh29._host = _Host29Stub("http://1.2.3.4:8765")
+_g29 = _IBG29(); _g29.uploaders = [_bh29]
+_st29 = _g29.builtin_status()
+assert len(_st29) == 1 and _st29[0]["running"] is False, "未 start 时 running 应为 False"
+assert _st29[0]["name"] == "本机" and _st29[0]["base_url"] == "http://1.2.3.4:8765"
+asyncio.run(_bh29.start())
+assert _g29.builtin_status()[0]["running"] is True, "start 成功后 running 应为 True"
+asyncio.run(_bh29.stop())
+assert _g29.builtin_status()[0]["running"] is False, "stop 后 running 应回 False"
+
+# (j) 无 MC 服务器配置时图床仍启动（_apply_runtime_config 修复）
+_p29x = _P28(_Ctx26(), {"enable_image_upload": True, "image_upload_services": [
+    {"__template_key": "builtin_http", "enabled": True, "name": "裸内置",
+     "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"}]})
+_p29x.image_bed.start_builtin = _start_builtin_noop_28
+asyncio.run(_p29x._apply_runtime_config())
+assert len(_p29x.image_bed.uploaders) == 1, "无 mc_servers 时图床也必须启动"
+assert _p29x._configs == {}, "无服务器配置时不应产生运行时实例"
+
+# (k) apply_image_bed_config 幂等：连续两次 uploaders 数量与 service_names 一致
+_p29y = _P28(_Ctx26(), {"enable_image_upload": True, "image_upload_services": [
+    {"__template_key": "builtin_http", "enabled": True, "name": "A",
+     "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+    {"__template_key": "custom", "enabled": True, "name": "B",
+     "upload_url": "https://x/u", "response": "text"},
+    {"__template_key": "custom", "enabled": False, "name": "C",
+     "upload_url": "https://y/u", "response": "text"}]})
+_p29y.image_bed.start_builtin = _start_builtin_noop_28
+asyncio.run(_p29y.apply_image_bed_config())
+_first29 = (len(_p29y.image_bed.uploaders), _p29y.image_bed.service_names)
+asyncio.run(_p29y.apply_image_bed_config())
+assert (len(_p29y.image_bed.uploaders), _p29y.image_bed.service_names) == _first29, \
+    "apply_image_bed_config 必须幂等（不累积条目）"
+assert len(_p29y.image_bed.uploaders) == 2, "关闭的条目不计入"
+
+# (l) 前端静态守卫：图床标签必须挂在 #server-tabs 之外（每轮 innerHTML 重建
+# 不清空它）；面板/表单关键控件与前端方法必须存在
+_web29 = _pl29.Path(__file__).resolve().parent / "pages" / "dashboard"
+_html29 = (_web29 / "index.html").read_text(encoding="utf-8")
+_js29 = (_web29 / "app.js").read_text(encoding="utf-8")
+_css29 = (_web29 / "style.css").read_text(encoding="utf-8")
+# 图床标签与服务器标签栏同级（不在 #server-tabs 容器内），HTML 文本顺序：
+# server-tabs 开标签之后、tab-image-bed 出现在同一 <nav> 下
+_ntabs29 = _html29.index('id="server-tabs"')
+_npin29 = _html29.index('id="tab-image-bed"')
+assert _npin29 > _ntabs29, "图床标签应在 #server-tabs 之后"
+_servtab_div29 = _html29.index('<div class="server-tabs" id="server-tabs">')
+_nav_end29 = _html29.index("</nav>", _servtab_div29)
+assert _ntabs29 < _nav_end29 and _npin29 < _nav_end29, \
+    "图床标签与 #server-tabs 必须同属 server-tabs-bar（否则每轮重建被清空）"
+for _need29 in ('id="image-bed-panel"', 'id="ib-status"', 'id="ib-enabled"',
+                'id="ib-timeout"', 'id="ib-test"', 'id="ib-new"',
+                'id="ib-test-result"', 'id="ib-list"', 'id="image-bed-form-modal"',
+                'id="ibf-template"', 'id="ibf-enabled"', 'id="ibf-name"',
+                'id="ibf-host"', 'id="ibf-port"', 'id="ibf-base-url"',
+                'id="ibf-upload-url"', 'id="ibf-token"', 'id="ibf-response"',
+                'id="ibf-file-field"', 'id="ibf-headers"', 'id="ibf-form-fields"',
+                'id="ibf-delete"', 'id="ibf-cancel"', 'id="ibf-save"'):
+    assert _need29 in _html29, f"图床面板 HTML 缺少 {_need29}"
+for _need29 in ("IMAGE_BED_VIEW", "isImageBedView", "loadImageBedStatus",
+                "loadImageBedEntries", "renderImageBedList", "syncImageBedDot",
+                "openImageBedForm", "closeImageBedForm", "fillImageBedForm",
+                "submitImageBedForm", "deleteImageBedEntry", "toggleImageBedEntry",
+                "toggleImageBed", "saveImageBedTimeout", "testImageBed",
+                "testImageBedEntry", "_renderTestRows",
+                "loadImageBedTemplates", "rebuildImageBedTemplateOptions",
+                "bindImageBedActions"):
+    assert _need29 in _js29, f"前端 JS 缺少 {_need29}"
+# (l2) 图床面板渲染不能调用类上不存在的方法（escapeHtml 是模块级函数；
+# 误用 this.escapeHtml 会抛 TypeError，列表永远停在「正在加载图床条目」loading）
+assert "function escapeHtml(" in _js29, "前端 JS 缺少模块级 escapeHtml"
+assert "this.escapeHtml(" not in _js29, "前端 JS 误用 this.escapeHtml（类上无此方法）"
+for _need29 in (".server-tab-pinned", ".image-bed-panel", ".ib-item",
+                ".ib-test-result", ".ib-item-reason", ".ib-item-running",
+                ".ib-item-test-result", ".ib-test-row", ".ib-test-rows"):
+    assert _need29 in _css29, f"前端 CSS 缺少 {_need29}"
+# (l3) 单条目测试：条目卡片内要有「🧪 测试」按钮与其临时结果容器，
+# JS 要有 testImageBedEntry 方法（右上角全量测试与新按钮共用后端 index 参数）
+assert 'data-ib-action="test"' in _js29, "条目渲染缺少单条目测试按钮"
+assert "testImageBedEntry" in _js29, "前端 JS 缺少 testImageBedEntry 方法"
+assert "data-test-result" in _js29, "条目渲染缺少单条目测试结果容器"
+assert "this.toast(" not in _js29, "dashboard 页 app.js 误用 this.toast（应为 this.showToast）"
+# (l4) 删除图床条目后其余条目的单条目测试结果必须保留：conf 下标前移，
+# 测试结果以 index 为键需同步迁移（否则删一个图床后其余测试结果全丢）
+assert "_shiftImageBedTestResults" in _js29, "前端 JS 缺少删除后迁移测试结果键的方法"
+assert "this._shiftImageBedTestResults(targetIndex)" in _js29, \
+    "deleteImageBedEntry 删除成功后未迁移单条目测试结果键"
+# (l5) 全量「测试上传」改为逐条串行：测完一条立即回填到该条目的结果容器
+# （出一个展示一个），不再等全量接口一次性返回后再批量回填
+for _need29 in ("_applyItemTestResult", "_applyFullImageBedTestResults"):
+    assert _need29 in _js29, f"前端 JS 缺少 {_need29}"
+assert "image_bed/test', { index: idx })" in _js29, \
+    "testImageBed 未改为逐条串行测试（应逐条携带 index 调用单条目测试）"
+assert "this._applyItemTestResult(idx, data, entryName)" in _js29, \
+    "testImageBed 逐条测试后未立即回填该条目结果容器"
+# (l6) 新建模式切换模板必须整体重置为新模板默认值（否则 name 等通用字段
+# 残留第一个模板的值，如切到 catbox 时 name 仍停在「内置图片HTTP服务」）：
+# syncImageBedFormTemplate 需带 force 参数，change 监听按模式传参
+assert "syncImageBedFormTemplate(force)" in _js29, \
+    "syncImageBedFormTemplate 缺少 force 整体重置参数"
+assert "this.imageBedFormMode === 'create'" in _js29, \
+    "模板切换未按新建/编辑模式决定是否整体重置默认值"
+assert "const applyDefault" in _js29, "模板默认值回填缺少 applyDefault（force 感知赋值）"
+# 模板默认 name 为空（如 custom）或模板清单未拉到（兜底路径）时，name 仍要
+# 换成对应模板显示文本，不能停在上一个模板的名字（内置图片HTTP服务）上
+assert "templateDisplayNames" in _js29, "syncImageBedFormTemplate 缺少模板显示名映射"
+assert "const nameValue" in _js29, "模板 name 覆盖未使用模板默认名/显示文本兜底逻辑"
+assert "nameEl.value = templateDisplayNames[key] || key" in _js29, \
+    "模板清单缺失兜底路径未重置 name 为对应模板文本"
+
+print("OK  路由注册 / 状态视图4字段兼容+items+building_running / 总开关关闭原因 / "
+      "CRUD 默认值取 schema·不动 mc_servers / index 越界非数字→400 / "
+      "switch 免重连·非法超时400 / test 全链结果透传 / builtin_status 运行态翻转 / "
+      "无MC配置图床仍启动 / apply_image_bed_config 幂等 / 前端静态守卫")

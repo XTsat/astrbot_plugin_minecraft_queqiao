@@ -6,6 +6,12 @@
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8080/minecraft/ws';
 const DEFAULT_SERVER_NAME = 'Server';
 
+// 图床面板的视图键（顶部标签 data-view）：独立于 'all' 与各服务器名，
+// renderServerTabs 的 valid 判定需显式放行，不能落进「服务器视图」分支
+const IMAGE_BED_VIEW = 'image_bed';
+// 配置管理视图键（顶部标签 data-view）：与图床一致，作为内嵌面板切换
+const CONFIG_VIEW = 'config_view';
+
 // MC 格式码到 CSS 类名的映射
 const MC_COLOR_MAP = {
   '0': 'mc-black',
@@ -104,11 +110,14 @@ class DashboardApp {
     // 当前激活的服务器视图标签（'all' 或 server_name）。刷新页面时保留
     // 上一次打开的服务器视图（localStorage 加速首屏，后端无此状态）。
     // 受限 iframe 下 localStorage 可能被沙箱禁止，一律 try/catch 兜底；
-    // 服务器被删除时 renderServerTabs 的 valid 检查会回退全局视图
+    // 服务器被删除时 renderServerTabs 的 valid 检查会回退全局视图。
+    // 配置管理视图不持久化：刷新后回到正常主页面（'all'）
     this.activeServerTab = 'all';
     try {
       const savedTab = localStorage.getItem('queqiao_active_tab');
-      if (savedTab && savedTab !== 'all') this.activeServerTab = savedTab;
+      if (savedTab && savedTab !== 'all' && savedTab !== CONFIG_VIEW) {
+        this.activeServerTab = savedTab;
+      }
     } catch (e) {
       this.activeServerTab = 'all';
     }
@@ -167,6 +176,27 @@ class DashboardApp {
     // 呈现，点进去即可启用/编辑/删除
     this.configServers = [];
     this.serverFormMode = null; // 'create' | 'edit'：服务器弹窗当前模式
+    // 图床面板状态：status 为 /image_bed/status 的原始响应；entries 为
+    // /config/image_bed 的原始条目（含 __template_key，表单编辑回显用）。
+    // 面板数据独立于服务器视图轮询：进入图床视图时单独拉取，保存走
+    // 局部生效（免重连 MC）
+    this.imageBedStatus = null;
+    this.imageBedEntries = [];
+    this.imageBedFormMode = null; // 'create' | 'edit'
+    this.imageBedFormIndex = null;
+    this.imageBedTesting = false;
+    this.imageBedTestResults = {}; // index → {cls, html}：自动刷新重绘后回填单条目测试结果
+    this.imageBedMasterEnabled = true; // 根级总开关（启动缓存；权威由后端回拉）
+    this.imageBedTimeout = 30; // 上传超时（秒）
+    // 模板清单缓存（/image_bed/templates 返回 {key: {name, hint, defaults}}）：
+    // 新建表单切换模板时用 defaults 预填字段；成功拉取后重建模板下拉
+    this.imageBedTemplates = null;
+    // 模板选择器里除 builtin/custom 外的第三方模板键（与 _conf_schema.json
+    // 的 image_upload_services.templates 键集合对齐；后端模板接口未拉到时兜底）
+    this.imageBedTemplateKeys = [
+      'builtin_http', 'custom', 'catbox', 'litterbox', 'imglink', 'imgloc',
+      'img402', 'pngurl', 'see', 'imgbb', 'picui', 'anyapi', 'xinyew', 'xunjinlu',
+    ];
   }
 
   async init() {
@@ -176,6 +206,7 @@ class DashboardApp {
     this.bindTerminalActions();
     this.bindMonitorActions();
     this.bindSettingsActions();
+    this.bindImageBedActions();
 
     if (this.bridge) {
       try {
@@ -252,6 +283,11 @@ class DashboardApp {
   }
 
   bindEvents() {
+    // 配置视图（config-view.js）保存成功后通知本面板刷新：
+    // 服务器列表 / 统计 / 连接状态可能已变化，静默刷新即可
+    window.addEventListener('queqiao:config-saved', () => {
+      this.refreshAll(true, true);
+    });
     document.getElementById('btn-refresh')?.addEventListener('click', () => {
       // 手动刷新强制重新探测一次 RCON（自动轮询不强制，避免向未开启
       // RCON 的鹊桥端反复发 send_rcon_command、在 MC 控制台刷报错）
@@ -284,6 +320,73 @@ class DashboardApp {
         e.preventDefault();
         this.submitServerForm();
       }
+    });
+
+    // 图床面板：顶部标签 / 总开关 / 超时 / 测试上传 / 条目管理
+    document.getElementById('tab-image-bed')?.addEventListener('click', () => {
+      this.activateServerTab(IMAGE_BED_VIEW);
+    });
+    // 配置管理：顶部「⚙️ 设置」旁按钮。三态循环：
+    // ① 非配置视图点击 → 进入配置表单视图，记录进入前的视图（_configReturnView），
+    //    表单只渲染当前视图对应部分（图床→图床配置、服务器→该服务器、全局→基本设置）
+    // ② 配置视图表单态再点 → 切全部 JSON（config-view.js 收到后执行 switchMode(true)）
+    // ③ 配置视图 JSON 态再点 → config-view.js 派发 queqiao:config-view-return，
+    //    本监听回到进入前的视图，而不是在两个配置之间循环
+    document.getElementById('btn-config-view')?.addEventListener('click', () => {
+      if (!this.isConfigView()) {
+        this._configReturnView = this.activeServerTab;
+        this.activateServerTab(CONFIG_VIEW);
+      } else {
+        window.dispatchEvent(new CustomEvent('queqiao:config-toggle-json'));
+      }
+    });
+    // JSON 态再点按钮时返回进入前的视图（由 config-view.js 派发返回事件）
+    window.addEventListener('queqiao:config-view-return', () => {
+      const view = this._configReturnView || 'all';
+      this._configReturnView = null;
+      this.activateServerTab(view);
+    });
+    document.getElementById('ib-enabled')?.addEventListener('change', (e) => {
+      this.toggleImageBed(!!e.target.checked);
+    });
+    document.getElementById('ib-timeout')?.addEventListener('change', () => {
+      this.saveImageBedTimeout();
+    });
+    document.getElementById('ib-test')?.addEventListener('click', () => {
+      this.testImageBed();
+    });
+    document.getElementById('ib-new')?.addEventListener('click', () => {
+      this.openImageBedForm('create');
+    });
+    document.getElementById('ibf-close')?.addEventListener('click', () => this.closeImageBedForm());
+    document.getElementById('ibf-cancel')?.addEventListener('click', () => this.closeImageBedForm());
+    document.getElementById('ibf-save')?.addEventListener('click', () => this.submitImageBedForm());
+    document.getElementById('ibf-delete')?.addEventListener('click', () => this.deleteImageBedEntry());
+    document.getElementById('ibf-template')?.addEventListener('change', () => {
+      // 新建模式切模板 = 换一种图床方案：整体重置为新模板默认值；
+      // 编辑模式仅回填空字段（不覆盖条目已有数据）
+      this.syncImageBedFormTemplate(this.imageBedFormMode === 'create');
+    });
+    const ibfOverlay = document.getElementById('image-bed-form-modal');
+    ibfOverlay?.addEventListener('click', (e) => {
+      if (e.target === ibfOverlay) this.closeImageBedForm();
+    });
+    document.getElementById('image-bed-form-modal')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT') {
+        e.preventDefault();
+        this.submitImageBedForm();
+      }
+    });
+    // 条目操作：容器内事件委托（列表每次重渲染，避免重复绑定）
+    document.getElementById('ib-list')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-ib-action]');
+      if (!btn) return;
+      const index = btn.dataset.index;
+      const action = btn.dataset.ibAction;
+      if (action === 'edit') this.openImageBedForm('edit', index);
+      else if (action === 'toggle') this.toggleImageBedEntry(index);
+      else if (action === 'delete') this.deleteImageBedEntry(index);
+      else if (action === 'test') this.testImageBedEntry(index);
     });
   }
 
@@ -391,11 +494,18 @@ class DashboardApp {
 
       // 3. 渲染界面（输入框与终端输出独立于服务器卡片区，不会被重建打断）
       this.renderServerTabs();
-      this.renderOverview();
-      this.renderServers();
-      await this.renderTerminal();
-      this.renderMonitorPanel();
-      this.renderSettingsPanel();
+      if (this.isImageBedView() || this.isConfigView()) {
+        // 图床/配置视图：不渲染服务器统计/卡片/终端/监控（stats-grid 与
+        // layout-main 已在 activateServerTab 隐藏）；仅同步图床面板。
+        // 静默刷新（自动轮询）不重拉图床数据，避免后台空转
+        if (this.isImageBedView() && !silent) await this.loadImageBedStatus();
+      } else {
+        this.renderOverview();
+        this.renderServers();
+        await this.renderTerminal();
+        this.renderMonitorPanel();
+        this.renderSettingsPanel();
+      }
       this.updateLastRefreshTime();
     } catch (err) {
       console.error('Refresh failed:', err);
@@ -490,7 +600,9 @@ class DashboardApp {
       // 回退全局视图。仅切视图不回写，避免「读取即覆盖」
       if (typeof prefs.active_tab === 'string') {
         const savedTab = prefs.active_tab.trim();
-        const valid = savedTab === 'all' ||
+        // 配置管理视图（CONFIG_VIEW）不持久化：即使后端残留该值
+        // 也判无效，刷新后保持正常主页面
+        const valid = savedTab === 'all' || savedTab === IMAGE_BED_VIEW ||
           this.servers.some(s => s.server_name === savedTab);
         if (savedTab && valid && savedTab !== this.activeServerTab) {
           this.activateServerTab(savedTab, { persist: false });
@@ -501,9 +613,9 @@ class DashboardApp {
     }
   }
 
-  // 当前服务器视图对应的服务器对象；全局视图返回 null
+  // 当前服务器视图对应的服务器对象；全局/图床/配置视图返回 null
   activeServerObject() {
-    if (this.activeServerTab === 'all') return null;
+    if (this.activeServerTab === 'all' || this.isImageBedView() || this.isConfigView()) return null;
     return this.servers.find(s => s.server_name === this.activeServerTab) || null;
   }
 
@@ -1253,6 +1365,16 @@ class DashboardApp {
 
   // ---- 服务器视图标签（全局 + 每台服务器）----
 
+  // 当前是否图床视图（独立于服务器视图与全局视图）
+  isImageBedView() {
+    return this.activeServerTab === IMAGE_BED_VIEW;
+  }
+
+  // 当前是否配置管理视图（同图床，独立于服务器视图与全局视图）
+  isConfigView() {
+    return this.activeServerTab === CONFIG_VIEW;
+  }
+
   // 重建顶部服务器标签栏：全局 + 每台服务器，保留当前激活视图
   renderServerTabs() {
     const tabsEl = document.getElementById('server-tabs');
@@ -1266,10 +1388,16 @@ class DashboardApp {
       );
     }
 
-    // 原激活视图已不存在（服务器被移除）则回退全局视图
+    // 原激活视图已不存在（服务器被移除）则回退全局视图；图床/配置视图键独立放行
     const valid = this.activeServerTab === 'all' ||
+      this.activeServerTab === IMAGE_BED_VIEW ||
+      this.activeServerTab === CONFIG_VIEW ||
       this.servers.some(s => s.server_name === this.activeServerTab);
     if (!valid) this.activeServerTab = 'all';
+
+    // 图床标签的提示点与激活态由外部维护（#tab-image-bed 不在本容器内，
+    // innerHTML 重建不会波及它，因此只需同步高亮与红点提示）
+    this.syncImageBedDot();
 
     // 仅同步高亮，实际渲染交由 refreshAll 统一执行；不加持久化写入，
     // 避免每轮自动刷新都向后端重复写当前值
@@ -1293,10 +1421,14 @@ class DashboardApp {
     return btn;
   }
 
-  // 切换服务器视图：统计卡片、服务器面板与终端一并跟随
+  // 切换视图（全局 / 服务器 / 图床 / 配置管理）：统计卡片、服务器面板、终端、
+  // 图床面板与配置面板按视图显示/隐藏。图床/配置视图独立于服务器：隐藏
+  // stats-grid 与 layout-main（服务器主体），显示对应面板并停止终端轮询
   activateServerTab(key, { render = true, persist = true } = {}) {
+    const isImageBed = key === IMAGE_BED_VIEW;
+    const isConfig = key === CONFIG_VIEW;
     this.activeServerTab = key;
-    // 刷新页面后仍停留在当前打开的服务器视图
+    // 刷新页面后仍停留在当前打开的视图
     try {
       localStorage.setItem('queqiao_active_tab', key);
     } catch (e) {
@@ -1304,9 +1436,65 @@ class DashboardApp {
       // 不可用，此处仅失去首屏缓存，权威值由 persistActiveTab 走后端兜底
     }
     if (persist) this.persistActiveTab(key);
-    document.querySelectorAll('#server-tabs .server-tab').forEach(b => {
-      b.classList.toggle('active', b.dataset.view === key);
-    });
+    // 图床标签在 #server-tabs 之外（不受内渲染重建），需一并高亮
+    document.querySelectorAll('#server-tabs .server-tab, #tab-image-bed')
+      .forEach(b => {
+        b.classList.toggle('active', b.dataset.view === key);
+      });
+
+    if (isImageBed) {
+      // 图床视图：隐藏统计卡与服务器主体，显示图床面板；停止所有服务器
+      // 视图的轮询/监控动作（终端、实时采样），切回时由 render 重新拉起
+      const stats = document.querySelector('.stats-grid');
+      if (stats) stats.classList.add('hidden');
+      const main = document.querySelector('.layout-main');
+      if (main) main.classList.add('hidden');
+      const cfgPanel = document.getElementById('config-view');
+      if (cfgPanel) cfgPanel.classList.add('hidden');
+      const panel = document.getElementById('image-bed-panel');
+      if (panel) panel.classList.remove('hidden');
+      this.stopTerminalPolling();
+      this.stopRealtime();
+      if (render) {
+        // 首拉图床状态与条目（失败不阻断，面板内显示错误提示）
+        this.loadImageBedStatus();
+        this.loadImageBedEntries();
+      }
+      this.syncMonitorFreqFromBackend();
+      return;
+    }
+
+    if (isConfig) {
+      // 配置管理视图：与图床一致——隐藏统计卡、服务器主体与图床面板，
+      // 显示配置面板；配置加载由 config-view.js 监听 queqiao:config-view-open 执行
+      const stats = document.querySelector('.stats-grid');
+      if (stats) stats.classList.add('hidden');
+      const main = document.querySelector('.layout-main');
+      if (main) main.classList.add('hidden');
+      const ibPanel = document.getElementById('image-bed-panel');
+      if (ibPanel) ibPanel.classList.add('hidden');
+      const panel = document.getElementById('config-view');
+      if (panel) panel.classList.remove('hidden');
+      this.stopTerminalPolling();
+      this.stopRealtime();
+      if (render) {
+        // 携带进入前的视图，config-view.js 据此只渲染对应部分的表单
+        window.dispatchEvent(new CustomEvent('queqiao:config-view-open', {
+          detail: { view: this._configReturnView },
+        }));
+      }
+      return;
+    }
+
+    // 服务器/全局视图：恢复主体显示，隐藏图床面板与配置面板
+    const panel = document.getElementById('image-bed-panel');
+    if (panel) panel.classList.add('hidden');
+    const cfgPanel = document.getElementById('config-view');
+    if (cfgPanel) cfgPanel.classList.add('hidden');
+    const stats = document.querySelector('.stats-grid');
+    if (stats) stats.classList.remove('hidden');
+    const main = document.querySelector('.layout-main');
+    if (main) main.classList.remove('hidden');
 
     if (render) {
       this.renderOverview();
@@ -1341,16 +1529,735 @@ class DashboardApp {
 
   // 全局视图下对某台服务器执行操作时，切到该服视图以展示终端反馈
   focusServer(serverName) {
-    if (serverName && this.activeServerTab === 'all') {
+    // 全局视图或图床视图下对某台服务器执行操作时，切到该服视图以展示终端
+    // 反馈；图床视图与服务器视图互斥，进入服务器视图需先退出图床面板
+    if (serverName && this.activeServerTab !== serverName &&
+        (this.activeServerTab === 'all' || this.isImageBedView() || this.isConfigView())) {
       this.activateServerTab(serverName);
     }
   }
 
+  // ---- 图床面板 ----
+
+  // 图床视图进入时拉取运行态（总开关/超时/内置服务/条目生效视图）。
+  // 失败不阻断：面板内显示错误提示，顶部标签的红点提示同步兜底
+  async loadImageBedStatus() {
+    try {
+      const resp = await Promise.race([
+        this.apiGet('image_bed/status'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('图床状态请求超时')), 8000)
+        ),
+      ]);
+      this.imageBedStatus = (resp && resp.data) ? resp.data : resp;
+    } catch (e) {
+      console.warn('拉取图床状态失败:', e);
+      this.imageBedStatus = null;
+    }
+    this.renderImageBedList();
+    this.syncImageBedDot();
+  }
+
+  // 拉取 conf 里的图床条目原始数据（表单编辑回显用）与根级开关/超时
+  async loadImageBedEntries() {
+    try {
+      const resp = await Promise.race([
+        this.apiGet('config/image_bed'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('图床配置请求超时')), 8000)
+        ),
+      ]);
+      const data = (resp && resp.data) ? resp.data : resp;
+      this.imageBedEntries = (data && Array.isArray(data.items)) ? data.items : [];
+      if (data && typeof data.enable_image_upload === 'boolean') {
+        this.imageBedMasterEnabled = data.enable_image_upload;
+      }
+      if (data && Number.isFinite(data.image_upload_timeout)) {
+        this.imageBedTimeout = data.image_upload_timeout;
+      }
+      const toggle = document.getElementById('ib-enabled');
+      if (toggle && typeof this.imageBedMasterEnabled === 'boolean') {
+        toggle.checked = this.imageBedMasterEnabled;
+      }
+      const timeoutEl = document.getElementById('ib-timeout');
+      if (timeoutEl && Number.isFinite(this.imageBedTimeout)) {
+        timeoutEl.value = this.imageBedTimeout;
+      }
+    } catch (e) {
+      console.warn('拉取图床配置失败:', e);
+    }
+  }
+
+  // 拉取图床模板清单（含各模板字段默认值），成功后重建模板下拉。
+  // 失败不阻断：保留 imageBedTemplateKeys 兜底下拉；表单预填用 defaults 优先
+  async loadImageBedTemplates() {
+    try {
+      const resp = await Promise.race([
+        this.apiGet('image_bed/templates'),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('图床模板请求超时')), 8000)
+        ),
+      ]);
+      const data = (resp && resp.data) ? resp.data : resp;
+      if (data && typeof data === 'object') {
+        this.imageBedTemplates = data;
+        this.rebuildImageBedTemplateOptions();
+      }
+    } catch (e) {
+      console.warn('拉取图床模板失败:', e);
+    }
+  }
+
+  // 重建「模板选择」下拉：优先用后端模板清单（名称/说明来自 schema），
+  // 未拉到后端数据时退回 imageBedTemplateKeys 硬编码集合
+  rebuildImageBedTemplateOptions() {
+    const tpl = document.getElementById('ibf-template');
+    if (!tpl) return;
+    const labels = {
+      builtin_http: '内置图片HTTP服务',
+      custom: '通用图床接口',
+    };
+    const entries = this.imageBedTemplates
+      ? Object.entries(this.imageBedTemplates)
+      : this.imageBedTemplateKeys.map((key) => [key, null]);
+    tpl.innerHTML = '';
+    for (const [key, meta] of entries) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      const label = meta && meta.name ? meta.name : (labels[key] || key);
+      opt.textContent = label === key ? key : `${key} · ${label}`;
+      tpl.appendChild(opt);
+    }
+  }
+
+  // 渲染图床条目列表（运行态视图：生效状态 + 未生效原因 + 操作按钮）
+  renderImageBedList() {
+    const listEl = document.getElementById('ib-list');
+    if (!listEl) return;
+    const status = this.imageBedStatus;
+    const statusEl = document.getElementById('ib-status');
+    if (statusEl) {
+      statusEl.textContent = status && status.status_text
+        ? status.status_text
+        : (status ? '图床数据异常' : '加载失败');
+    }
+
+    if (!status) {
+      listEl.innerHTML = `<div class="ib-empty">图床状态加载失败，请确认后端已注入图床子系统</div>`;
+      return;
+    }
+    const items = Array.isArray(status.items) ? status.items : [];
+    if (items.length === 0) {
+      listEl.innerHTML = `<div class="ib-empty">尚未配置任何图床条目 — 点击右上「＋ 新建条目」添加</div>`;
+      return;
+    }
+
+    const builtinRunning = Array.isArray(status.builtin_running)
+      ? status.builtin_running : [];
+    const html = items.map((it) => {
+      const kindLabel = it.kind === 'builtin' ? '内置HTTP' : '第三方图床';
+      const stateCls = it.active ? 'ok' : 'warn';
+      const stateTxt = it.active ? '已生效' : '未生效';
+      const runningMark = it.kind === 'builtin' && it.template_key === 'builtin_http'
+        ? this._builtinRunningMark(it, builtinRunning) : '';
+      const reasonHtml = it.reason
+        ? `<div class="ib-item-reason">⚠ ${escapeHtml(it.reason)}</div>` : '';
+      const detailHtml = it.detail
+        ? `<div class="ib-item-detail">${escapeHtml(it.detail)}</div>` : '';
+      const toggleLabel = it.enabled ? '停用' : '启用';
+      return `<div class="ib-item ${it.active ? 'active' : 'inactive'}">
+        <div class="ib-item-head">
+          <span class="ib-item-kind ${it.kind}">${kindLabel}</span>
+          <span class="ib-item-name">${escapeHtml(it.name)}</span>
+          ${runningMark}
+          <span class="ib-item-state ${stateCls}">${stateTxt}</span>
+        </div>
+        ${detailHtml}
+        ${reasonHtml}
+        <div class="ib-item-actions">
+          <button type="button" class="btn btn-sm" data-ib-action="test" data-index="${it.index}">🧪 测试</button>
+          <button type="button" class="btn btn-sm" data-ib-action="edit" data-index="${it.index}">✏ 编辑</button>
+          <button type="button" class="btn btn-sm" data-ib-action="toggle" data-index="${it.index}">${toggleLabel}</button>
+          <button type="button" class="btn btn-sm btn-danger" data-ib-action="delete" data-index="${it.index}">🗑 删除</button>
+        </div>
+        <div class="ib-item-test-result hidden" data-test-result="${it.index}"></div>
+      </div>`;
+    }).join('');
+    listEl.innerHTML = `<div class="ib-list-inner">${html}</div>`;
+    this._restoreImageBedTestResults(); // 重绘后回填最近一次的单条目测试结果
+  }
+
+  // 内置HTTP条目：运行态徽标（运行中 / 已停止；仅当条目为内置且已启用时）
+  _builtinRunningMark(item, builtinRunning) {
+    if (!item.enabled) return '';
+    const host = (item.detail || '').trim();
+    if (!host) return '';
+    const isRunning = (builtinRunning || []).some(
+      b => b.running === true && b.base_url === host
+    );
+    return `<span class="ib-item-running ${isRunning ? 'on' : 'off'}">${isRunning ? '● 运行中' : '○ 已停止'}</span>`;
+  }
+
+  // 图床标签红点：内置服务全停或存在未生效条目时提示（不打断服务器标签）
+  syncImageBedDot() {
+    const tab = document.getElementById('tab-image-bed');
+    if (!tab) return;
+    const status = this.imageBedStatus;
+    let needsAttention = false;
+    if (status) {
+      const items = Array.isArray(status.items) ? status.items : [];
+      // 任一「已启用但未生效」条目 → 提示（配置不完整）
+      needsAttention = items.some(it => it.enabled && !it.active);
+      // 内置条目已启用但对应服务未运行 → 提示
+      const builtinRunning = Array.isArray(status.builtin_running)
+        ? status.builtin_running : [];
+      needsAttention = needsAttention || items.some(it => {
+        if (it.kind !== 'builtin' || !it.enabled || !it.detail) return false;
+        return !(builtinRunning || []).some(b => b.running === true && b.base_url === it.detail);
+      });
+    }
+    tab.classList.toggle('attention', needsAttention);
+    tab.classList.toggle('active', this.isImageBedView());
+  }
+
+  // 打开图床条目弹窗：create（新条目） / edit（回显原始条目）
+  openImageBedForm(mode, index) {
+    this.imageBedFormMode = mode;
+    this.imageBedFormIndex = (mode === 'edit') ? String(index) : null;
+    const overlay = document.getElementById('image-bed-form-modal');
+    const title = document.getElementById('ibf-title');
+    const sub = document.getElementById('ibf-sub');
+    const delBtn = document.getElementById('ibf-delete');
+    if (title) title.textContent = mode === 'create' ? '新建图床条目' : '编辑图床条目';
+    if (sub) sub.textContent = mode === 'create'
+      ? '按 conf 模板补齐其余字段，保存后免重连生效'
+      : '仅改动显式字段；未填的保持原值，保存后免重连生效';
+    if (delBtn) delBtn.classList.toggle('hidden', mode !== 'edit');
+    this.syncImageBedFormTemplate();
+    if (mode === 'edit') {
+      this.fillImageBedForm(index);
+    } else {
+      this.resetImageBedFormFields();
+    }
+    if (overlay) overlay.classList.remove('hidden');
+  }
+
+  // 编辑回显：从 conf 原始条目（带 __template_key）填充表单
+  fillImageBedForm(index) {
+    const entry = (this.imageBedEntries || []).find(e => String(e.index) === String(index));
+    const raw = entry && entry.entry ? entry.entry : null;
+    if (!raw) {
+      this.showToast('未找到该图床条目（可能已被删除）', 'error');
+      this.closeImageBedForm();
+      return;
+    }
+    const templateKey = (raw.__template_key || entry.template_key || 'custom');
+    const tpl = document.getElementById('ibf-template');
+    if (tpl) {
+      const exists = Array.from(tpl.options).some(o => o.value === templateKey);
+      if (!exists) {
+        const opt = document.createElement('option');
+        opt.value = templateKey;
+        opt.textContent = `${templateKey} · 已有条目`;
+        tpl.appendChild(opt);
+      }
+      tpl.value = templateKey;
+    }
+    this.syncImageBedFormTemplate();
+    const setVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.value = (val === undefined || val === null) ? '' : String(val);
+    };
+    setVal('ibf-enabled', raw.enabled);
+    const enabledEl = document.getElementById('ibf-enabled');
+    if (enabledEl && typeof raw.enabled === 'boolean') enabledEl.checked = raw.enabled;
+    setVal('ibf-name', raw.name);
+    setVal('ibf-host', raw.host);
+    setVal('ibf-port', raw.port);
+    setVal('ibf-base-url', raw.base_url);
+    setVal('ibf-upload-url', raw.upload_url);
+    setVal('ibf-token', raw.token);
+    setVal('ibf-response', raw.response);
+    setVal('ibf-file-field', raw.file_field);
+    setVal('ibf-headers', this._fieldsToLines(raw.headers));
+    setVal('ibf-form-fields', this._fieldsToLines(raw.form_fields));
+  }
+
+  // headers/form_fields 的「名字: 值」行文本 ↔ 字段存储格式互转
+  _fieldsToLines(value) {
+    if (!value) return '';
+    const s = String(value).trim();
+    if (s.startsWith('{')) return s; // JSON 对象原样展示
+    const lines = [];
+    for (const part of s.split('|')) {
+      const p = part.trim();
+      if (p) lines.push(p);
+    }
+    return lines.join('\n');
+  }
+
+  _linesToFields(value) {
+    const s = String(value || '').trim();
+    if (!s) return '';
+    if (s.startsWith('{')) return s;
+    return s.split('\n').map(l => l.trim()).filter(Boolean).join('|');
+  }
+
+  // 模板下拉变化：按模板显示/隐藏专属字段行，并回填各自默认值。
+  // force=true（新建模式切换模板）→ 整体覆盖为新模板默认值，清掉上一个
+  // 模板的残留（否则 name 等通用字段一直停在第一个模板的默认值上）；
+  // force=false（编辑回显/打开新建）→ 仅填尚未填写的字段，不覆盖用户输入
+  syncImageBedFormTemplate(force) {
+    const tpl = document.getElementById('ibf-template');
+    if (!tpl) return;
+    const key = tpl.value || 'custom';
+    const isBuiltin = key === 'builtin_http';
+    // 模板显示名：与 rebuildImageBedTemplateOptions 的 labels 同源；
+    // 用于模板默认 name 为空或模板清单未拉到时的兜底文本
+    const templateDisplayNames = {
+      builtin_http: '内置图片HTTP服务',
+      custom: '通用图床接口',
+    };
+    const toggleRow = (id, show) => {
+      const row = document.getElementById(id);
+      if (row) row.classList.toggle('hidden', !show);
+    };
+    toggleRow('ibf-row-builtin-host', isBuiltin);
+    toggleRow('ibf-row-builtin-url', isBuiltin);
+    toggleRow('ibf-row-third-url', !isBuiltin);
+    toggleRow('ibf-row-third-token', !isBuiltin);
+    toggleRow('ibf-row-third-response', !isBuiltin);
+    toggleRow('ibf-row-third-file', !isBuiltin);
+    toggleRow('ibf-row-third-headers', !isBuiltin);
+    toggleRow('ibf-row-third-forms', !isBuiltin);
+    // 按模板 defaults 回填：与后端 _new_image_entry 生成的新条目默认值同源
+    const template = this.imageBedTemplates ? this.imageBedTemplates[key] : null;
+    if (template && template.defaults) {
+      const d = template.defaults;
+      const applyDefault = (elId, value) => {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        if (el.type === 'checkbox') {
+          if (typeof value === 'boolean' && (force || !el.checked)) el.checked = value;
+          return;
+        }
+        if (force || el.value === '') {
+          el.value = (value === undefined || value === null) ? '' : String(value);
+        }
+      };
+      // name 优先用模板默认名；模板默认名为空（如 custom）或缺失时，
+      // 换成该模板的显示文本，而不是停在上一个模板（如内置图床）的名字上
+      const nameValue = (d.name === undefined || d.name === null || d.name === '')
+        ? (templateDisplayNames[key] || key)
+        : String(d.name);
+      applyDefault('ibf-name', nameValue);
+      applyDefault('ibf-host', d.host);
+      applyDefault('ibf-port', d.port);
+      applyDefault('ibf-base-url', d.base_url);
+      applyDefault('ibf-upload-url', d.upload_url);
+      applyDefault('ibf-token', d.token);
+      applyDefault('ibf-response', d.response);
+      applyDefault('ibf-file-field', d.file_field);
+      applyDefault('ibf-headers', this._fieldsToLines(d.headers));
+      applyDefault('ibf-form-fields', this._fieldsToLines(d.form_fields));
+      applyDefault('ibf-enabled', d.enabled);
+    }
+    // 兜底：模板清单未拉到（后端接口失败）或模板未给默认值的字段，补最小
+    // 默认（force 时 applyDefault 已清空模板未给值的字段，兜底正好补齐）。
+    // name 独立处理：清单缺失时也要换成对应模板文本，避免停在前一个模板上
+    const nameEl = document.getElementById('ibf-name');
+    if (nameEl && (force || !nameEl.value)) {
+      nameEl.value = templateDisplayNames[key] || key;
+    }
+    const hostEl = document.getElementById('ibf-host');
+    if (isBuiltin) {
+      if (hostEl && !hostEl.value) hostEl.value = '0.0.0.0';
+      const portEl = document.getElementById('ibf-port');
+      if (portEl && !portEl.value) portEl.value = '8765';
+      const respEl = document.getElementById('ibf-response');
+      if (respEl && !respEl.value) respEl.value = 'text';
+    } else {
+      const respEl = document.getElementById('ibf-response');
+      if (respEl && !respEl.value) respEl.value = 'text';
+      const ffEl = document.getElementById('ibf-file-field');
+      if (ffEl && !ffEl.value) ffEl.value = 'file';
+    }
+  }
+
+  resetImageBedFormFields() {
+    const tpl = document.getElementById('ibf-template');
+    if (tpl) tpl.value = 'builtin_http';
+    const enabledEl = document.getElementById('ibf-enabled');
+    if (enabledEl) enabledEl.checked = true;
+    const fields = ['ibf-name', 'ibf-host', 'ibf-port', 'ibf-base-url',
+      'ibf-upload-url', 'ibf-token', 'ibf-response', 'ibf-file-field',
+      'ibf-headers', 'ibf-form-fields'];
+    fields.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    const respEl = document.getElementById('ibf-response');
+    if (respEl) respEl.value = 'text';
+    this.syncImageBedFormTemplate();
+  }
+
+  closeImageBedForm() {
+    const overlay = document.getElementById('image-bed-form-modal');
+    if (overlay) overlay.classList.add('hidden');
+    this.imageBedFormMode = null;
+    this.imageBedFormIndex = null;
+  }
+
+  // 收集弹窗表单字段（仅收集当前模板可见且非空字段）
+  _collectImageBedForm() {
+    const tpl = document.getElementById('ibf-template');
+    const templateKey = tpl ? tpl.value : 'custom';
+    const enabledEl = document.getElementById('ibf-enabled');
+    const nameEl = document.getElementById('ibf-name');
+    const payload = {
+      template_key: templateKey,
+      enabled: enabledEl ? enabledEl.checked : true,
+      name: nameEl ? nameEl.value.trim() : '',
+    };
+    if (templateKey === 'builtin_http') {
+      payload.host = (document.getElementById('ibf-host')?.value || '').trim();
+      payload.port = (document.getElementById('ibf-port')?.value || '').trim();
+      payload.base_url = (document.getElementById('ibf-base-url')?.value || '').trim();
+    } else {
+      payload.upload_url = (document.getElementById('ibf-upload-url')?.value || '').trim();
+      payload.token = (document.getElementById('ibf-token')?.value || '').trim();
+      payload.response = (document.getElementById('ibf-response')?.value || 'text').trim();
+      payload.file_field = (document.getElementById('ibf-file-field')?.value || '').trim();
+      payload.headers = this._linesToFields(document.getElementById('ibf-headers')?.value);
+      payload.form_fields = this._linesToFields(document.getElementById('ibf-form-fields')?.value);
+    }
+    return payload;
+  }
+
+  // 保存（新建/更新）图床条目：局部生效免重连，成功后重拉面板数据
+  async submitImageBedForm() {
+    const payload = this._collectImageBedForm();
+    const btn = document.getElementById('ibf-save');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '保存中...';
+    }
+    try {
+      let endpoint = 'config/image_bed/create';
+      if (this.imageBedFormMode === 'edit') {
+        endpoint = 'config/image_bed/update';
+        payload.index = this.imageBedFormIndex;
+      }
+      await this.apiPost(endpoint, payload);
+      this.showToast('图床配置已保存并生效（未重连 MC）', 'success');
+      this.closeImageBedForm();
+      await this.loadImageBedStatus();
+      await this.loadImageBedEntries();
+    } catch (e) {
+      this.showToast('保存失败: ' + (e.message || '网络错误'), 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '保存并生效';
+      }
+    }
+  }
+
+  // 删除条目：二次确认（受限 iframe 无 window.confirm）后删除并局部生效
+  async deleteImageBedEntry(index) {
+    const targetIndex = (index !== undefined && index !== null) ? String(index) : this.imageBedFormIndex;
+    if (targetIndex === null || targetIndex === undefined) return;
+    const entry = (this.imageBedEntries || []).find(e => String(e.index) === String(targetIndex));
+    const label = entry && entry.entry && entry.entry.name
+      ? entry.entry.name : `#${targetIndex}`;
+    const ok = await this.confirmDialog(
+      '🗑 删除图床条目',
+      `确定删除图床条目「${label}」吗？\n` +
+      '该操作会从 conf 中移除条目并立即生效（不可撤销）。',
+      '删除'
+    );
+    if (!ok) return;
+    try {
+      await this.apiPost('config/image_bed/delete', { index: targetIndex });
+      this.showToast('已删除图床条目', 'success');
+      this.closeImageBedForm();
+      // 删除条目后其余条目的 conf 下标全部前移 1：同步迁移单条目测试
+      // 结果的键，否则重绘后因 index 错位其余图床的测试结果全部丢失
+      this._shiftImageBedTestResults(targetIndex);
+      await this.loadImageBedStatus();
+      await this.loadImageBedEntries();
+    } catch (e) {
+      this.showToast('删除失败: ' + (e.message || '网络错误'), 'error');
+    }
+  }
+
+  // 删除图床条目后迁移单条目测试结果键：被删下标的结果丢弃，
+  // 其后各条目的测试结果键 -1 跟随条目（与后端 conf 下标前移一致）
+  _shiftImageBedTestResults(targetIndex) {
+    const removed = Number(targetIndex);
+    if (!Number.isFinite(removed)) return;
+    const shifted = {};
+    for (const [idx, saved] of Object.entries(this.imageBedTestResults)) {
+      const n = Number(idx);
+      if (n === removed) continue; // 被删条目：其结果随条目一起消失
+      shifted[String(n > removed ? n - 1 : n)] = saved;
+    }
+    this.imageBedTestResults = shifted;
+  }
+
+  // 列表内单条目启用/停用：仅显式改 enabled，免重连
+  async toggleImageBedEntry(index) {
+    const entry = (this.imageBedEntries || []).find(e => String(e.index) === String(index));
+    if (!entry || !entry.entry) return;
+    const next = !entry.entry.enabled;
+    try {
+      await this.apiPost('config/image_bed/update', { index, enabled: next });
+      this.showToast(next ? '已启用该条目' : '已停用该条目', 'success');
+      await this.loadImageBedStatus();
+      await this.loadImageBedEntries();
+    } catch (e) {
+      this.showToast('操作失败: ' + (e.message || '网络错误'), 'error');
+    }
+  }
+
+  // 根级总开关（enable_image_upload）：免重连局部生效
+  async toggleImageBed(enabled) {
+    const btn = document.getElementById('ib-enabled');
+    if (btn) btn.disabled = true;
+    try {
+      await this.apiPost('image_bed/switch', { enable_image_upload: enabled });
+      this.showToast(enabled ? '图片转存已开启' : '图片转存已关闭', 'success');
+      await this.loadImageBedStatus();
+      await this.loadImageBedEntries();
+    } catch (e) {
+      this.showToast('保存失败: ' + (e.message || '网络错误'), 'error');
+      if (btn && typeof this.imageBedMasterEnabled === 'boolean') {
+        btn.checked = this.imageBedMasterEnabled;
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // 上传超时（image_upload_timeout）：免重连局部生效
+  async saveImageBedTimeout() {
+    const input = document.getElementById('ib-timeout');
+    if (!input) return;
+    const raw = parseInt(input.value, 10);
+    const timeout = Number.isFinite(raw) && raw >= 1 ? raw : 30;
+    if (!Number.isFinite(raw) || raw < 1) {
+      this.showToast('超时需为 ≥1 的整数，已回落默认值 30', 'error');
+      input.value = timeout;
+    }
+    try {
+      await this.apiPost('image_bed/switch', { image_upload_timeout: timeout });
+      this.showToast(`上传超时已设为 ${timeout} 秒`, 'success');
+    } catch (e) {
+      this.showToast('保存失败: ' + (e.message || '网络错误'), 'error');
+    }
+  }
+
+  // 测试上传：逐条串行跑上传链，测完一条立即回填到该条目的结果容器
+  async testImageBed() {
+    if (this.imageBedTesting) return;
+    this.imageBedTesting = true;
+    const btn = document.getElementById('ib-test');
+    const result = document.getElementById('ib-test-result');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '测试中...';
+    }
+    if (result) {
+      result.classList.remove('hidden');
+      result.className = 'ib-test-result pending';
+      result.innerHTML = '<span class="ib-test-pending">⏳ 正在测试...</span>';
+    }
+    // 条目清单：优先用已加载的运行态 items，必要时现拉一次
+    let items = Array.isArray(this.imageBedStatus && this.imageBedStatus.items)
+      ? this.imageBedStatus.items : [];
+    if (items.length === 0) {
+      try {
+        await this.loadImageBedStatus();
+        items = Array.isArray(this.imageBedStatus && this.imageBedStatus.items)
+          ? this.imageBedStatus.items : [];
+      } catch (e) {
+        console.warn('测试前拉取图床状态失败:', e);
+      }
+    }
+    let okCount = 0;
+    let failCount = 0;
+    try {
+      const total = items.length;
+      for (let i = 0; i < total; i++) {
+        const it = items[i];
+        if (typeof it.index !== 'number') continue;
+        const idx = Number(it.index);
+        const entryName = String(it.name || '未命名条目');
+        if (result) {
+          result.innerHTML = `<span class="ib-test-pending">⏳ 正在测试 ${i + 1}/${total}...</span>`;
+        }
+        // 单条目串行：每测完一条立刻展示到该条目自己的结果容器
+        const resp = await this.apiPost('image_bed/test', { index: idx });
+        const data = (resp && resp.data) ? resp.data : resp;
+        this._applyItemTestResult(idx, data, entryName);
+        if (data && data.ok) okCount += 1;
+        else failCount += 1;
+      }
+      if (result) {
+        result.className = okCount > 0 ? 'ib-test-result ok' : 'ib-test-result fail';
+        result.innerHTML = okCount > 0
+          ? `✅ ${okCount} 个可用${failCount > 0 ? `，${failCount} 个不可用` : ''}`
+          : `❌ 全部不可用（${failCount} 个）`;
+      }
+    } catch (e) {
+      if (result) {
+        result.className = 'ib-test-result fail';
+        result.innerHTML = `<div class="ib-test-fail">✗ 测试请求失败: ${escapeHtml(e.message || '网络错误')}</div>`;
+      }
+    } finally {
+      this.imageBedTesting = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🧪 测试上传';
+      }
+    }
+  }
+
+  // 逐条结果表格：每条目一行，展示 名称 / 状态 / 耗时 / URL 或原因
+  _renderTestRows(data) {
+    const results = Array.isArray(data && data.results) ? data.results : null;
+    if (!results || results.length === 0) return '';
+    const rows = results.map(r => {
+      const ok = r.ok === true;
+      const active = r.active !== false;
+      const status = ok ? '✅ 可用'
+        : (active ? '❌ 不可用' : '⚠ 未生效');
+      const statusCls = ok ? 'row-ok'
+        : (active ? 'row-fail' : 'row-warn');
+      const elapsed = (typeof r.elapsed_ms === 'number' && r.elapsed_ms >= 0)
+        ? `${(r.elapsed_ms / 1000).toFixed(2)}s` : '—';
+      const detail = ok
+        ? `<a href="${escapeHtml(r.url || '')}" target="_blank" rel="noopener">${escapeHtml(r.url || '')}</a>`
+        : (r.reason ? escapeHtml(r.reason) : '无详细原因');
+      return `<div class="ib-test-row">
+        <span class="ib-test-row-name">${escapeHtml(r.name || '未命名条目')}</span>
+        <span class="ib-test-row-status ${statusCls}">${status}</span>
+        <span class="ib-test-row-time">${elapsed}</span>
+        <span class="ib-test-row-detail">${detail}</span>
+      </div>`;
+    }).join('');
+    return `<div class="ib-test-rows">${rows}</div>`;
+  }
+
+  // 单条目测试：结果临时展示在对应条目的 ib-item-test-result 容器里
+  async testImageBedEntry(index) {
+    const box = document.querySelector(`.ib-item-test-result[data-test-result="${index}"]`);
+    const item = box ? box.closest('.ib-item') : null;
+    const btn = item ? item.querySelector(`button[data-ib-action="test"][data-index="${index}"]`) : null;
+    if (!box) return;
+    const entryName = item && item.querySelector('.ib-item-name')
+      ? item.querySelector('.ib-item-name').textContent.trim() : '';
+    this.imageBedTesting = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '测试中...';
+    }
+    box.classList.remove('hidden');
+    box.className = 'ib-item-test-result pending';
+    box.innerHTML = '<span class="ib-test-pending">⏳ 正在测试该条目...</span>';
+    try {
+      const resp = await this.apiPost('image_bed/test', { index: Number(index) });
+      const data = (resp && resp.data) ? resp.data : resp;
+      this._applyItemTestResult(index, data, entryName);
+    } catch (e) {
+      box.className = 'ib-item-test-result fail';
+      box.innerHTML = `<div class="ib-test-fail">✗ 测试请求失败: ${escapeHtml(e.message || '网络错误')}</div>`;
+      // 失败状态同样保存：自动刷新重绘后回填
+      this.imageBedTestResults[String(index)] = {
+        cls: box.className, html: box.innerHTML, name: entryName,
+      };
+    } finally {
+      this.imageBedTesting = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🧪 测试';
+      }
+    }
+  }
+
+  // 把一次测试响应渲染进该条目的结果容器并保存（单条目与全量测试共用；
+  // 全量测试逐条回填到各自条目，自动刷新重绘后同样能恢复）
+  _applyItemTestResult(index, data, entryName) {
+    const box = document.querySelector(`.ib-item-test-result[data-test-result="${index}"]`);
+    if (!box) return;
+    box.classList.remove('hidden');
+    const rows = this._renderTestRows(data);
+    if (data && data.ok) {
+      box.className = 'ib-item-test-result ok';
+      box.innerHTML = `✅ 可用${data.url
+        ? `：<a href="${escapeHtml(data.url)}" target="_blank" rel="noopener">${escapeHtml(data.url)}</a>` : ''}${rows}`;
+    } else {
+      box.className = 'ib-item-test-result fail';
+      box.innerHTML = `❌ 不可用${rows}`;
+    }
+    // 存最近一次测试结果：自动刷新重绘条目列表后回填，避免结果一闪而过
+    this.imageBedTestResults[String(index)] = {
+      cls: box.className, html: box.innerHTML, name: entryName,
+    };
+  }
+
+  // 全量测试结果逐条回填到各条目自己的结果容器：与单条目测试同一套
+  // 渲染/保存逻辑，仅按条目名匹配定位（条目名可直接防 index 错位）
+  _applyFullImageBedTestResults(data) {
+    const results = Array.isArray(data && data.results) ? data.results : [];
+    if (results.length === 0) return;
+    const boxes = document.querySelectorAll('.ib-item-test-result');
+    boxes.forEach((box) => {
+      const item = box.closest('.ib-item');
+      const entryName = item && item.querySelector('.ib-item-name')
+        ? item.querySelector('.ib-item-name').textContent.trim() : '';
+      if (!entryName) return;
+      const hit = results.find(r => (r.name || '') === entryName);
+      if (!hit) return;
+      this._applyItemTestResult(
+        box.getAttribute('data-test-result'),
+        { ok: hit.ok === true, url: hit.url || '', results: [hit] },
+        entryName,
+      );
+    });
+  }
+
+  // 自动刷新重绘后回填最近一次的单条目测试结果（条目名匹配防错位）
+  _restoreImageBedTestResults() {
+    for (const [index, saved] of Object.entries(this.imageBedTestResults)) {
+      const box = document.querySelector(`.ib-item-test-result[data-test-result="${index}"]`);
+      if (!box) continue;
+      const item = box.closest('.ib-item');
+      const entryName = item && item.querySelector('.ib-item-name')
+        ? item.querySelector('.ib-item-name').textContent.trim() : '';
+      if (saved.name && entryName !== saved.name) continue; // index 已错位则跳过
+      box.className = saved.cls;
+      box.innerHTML = saved.html;
+    }
+  }
+
+  // 图床面板其余动作绑定（模板下拉按后端 schema 键集合重建，避免硬编码漂移）
+  bindImageBedActions() {
+    // 先按兜底键集合渲染，再异步拉取后端模板清单重建（成功后名称/默认值
+    // 全部来自 schema，与后端 _new_image_entry 生成的新条目默认值一致）
+    this.rebuildImageBedTemplateOptions();
+    this.loadImageBedTemplates();
+    // 进入图床视图时若数据尚未拉取，立即补拉（activateServerTab 的 render
+    // 分支只负责首拉；此处兜底标签直接点击的场景）
+    this.syncImageBedDot();
+  }
+
   // ---- 互通终端 ----
 
-  // 当前终端目标服务器：全局视图返回 null（终端整体隐藏）
+  // 当前终端目标服务器：全局/图床/配置视图返回 null（终端整体隐藏）
   terminalServer() {
-    return this.activeServerTab === 'all' ? null : this.activeServerTab;
+    return (this.activeServerTab === 'all' || this.isImageBedView() || this.isConfigView())
+      ? null : this.activeServerTab;
   }
 
   // server_name → 显示名称（便于终端日志可读）
@@ -1359,17 +2266,17 @@ class DashboardApp {
     return s ? (s.server_label || s.server_name) : name;
   }
 
-  // 渲染互通终端：全局视图整体隐藏；单服务器视图显示该服务器的日志流。
+  // 渲染互通终端：全局/图床视图整体隐藏；服务器视图显示该服务器的日志流。
   // 每次进入都做增量拉取并启动 4 秒轮询，新日志自动追加、实时可见
   async renderTerminal() {
     const panel = document.getElementById('terminal-panel');
     const key = this.activeServerTab;
-    const isAll = key === 'all';
+    const isServerView = !!key && key !== 'all' && !this.isImageBedView() && !this.isConfigView();
 
-    if (panel) panel.classList.toggle('hidden', isAll);
-    // 输入区可用性始终同步（全局视图无目标服务器，禁用输入）
+    if (panel) panel.classList.toggle('hidden', !isServerView);
+    // 输入区可用性始终同步（非服务器视图无目标服务器，禁用输入）
     this.updateTerminalInputState();
-    if (isAll) {
+    if (!isServerView) {
       this.stopTerminalPolling();
       return;
     }
@@ -1483,18 +2390,20 @@ class DashboardApp {
     return stream;
   }
 
-  // 终端仅在单服务器视图可用；全局视图隐藏面板并禁用输入
+  // 终端仅在单服务器视图可用；全局/图床/配置视图隐藏面板并禁用输入
   updateTerminalInputState() {
-    const isAll = this.activeServerTab === 'all';
+    const isServerView = !!this.activeServerTab &&
+      this.activeServerTab !== 'all' && !this.isImageBedView() && !this.isConfigView();
+    const locked = !isServerView;
     const input = document.getElementById('terminal-input');
     const bBtn = document.getElementById('terminal-broadcast');
     const cBtn = document.getElementById('terminal-cmd');
     if (input) {
-      input.disabled = isAll;
+      input.disabled = locked;
       input.placeholder = '输入内容回车 = 广播；以 / 开头回车 = 执行指令 (如 /list)';
     }
-    if (bBtn) bBtn.disabled = isAll;
-    if (cBtn) cBtn.disabled = isAll;
+    if (bBtn) bBtn.disabled = locked;
+    if (cBtn) cBtn.disabled = locked;
   }
 
   // 向指定日志流追加一行（纯 DOM 操作）；跨天时先插入日期分割线，
@@ -1671,9 +2580,9 @@ class DashboardApp {
   renderMonitorPanel() {
     const panel = document.getElementById('monitor-panel');
     const server = this.activeServerObject();
-    // 面板可见性只跟随视图（全局视图隐藏）；监控禁用不隐藏面板——
+    // 面板可见性只跟随视图（全局/图床视图隐藏）；监控禁用不隐藏面板——
     // 否则面板内的「⚙ 设置」入口一并消失，无法再重新启用
-    const isAll = this.activeServerTab === 'all';
+    const isAll = this.activeServerTab === 'all' || this.isImageBedView() || this.isConfigView();
     if (panel) panel.classList.toggle('hidden', isAll);
     // 全局视图下主布局退化为单列全宽，服务器卡片不再被挤在左半列
     const layoutMain = document.querySelector('.layout-main');
@@ -2327,6 +3236,9 @@ class DashboardApp {
       join: document.getElementById('st-fwd-joinleave'),
       death: document.getElementById('st-fwd-death'),
       ach: document.getElementById('st-fwd-achievement'),
+      image: document.getElementById('st-fwd-image'),
+      imageToMc: document.getElementById('st-fwd-image-to-mc'),
+      imageFromMc: document.getElementById('st-fwd-image-from-mc'),
       prefix: document.getElementById('st-fwd-prefix'),
       sessions: document.getElementById('st-fwd-sessions'),
     };
@@ -2343,6 +3255,12 @@ class DashboardApp {
       if (fwdBoxes.join) fwdBoxes.join.checked = !!msg.forward_join_leave_to_astrbot;
       if (fwdBoxes.death) fwdBoxes.death.checked = !!msg.forward_death_to_astrbot;
       if (fwdBoxes.ach) fwdBoxes.ach.checked = !!msg.forward_achievement_to_astrbot;
+      // 图片转发：两个方向分别回显；总开关 = 两个方向都开启才勾选
+      if (fwdBoxes.imageToMc) fwdBoxes.imageToMc.checked = !!msg.forward_image_to_mc;
+      if (fwdBoxes.imageFromMc) fwdBoxes.imageFromMc.checked = !!msg.forward_image_from_mc;
+      if (fwdBoxes.image) {
+        fwdBoxes.image.checked = !!(msg.forward_image_to_mc && msg.forward_image_from_mc);
+      }
       if (fwdBoxes.prefix) {
         fwdBoxes.prefix.value = typeof msg.auto_forward_prefix === 'string'
           ? msg.auto_forward_prefix
@@ -2408,14 +3326,20 @@ class DashboardApp {
         const fwdJoin = document.getElementById('st-fwd-joinleave');
         const fwdDeath = document.getElementById('st-fwd-death');
         const fwdAch = document.getElementById('st-fwd-achievement');
+        const fwdImage = document.getElementById('st-fwd-image');
+        const fwdImageToMc = document.getElementById('st-fwd-image-to-mc');
+        const fwdImageFromMc = document.getElementById('st-fwd-image-from-mc');
         const fwdPrefix = document.getElementById('st-fwd-prefix');
         const fwdSessions = document.getElementById('st-fwd-sessions');
-        if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdPrefix && fwdSessions) {
+        if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdImage && fwdPrefix && fwdSessions) {
           msg.forward_chat_to_astrbot = !!fwdChat.checked;
           msg.forward_chat_format = fwdFormat.value.trim();
           msg.forward_join_leave_to_astrbot = !!fwdJoin.checked;
           msg.forward_death_to_astrbot = !!fwdDeath.checked;
           msg.forward_achievement_to_astrbot = !!fwdAch.checked;
+          // 图片转发：按两个方向的实际勾选分别保存（总开关只做快捷全开/全关联动）
+          msg.forward_image_to_mc = !!(fwdImageToMc && fwdImageToMc.checked);
+          msg.forward_image_from_mc = !!(fwdImageFromMc && fwdImageFromMc.checked);
           msg.auto_forward_prefix = fwdPrefix.value.trim();
           payload.message = msg;
           // 目标会话：每行一个 UMO（同服务器表单解析规则）
@@ -2482,6 +3406,31 @@ class DashboardApp {
     // 点击遮罩空白处关闭（与监控设置弹窗行为一致）
     document.getElementById('settings-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.closeSettingsModal();
+    });
+    // 图片转发折叠框：总开关快捷全开/全关，子开关分别控制，展开/收起子区
+    const fwdImageTotal = document.getElementById('st-fwd-image');
+    const fwdImageToMc = document.getElementById('st-fwd-image-to-mc');
+    const fwdImageFromMc = document.getElementById('st-fwd-image-from-mc');
+    fwdImageTotal?.addEventListener('change', () => {
+      if (fwdImageToMc) fwdImageToMc.checked = !!fwdImageTotal.checked;
+      if (fwdImageFromMc) fwdImageFromMc.checked = !!fwdImageTotal.checked;
+    });
+    [fwdImageToMc, fwdImageFromMc].forEach((box) => {
+      box?.addEventListener('change', () => {
+        // 总开关只反映「两个方向都已开启」；任一方向被单独关闭则不勾选
+        if (fwdImageTotal) {
+          fwdImageTotal.checked = !!(fwdImageToMc && fwdImageToMc.checked
+            && fwdImageFromMc && fwdImageFromMc.checked);
+        }
+      });
+    });
+    const fwdImageToggleBtn = document.getElementById('st-fwd-image-toggle');
+    fwdImageToggleBtn?.addEventListener('click', () => {
+      const subgroup = document.getElementById('st-fwd-image-subgroup');
+      if (!subgroup) return;
+      const collapsed = subgroup.classList.toggle('hidden');
+      fwdImageToggleBtn.textContent = collapsed ? '展开 ⯈' : '收起 ⯆';
+      fwdImageToggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     });
   }
 

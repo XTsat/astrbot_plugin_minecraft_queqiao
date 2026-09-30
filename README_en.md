@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.6-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.5.7-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -15,6 +15,7 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 - **Event broadcast**: player join / quit / death / achievement events forwarded to sessions (death & achievements unsupported on Vanilla/Velocity)
 - **Server management**: status queries, online player list, remote command execution
 - **Web Dashboard**: view server status, performance monitoring (TPS / latency), the bridge terminal in real time and connection observability (reconnect count / phase / limit alert, API timeout count), with quick broadcast and command console
+- **Image-bed panel**: a dedicated “🖼️ 图床” tab at the right end of the dashboard's server-tab bar to manage image transfer directly — the master switch, upload timeout, full add/edit/delete of image bed entries, the built-in HTTP service runtime state, and a one-click test upload that runs the whole chain with a built-in 1×1 test image
 - **Manage servers from the panel**: create servers, enable / disable, edit connection settings and target sessions, or delete entries right from the dashboard; disabled servers stay visible as grey cards and can be enabled with one click — saving backs up the config and hot-reloads automatically
 - **AI chat**: talk to the AI in-game with the `ai` prefix; replies are sent privately to the player
 - **Multiple servers**: connect several servers, each with independent forwarding settings
@@ -63,6 +64,17 @@ The dashboard (plugin Pages) manages the servers in your config directly — no 
 - **Edit / delete**: click a grey card to open the form and change the server name, display name, transport (forward / reverse) and address, token (leave empty to keep the current one) or target sessions (one per line), or delete the entry
 - **Inactive entries stay visible**: an entry with an empty or duplicate server name is skipped by the main flow; it is shown as a grey “未生效” card so the problem is easy to spot
 - Every save backs up the previous config to `data_dir/conf_backups/`, writes it atomically and **hot-reloads** (old connections are dropped and rebuilt from the new config); a failure never corrupts the in-memory config
+
+### Dashboard image-bed panel
+
+The dashboard has a dedicated “🖼️ 图床” (Image Bed) tab pinned at the right end of the server-tab bar (entering it hides the stat cards and the server-card area):
+
+- **Master switch & timeout**: the root-level `enable_image_upload` (when off, no upload is attempted) and `image_upload_timeout` (upload timeout in seconds) are toggled / edited at the top of the panel and take effect on save
+- **Full entry management**: each entry is a card showing its kind (built-in / third-party), enabled state, why it is (or is not) active (disabled entry / invalid URL / wrong response type are all spelled out), address and runtime state; “new” entries are created with the template defaults filled in, editing covers every field, and deletion asks for confirmation
+- **Built-in HTTP service runtime**: `builtin_http` entries show a “running / not running” badge reflecting the real state (not started / stopped / failed to start)
+- **🧪 Test upload**: with no parameters at all, a built-in 1×1 test image is pushed through the whole upload chain; on success the public link is shown directly, on failure each failure is listed as “image-bed name: reason” — configuration problems are identified in one click
+
+Every save is **partial-effect** (only the image-transfer subsystem is rebuilt; no MC connection is touched). The image-transfer subsystem is also decoupled from the MC server config, so the image bed starts even when no server is configured at all.
 
 ### Dashboard feature-settings panel
 
@@ -157,7 +169,7 @@ With `forward_image_from_mc` enabled, ChatImage `[[CICode,url=...]]` codes or im
 
 #### Built-in image HTTP service
 
-Some protocol clients deliver images only as base64 / local files with no externally reachable URL. Add a **"Built-in image HTTP service"** entry (template `builtin_http`) in `image_upload_services` — the plugin caches the image bytes in its built-in HTTP service and broadcasts `{base_url}/img/<token>` for player clients to load. **The prerequisite is that AstrBot has a publicly reachable address**; image bytes are cached in memory for 30 minutes (up to 500 entries).
+Some protocol clients deliver images only as base64 / local files with no externally reachable URL. Add a **"Built-in image HTTP service"** entry (template `builtin_http`) in `image_upload_services` — the plugin caches the image bytes in its built-in HTTP service and broadcasts `{base_url}/img/<token>` for player clients to load. **The prerequisite is that AstrBot has a publicly reachable address**; image bytes are cached in memory for 30 minutes (up to 500 entries). All of these entries can also be maintained directly in the dashboard's “🖼️ 图床” panel — no config file editing needed.
 
 #### Generic image bed
 
@@ -166,6 +178,8 @@ Automatically upload images without a public URL to an image bed to get a public
 1. Turn on the root-level switch `enable_image_upload`
 2. Adjust `image_upload_timeout` (upload timeout, default 30 s) as needed
 3. Add image bed entries in `image_upload_services`: no bed is loaded by default — the **"Custom"** template at the top accepts any upload endpoint, the rest are pre-configured templates (endpoint and response mode pre-filled, just supply a token where needed)
+
+> 💡 All three steps above can be done in the dashboard's “🖼️ 图床” panel: the master switch and timeout live at the top, entries are created / edited from templates with “new / edit”, and “🧪 Test upload” verifies the configuration right away.
 
 | Entry field | Type | Default | Description |
 |-------------|------|---------|-------------|

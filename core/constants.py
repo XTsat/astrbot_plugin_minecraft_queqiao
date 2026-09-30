@@ -150,6 +150,7 @@ MONITOR_REALTIME_MAX = 60
 DEFAULT_TERMINAL_DAYS = 2
 TERMINAL_DAYS_MIN = 0
 TERMINAL_DAYS_MAX = 30
+
 # 仪表盘「自动刷新」轮询间隔（秒）：服务器卡片状态与玩家列表的定时
 # 刷新频率，可配置（10~3600 秒，默认 10；勾选自动刷新时生效）
 DEFAULT_MONITOR_AUTO_REFRESH = 10

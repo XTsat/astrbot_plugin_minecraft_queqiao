@@ -228,6 +228,16 @@ class BuiltinHttpUploader:
             netloc = ""
         return f"{self.DEFAULT_NAME}({netloc})" if netloc else self.DEFAULT_NAME
 
+    @property
+    def is_running(self) -> bool:
+        """监听是否实际在运行（`start()` 成功且服务可用）。
+
+        与 `enabled`（base_url 是否合法前缀）不同：监听可能启动失败并
+        回滚 base_url，也可能 `stop()` 后被停。面板状态点与运行态列表
+        以此为准，避免「配了却没跑起来」时仍显示可用。
+        """
+        return self._started and self._host.enabled
+
     async def start(self) -> None:
         """启动本机 HTTP 监听；失败时回滚 base_url，避免误报服务可用。
 
@@ -445,6 +455,25 @@ class ImageBedUploaderGroup:
         """停止全部内置 HTTP 条目（幂等，可重复调用）。"""
         for uploader in self.builtin_uploaders():
             await uploader.stop()
+
+    def builtin_status(self) -> list[dict]:
+        """内置 HTTP 条目的运行态列表（供面板展示 host:port 与对外地址）。
+
+        每条含 `name` / `host` / `port` / `base_url` / `running`；未启用或
+        启动失败的条目 `running` 为 False，`base_url` 可能已被回滚为空。
+        """
+        result: list[dict] = []
+        for uploader in self.builtin_uploaders():
+            result.append(
+                {
+                    "name": uploader.display_name,
+                    "host": uploader.host,
+                    "port": uploader.port,
+                    "base_url": uploader.base_url,
+                    "running": uploader.is_running,
+                }
+            )
+        return result
 
     async def upload(self, data: bytes) -> tuple[str | None, str]:
         """按条目顺序逐个上传，返回 `(URL, 失败原因)`。

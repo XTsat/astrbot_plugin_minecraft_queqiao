@@ -18,6 +18,7 @@ from astrbot.api import logger
 from ..core.constants import (
     DEFAULT_CHAT_FORMAT,
     DEFAULT_CLIENT_ORIGIN,
+    DEFAULT_IMAGE_UPLOAD_TIMEOUT,
     DEFAULT_REVERSE_HOST,
     DEFAULT_REVERSE_PATH,
     DEFAULT_REVERSE_PORT,
@@ -33,6 +34,26 @@ from .metrics import MetricsCollector
 
 # 面板可管理的服务器条目字段（conf 中 mc_servers 的子集，其余字段回落 schema 默认值）
 _SERVER_TEMPLATE_KEY = "server"
+
+# 图床条目字段白名单（conf 中 image_upload_services 条目可被面板修改的字段；
+# 与 _conf_schema.json 各模板 items 键集合一致，其余字段回落 schema 默认值）
+_IMAGE_ENTRY_FIELDS = (
+    "enabled",
+    "name",
+    "host",
+    "port",
+    "base_url",
+    "upload_url",
+    "token",
+    "response",
+    "file_field",
+    "headers",
+    "form_fields",
+)
+_IMAGE_TEMPLATE_KEY_BUILTIN = "builtin_http"
+_IMAGE_TEMPLATE_KEY_CUSTOM = "custom"
+# 与 services/image_bed.py 的 VALID_RESPONSE_KINDS 保持同值
+_IMAGE_RESPONSE_KINDS = ("text", "json")
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -80,8 +101,8 @@ def _as_str_list(value: Any) -> list[str]:
 def _schema_default(spec: Any) -> Any:
     """按 ``_conf_schema.json`` 的字段规格推导默认值。
 
-    与配置页前端 ``makeDefault()`` 同语义，保证「面板新建服务器」写出的
-    条目结构与 AstrBot WebUI / 配置页新增的条目完全一致。
+    与仪表盘前端新建服务器的默认值推导同语义，保证「面板新建服务器」
+    写出的条目结构与 AstrBot WebUI 新增的条目完全一致。
     """
     if not isinstance(spec, dict):
         return None
@@ -209,10 +230,51 @@ class WebApiController:
             ("/terminal_logs", self.get_terminal_logs, ["GET"], "获取某台服务器的持久化终端日志"),
             ("/terminal_logs/clear", self.clear_terminal_logs, ["POST"], "清空某台服务器的持久化终端日志"),
             ("/image_bed/status", self.get_image_bed_status, ["GET"], "获取图床服务状态"),
+            ("/image_bed/test", self.test_image_bed_upload, ["POST"], "用内置测试图跑一次完整上传链"),
+            ("/image_bed/switch", self.switch_image_bed, ["POST"], "保存图床总开关与上传超时（局部生效，不断连接）"),
+            (
+                "/image_bed/templates",
+                self.get_image_bed_templates,
+                ["GET"],
+                "列出图床模板与各模板字段默认值（供面板新建表单预填）",
+            ),
+            (
+                "/config/full",
+                self.get_config_full,
+                ["GET"],
+                "获取完整插件配置与配置 Schema（供 dashboard 配置视图表单渲染）",
+            ),
+            (
+                "/config/save",
+                self.save_config_full,
+                ["POST"],
+                "保存完整插件配置并热重载（dashboard 配置视图保存链路）",
+            ),
+            (
+                "/config/image_bed",
+                self.get_config_image_bed,
+                ["GET"],
+                "列出配置中的图床条目原始数据（含未启用，供面板表单编辑）",
+            ),
+            (
+                "/config/image_bed/create",
+                self.create_config_image_bed,
+                ["POST"],
+                "新建图床条目并局部生效",
+            ),
+            (
+                "/config/image_bed/update",
+                self.update_config_image_bed,
+                ["POST"],
+                "修改图床条目或启用状态并局部生效",
+            ),
+            (
+                "/config/image_bed/delete",
+                self.delete_config_image_bed,
+                ["POST"],
+                "删除图床条目并局部生效",
+            ),
             ("/reverse/servers", self.get_reverse_servers, ["GET"], "反向共享 WS 服务端状态"),
-            ("/config", self.get_config_overview, ["GET"], "获取插件配置概览"),
-            ("/config/full", self.get_config_full, ["GET"], "获取完整插件配置与配置 Schema"),
-            ("/config/save", self.save_config_full, ["POST"], "保存完整插件配置并热重载"),
             (
                 "/config/servers",
                 self.get_config_servers,
@@ -687,15 +749,233 @@ class WebApiController:
         return json_response({"success": removed, "umo": umo})
 
     async def get_image_bed_status(self) -> Any:
-        """获取图床服务的运行状态。"""
+        """获取图床服务的运行状态。
+
+        始终保留 `enabled / status_text / service_names / uploaders_count`
+        四个既有字段（向后兼容），在此基础上增补 `timeout`（根级上传超时）、
+        `items`（条目生效态视图，含未生效原因）、`builtin_running`（内置
+        HTTP 服务的真实监听状态）。
+        """
+        master_enabled = _as_bool(
+            self.plugin.config.get("enable_image_upload") if self.plugin is not None else None,
+            False,
+        )
         return json_response(
             {
                 "enabled": self.image_bed.enabled,
                 "status_text": self.image_bed.status_text,
                 "service_names": self.image_bed.service_names,
                 "uploaders_count": len(self.image_bed.uploaders),
+                "timeout": self._image_bed_timeout(),
+                "items": self._image_bed_items(master_enabled=master_enabled),
+                "builtin_running": self.image_bed.builtin_status(),
             }
         )
+
+    async def get_image_bed_templates(self) -> Any:
+        """返回图床模板清单与各模板的字段默认值（供面板新建表单预填）。
+
+        数据源为 ``_conf_schema.json`` 的 ``image_upload_services.templates``；
+        每模板给出 ``{name, hint, defaults}``，``defaults`` 用
+        ``_schema_default()`` 逐键推导，与 ``_new_image_entry`` 生成的新条目
+        默认值完全一致。面板选模板后即可把这些默认值回填进表单。
+        """
+        templates = (
+            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
+        )
+        result: dict[str, Any] = {}
+        for key, template in templates.items():
+            if not isinstance(template, dict):
+                continue
+            items = template.get("items")
+            defaults: dict[str, Any] = {}
+            if isinstance(items, dict):
+                for field, spec in items.items():
+                    defaults[field] = _schema_default(spec)
+            result[key] = {
+                "name": str(template.get("name") or key),
+                "hint": str(template.get("hint") or ""),
+                "defaults": defaults,
+            }
+        return json_response(result)
+
+    async def test_image_bed_upload(self) -> Any:
+        """用内置 1×1 测试图逐条跑上传链，返回成功 URL、失败原因与逐条明细。
+
+        面板「🧪 测试上传」按钮调用：逐条测试每个条目，``results`` 给出
+        每条的名称 / 是否可用 / 成功 URL 或失败原因 / 耗时（毫秒），
+        ``ok`` 为是否有任一条目成功。请求体可带可选 ``index``：只测该
+        conf 下标条目（未生效条目不耗时，直接给出未生效原因）。
+        """
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+        # 1×1 透明 PNG：唯一用途是验证上传链是否真的能走通
+        try:
+            import base64
+
+            data = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+                "AAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            )
+        except Exception:
+            return error_response("测试图生成失败", status_code=500)
+        master_enabled = _as_bool(
+            self.plugin.config.get("enable_image_upload")
+            if self.plugin is not None else None,
+            False,
+        )
+        entries = self._conf_image_entries()
+        index = payload.get("index")
+        if index is not None:
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                return error_response("index 需为整数", status_code=400)
+            if index < 0 or index >= len(entries):
+                return error_response(f"index 越界: {index}", status_code=400)
+            entry = entries[index]
+            if not isinstance(entry, dict):
+                return error_response("该条目配置无效", status_code=400)
+            kind = self._image_entry_kind(entry)
+            name = self._image_entry_name(entry, kind)
+            if not self._image_entry_active(entry, kind, master_enabled):
+                reason = self._image_entry_reason(entry, kind, master_enabled) or "未生效"
+                results = [{
+                    "name": name, "ok": False, "url": "",
+                    "elapsed_ms": 0, "reason": reason, "active": False,
+                }]
+                return json_response(
+                    {
+                        "ok": False,
+                        "url": "",
+                        "failures": [f"{name}: {reason}"],
+                        "results": results,
+                    }
+                )
+            target = self._image_uploader_for_index(entries, index, master_enabled)
+            if target is None:
+                return json_response(
+                    {
+                        "ok": False,
+                        "url": "",
+                        "failures": [f"{name}: 运行时实例不存在（服务未启动）"],
+                        "results": [{
+                            "name": name, "ok": False, "url": "",
+                            "elapsed_ms": 0,
+                            "reason": "运行时实例不存在（服务未启动）",
+                            "active": True,
+                        }],
+                    }
+                )
+            url, reason, elapsed_ms = await self._run_uploader_test(target, data)
+            results = [{
+                "name": name, "ok": bool(url), "url": url or "",
+                "elapsed_ms": elapsed_ms, "reason": reason, "active": True,
+            }]
+            failures = [item.strip() for item in reason.split("；") if item.strip()]
+            return json_response(
+                {"ok": bool(url), "url": url or "", "failures": failures, "results": results}
+            )
+        # 全量：逐条测试（含未生效条目，只报原因不耗时），每条都给出可用性
+        results: list[dict[str, Any]] = []
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            kind = self._image_entry_kind(entry)
+            name = self._image_entry_name(entry, kind)
+            if not self._image_entry_active(entry, kind, master_enabled):
+                reason = self._image_entry_reason(entry, kind, master_enabled) or "未生效"
+                results.append({
+                    "name": name, "ok": False, "url": "",
+                    "elapsed_ms": 0, "reason": reason, "active": False,
+                })
+                continue
+            target = self._image_uploader_for_index(entries, i, master_enabled)
+            if target is None:
+                results.append({
+                    "name": name, "ok": False, "url": "",
+                    "elapsed_ms": 0, "reason": "运行时实例不存在（服务未启动）",
+                    "active": True,
+                })
+                continue
+            url, reason, elapsed_ms = await self._run_uploader_test(target, data)
+            results.append({
+                "name": name, "ok": bool(url), "url": url or "",
+                "elapsed_ms": elapsed_ms, "reason": reason, "active": True,
+            })
+        any_ok = any(r["ok"] for r in results)
+        first_url = next((r["url"] for r in results if r["ok"]), "")
+        failures = [
+            f"{r['name']}: {r['reason']}"
+            for r in results if not r["ok"] and r["reason"]
+        ]
+        return json_response(
+            {"ok": any_ok, "url": first_url, "failures": failures, "results": results}
+        )
+
+    def _image_uploader_for_index(
+        self, entries: list[Any], index: int, master_enabled: bool
+    ) -> Any:
+        """把 conf 下标映射到运行时 uploaders 下标并返回对应实例。
+
+        运行时 uploaders 顺序 = conf 中「生效条目」的顺序（跳过未启用/
+        非法条目），因此统计 index 之前生效条目的数量即为 uploaders 下标；
+        越界返回 None。
+        """
+        k = 0
+        for e in entries[:index]:
+            if not isinstance(e, dict):
+                continue
+            if self._image_entry_active(e, self._image_entry_kind(e), master_enabled):
+                k += 1
+        if k >= len(self.image_bed.uploaders):
+            return None
+        return self.image_bed.uploaders[k]
+
+    async def _run_uploader_test(self, uploader: Any, data: bytes) -> tuple[str | None, str, int]:
+        """实测一个 uploader，返回 (url, reason, 耗时毫秒)。"""
+        start = time.monotonic()
+        try:
+            url, reason = await uploader.upload(data)
+        except Exception as exc:  # 防御：个别图床异常不应中断全量测试
+            url, reason = None, str(exc) or "未知异常"
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return url, reason, elapsed_ms
+
+    async def switch_image_bed(self) -> Any:
+        """保存根级图床开关与上传超时（局部生效，不重连）。
+
+        请求体：``{"enable_image_upload": bool}`` 与 / 或
+        ``{"image_upload_timeout": int≥1}``；仅显式出现的字段会被修改。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        new_conf = dict(self.plugin.config)
+        if "enable_image_upload" in payload:
+            new_conf["enable_image_upload"] = _as_bool(payload["enable_image_upload"], False)
+        if "image_upload_timeout" in payload:
+            timeout = _as_int(payload["image_upload_timeout"], -1)
+            if timeout < 1:
+                return error_response("上传超时需为 ≥1 的整数", status_code=400)
+            new_conf["image_upload_timeout"] = timeout
+        if not any(key in payload for key in ("enable_image_upload", "image_upload_timeout")):
+            return error_response("无可识别的图床开关字段", status_code=400)
+
+        try:
+            await self._persist_config(new_conf, reload=False)
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 更新图床根级配置失败")
+            return error_response(f"更新图床根级配置失败: {exc}", status_code=500)
+        logger.info(
+            f"[{PLUGIN_NAME}] 面板更新图床开关/超时（免重连）: "
+            f"{', '.join(key for key in ('enable_image_upload', 'image_upload_timeout') if key in payload)}"
+        )
+        return await self.get_image_bed_status()
 
     async def get_reverse_servers(self) -> Any:
         """获取反向模式下共享 WS 服务端的监听状态与挂载服务器列表。
@@ -706,49 +986,8 @@ class WebApiController:
         """
         return json_response({"servers": reverse_servers_snapshot()})
 
-    async def get_config_overview(self) -> Any:
-        """获取插件配置概览（脱敏敏感字段）。"""
-        servers = []
-        for name, cfg in self.configs.items():
-            servers.append(
-                {
-                    "server_name": name,
-                    "display_name": cfg.display_name,
-                    "server_label": cfg.server_label,
-                    "enabled": cfg.enabled,
-                    "is_reverse": cfg.is_reverse,
-                    "ws_url": cfg.ws_url,
-                    "reverse_port": cfg.reverse_port,
-                    "auto_forward_prefix": cfg.auto_forward_prefix,
-                    "ai_chat_prefix": cfg.ai_chat_prefix,
-                    "enable_ai_chat": cfg.enable_ai_chat,
-                    "cmd_enabled": cfg.cmd_enabled,
-                    "cmd_mode": cfg.cmd_white_black_list,
-                    "forward_chat": cfg.forward_chat_to_astrbot,
-                    "forward_join_leave": cfg.forward_join_leave_to_astrbot,
-                    "forward_death": cfg.forward_death_to_astrbot,
-                    "forward_achievement": cfg.forward_achievement_to_astrbot,
-                    "forward_image_to_mc": cfg.forward_image_to_mc,
-                    "forward_image_from_mc": cfg.forward_image_from_mc,
-                    "target_sessions": cfg.target_sessions,
-                }
-            )
-        return json_response({"servers": servers})
-
-    def _read_schema(self) -> dict[str, Any]:
-        """读取插件根目录的 ``_conf_schema.json``（读取失败返回空 dict）。"""
-        try:
-            candidate = Path(__file__).resolve().parent.parent / "_conf_schema.json"
-            if candidate.is_file():
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    return data
-        except Exception:
-            logger.warning(f"[{PLUGIN_NAME}] 读取 _conf_schema.json 失败", exc_info=True)
-        return {}
-
     async def get_config_full(self) -> Any:
-        """获取完整插件配置与配置 Schema（供配置页表单渲染）。
+        """获取完整插件配置与配置 Schema（供 dashboard 配置视图表单渲染）。
 
         Schema 取自插件根目录 ``_conf_schema.json``；配置为内存中当前值
         （含尚未保存的运行时状态，与磁盘文件一致）。
@@ -765,36 +1004,8 @@ class WebApiController:
             }
         )
 
-    async def _write_config(self, new_conf: dict[str, Any]) -> None:
-        """备份当前配置 → 原子落盘（utf-8-sig），不触发热重载。
-
-        备份失败不阻断保存（磁盘满 / 权限异常时仍要让配置落盘）。
-        """
-        data_dir = Path(getattr(self.plugin, "_data_dir", "") or ".")
-        bak_dir = data_dir / "conf_backups"
-        try:
-            bak_dir.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d-%H%M%S")
-            bak_dir.joinpath(f"{ts}.json").write_text(
-                json.dumps(dict(self.plugin.config), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            logger.warning(f"[{PLUGIN_NAME}] 配置备份失败（不阻断保存）", exc_info=True)
-        await self.plugin.config.save_config_async(new_conf)
-
-    async def _persist_config(self, new_conf: dict[str, Any]) -> None:
-        """备份 → 落盘 → 热重载（连接结构变化的改动走这里）。
-
-        Pages 面板改配置的落盘链路：``/config/save`` 与服务器条目增删改
-        （``/config/server/*``）共用，保证行为一致；仅「不影响连接」的开关
-        改动可走 ``_write_config`` + 就地生效，见 update_config_server。
-        """
-        await self._write_config(new_conf)
-        await self.plugin.reload_config()
-
     async def save_config_full(self) -> Any:
-        """保存完整插件配置并热重载。
+        """保存完整插件配置并热重载（dashboard 配置视图保存链路）。
 
         流程：备份当前配置到 ``data_dir/conf_backups/`` → AstrBot 原子写
         （utf-8-sig 保留 BOM）→ 调用插件热重载（断开旧连接、按新配置重建）。
@@ -818,6 +1029,57 @@ class WebApiController:
         except Exception as exc:
             logger.exception(f"[{PLUGIN_NAME}] 保存配置失败")
             return error_response(f"保存配置失败: {exc}", status_code=500)
+
+    def _read_schema(self) -> dict[str, Any]:
+        """读取插件根目录的 ``_conf_schema.json``（读取失败返回空 dict）。"""
+        try:
+            candidate = Path(__file__).resolve().parent.parent / "_conf_schema.json"
+            if candidate.is_file():
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            logger.warning(f"[{PLUGIN_NAME}] 读取 _conf_schema.json 失败", exc_info=True)
+        return {}
+
+    async def _write_config(self, new_conf: dict[str, Any]) -> None:
+        """备份当前配置 → 原子落盘（utf-8-sig），不触发热重载。
+
+        备份失败不阻断保存（磁盘满 / 权限异常时仍要让配置落盘）。
+        """
+        data_dir = Path(getattr(self.plugin, "_data_dir", "") or ".")
+        bak_dir = data_dir / "conf_backups"
+        try:
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            bak_dir.joinpath(f"{ts}.json").write_text(
+                json.dumps(dict(self.plugin.config), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.warning(f"[{PLUGIN_NAME}] 配置备份失败（不阻断保存）", exc_info=True)
+        await self.plugin.config.save_config_async(new_conf)
+
+    async def _persist_config(
+        self, new_conf: dict[str, Any], *, reload: bool = True
+    ) -> None:
+        """备份 → 落盘 → 生效（默认热重载，可走图床局部生效）。
+
+        Pages 面板改配置的落盘链路：服务器条目增删改（``/config/server/*``）
+        共用，保证行为一致；仅「不影响连接」的开关改动可走 ``_write_config``
+        + 就地生效，见 update_config_server。
+        ``reload=False`` 时改走 ``apply_image_bed_config()``：图床条目/开关
+        的保存不触碰 MC 连接，避免全服重连抖动。
+        """
+        await self._write_config(new_conf)
+        if reload:
+            await self.plugin.reload_config()
+        else:
+            apply = getattr(self.plugin, "apply_image_bed_config", None)
+            if callable(apply):
+                await apply()
+            else:
+                await self.plugin.reload_config()
 
     # ---- 服务器条目管理（面板直接改 conf 里的 mc_servers） ----
 
@@ -944,6 +1206,8 @@ class WebApiController:
             "forward_achievement_to_astrbot": _as_bool(
                 msg.get("forward_achievement_to_astrbot"), False
             ),
+            "forward_image_to_mc": _as_bool(msg.get("forward_image_to_mc"), False),
+            "forward_image_from_mc": _as_bool(msg.get("forward_image_from_mc"), False),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
         }
 
@@ -982,9 +1246,9 @@ class WebApiController:
     async def get_config_servers(self) -> Any:
         """列出 conf 中配置的全部服务器条目（含未启用条目）。
 
-        仪表盘 / 配置页据此把「配置里存在但未启用」的服务器渲染成灰色
-        卡片——它们在运行时不会建立连接（main 层跳过），此前在面板上
-        完全不可见，只能靠改配置文件才能启用。
+        仪表盘据此把「配置里存在但未启用」的服务器渲染成灰色卡片——
+        它们在运行时不会建立连接（main 层跳过），此前在面板上完全
+        不可见，只能靠改配置文件才能启用。
         """
         return self._config_servers_response()
 
@@ -1110,12 +1374,15 @@ class WebApiController:
                 "forward_join_leave_to_astrbot",
                 "forward_death_to_astrbot",
                 "forward_achievement_to_astrbot",
+                "forward_image_to_mc",
+                "forward_image_from_mc",
                 "auto_forward_prefix",
             ):
                 if key not in message_payload:
                     continue
                 if key in ("forward_chat_to_astrbot", "forward_join_leave_to_astrbot",
-                           "forward_death_to_astrbot", "forward_achievement_to_astrbot"):
+                           "forward_death_to_astrbot", "forward_achievement_to_astrbot",
+                           "forward_image_to_mc", "forward_image_from_mc"):
                     # 布尔键：字符串布尔（表单 / WebUI 可能传字符串）统一转真布尔
                     msg[key] = _as_bool(
                         message_payload[key],
@@ -1205,6 +1472,335 @@ class WebApiController:
             return error_response(f"删除服务器配置失败: {exc}", status_code=500)
         logger.info(f"[{PLUGIN_NAME}] 面板删除服务器: {removed_name or '#' + str(position)}")
         return self._config_servers_response(saved=True, removed=removed_name)
+
+    # ---- 图床条目管理（面板「图床」视图直接改 conf 里的 image_upload_services） ----
+
+    def _conf_image_entries(self) -> list[Any]:
+        """当前内存配置里的 image_upload_services 原始条目列表（含未启用条目）。"""
+        if self.plugin is None:
+            return []
+        entries = self.plugin.config.get("image_upload_services")
+        if isinstance(entries, dict):  # 防御：误存成单项对象
+            entries = [entries]
+        return entries if isinstance(entries, list) else []
+
+    def _conf_with_image_entries(self, entries: list[Any]) -> dict[str, Any]:
+        """把替换后的图床条目列表合成一份完整配置（只碰 image_upload_services 键）。"""
+        new_conf = dict(self.plugin.config)
+        new_conf["image_upload_services"] = entries
+        return new_conf
+
+    def _new_image_entry(self, template_key: str) -> dict[str, Any]:
+        """按 schema 模板生成一份全新图床条目（默认值全部取自模板）。
+
+        schema 缺失（异常环境）时退化为最小可用结构，保证新建功能不中断。
+        """
+        templates = (
+            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
+        )
+        template = templates.get(template_key) or templates.get(_IMAGE_TEMPLATE_KEY_CUSTOM)
+        if not isinstance(template, dict):
+            logger.warning(f"[{PLUGIN_NAME}] 未找到图床模板 {template_key!r}，使用最小默认结构")
+            return {
+                "__template_key": _IMAGE_TEMPLATE_KEY_CUSTOM,
+                "enabled": True,
+                "name": "",
+                "upload_url": "",
+                "token": "",
+                "response": "text",
+                "file_field": "file",
+                "headers": "",
+                "form_fields": "",
+            }
+        entry: dict[str, Any] = {
+            "__template_key": (
+                template_key if template_key in templates else _IMAGE_TEMPLATE_KEY_CUSTOM
+            )
+        }
+        items = template.get("items")
+        if isinstance(items, dict):
+            for key, spec in items.items():
+                entry[key] = _schema_default(spec)
+        entry.setdefault("enabled", True)
+        return entry
+
+    def _image_entry_kind(self, entry: Any) -> str:
+        """判定图床条目类型：'builtin'（内置 HTTP 服务）或 'third_party'。
+
+        与 main.py::_is_builtin_entry 同口径：__template_key 缺失时按字段
+        特征兜底（带 base_url 且无 upload_url 视为内置条目）。
+        """
+        if not isinstance(entry, dict):
+            return "third_party"
+        key = str(entry.get("__template_key") or "").strip().lower()
+        if key:
+            return "builtin" if key == _IMAGE_TEMPLATE_KEY_BUILTIN else "third_party"
+        return (
+            "builtin"
+            if bool(str(entry.get("base_url") or "").strip())
+            and not str(entry.get("upload_url") or "").strip()
+            else "third_party"
+        )
+
+    def _image_entry_reason(self, entry: Any, kind: str, master_enabled: bool) -> str:
+        """生成条目未生效原因（与 main.py _setup_image_services 告警口径一致）。
+
+        供面板回答「我配了却没生效，为什么」：总开关关 / 条目未启用 /
+        内置条目 base_url 非法 / 第三方 upload_url 非法。
+        """
+        if not master_enabled:
+            return "总开关未开启"
+        if not _as_bool(entry.get("enabled"), True):
+            return "条目未启用"
+        if kind == "builtin":
+            if not str(entry.get("base_url") or "").strip().startswith(("http://", "https://")):
+                return "base_url 需为 http(s):// 开头（留空则不启动）"
+        else:
+            if not str(entry.get("upload_url") or "").strip().startswith(("http://", "https://")):
+                return "upload_url 需为 http(s):// 开头"
+            response = str(entry.get("response") or "text").strip().lower()
+            if response not in _IMAGE_RESPONSE_KINDS:
+                return "response 需为 text 或 json"
+        return ""
+
+    def _image_entry_active(self, entry: Any, kind: str, master_enabled: bool) -> bool:
+        """条目是否已进入运行时上传链（总开关开 + 启用 + 配置合法）。"""
+        return self._image_entry_reason(entry, kind, master_enabled) == ""
+
+    def _image_entry_name(self, entry: Any, kind: str) -> str:
+        """条目的展示名：配置的 name 优先，空时按类型给可读默认名。"""
+        if not isinstance(entry, dict):
+            return "未命名条目"
+        name = str(entry.get("name") or "").strip()
+        if name:
+            return name
+        if kind == "builtin":
+            base_url = str(entry.get("base_url") or "")
+            try:
+                netloc = base_url.split("://", 1)[1].split("/", 1)[0]
+            except IndexError:
+                netloc = base_url
+            return f"内置图片HTTP服务({netloc or '未配置'})"
+        upload_url = str(entry.get("upload_url") or "")
+        try:
+            netloc = upload_url.split("://", 1)[1].split("/", 1)[0]
+        except IndexError:
+            netloc = upload_url
+        return f"图床({netloc or '未配置'})"
+
+    def _image_entry_detail(self, entry: Any, kind: str) -> str:
+        """条目详情地址：内置条目显示 base_url，第三方显示 upload_url。"""
+        if not isinstance(entry, dict):
+            return ""
+        return str(entry.get("base_url") or "") if kind == "builtin" else str(
+            entry.get("upload_url") or ""
+        )
+
+    def _image_bed_timeout(self) -> int:
+        """根级上传超时（conf 的 image_upload_timeout，缺省回落默认值）。"""
+        if self.plugin is None:
+            return DEFAULT_IMAGE_UPLOAD_TIMEOUT
+        return max(1, _as_int(
+            self.plugin.config.get("image_upload_timeout"), DEFAULT_IMAGE_UPLOAD_TIMEOUT
+        ))
+
+    def _image_bed_items(self, master_enabled: bool) -> list[dict[str, Any]]:
+        """把 conf 里的图床条目整理成面板展示视图（含未生效原因）。
+
+        ``active`` 与 main 层跳过逻辑同口径（真值判定 + 配置合法性）：
+        面板显示的「已生效」必须等于实际会被加载的条目，否则面板会说谎。
+        """
+        items: list[dict[str, Any]] = []
+        for index, entry in enumerate(self._conf_image_entries()):
+            if not isinstance(entry, dict):
+                continue
+            kind = self._image_entry_kind(entry)
+            items.append(
+                {
+                    "index": index,
+                    "template_key": str(entry.get("__template_key") or "").strip()
+                    or (
+                        _IMAGE_TEMPLATE_KEY_BUILTIN
+                        if kind == "builtin"
+                        else _IMAGE_TEMPLATE_KEY_CUSTOM
+                    ),
+                    "name": self._image_entry_name(entry, kind),
+                    "kind": kind,
+                    "enabled": _as_bool(entry.get("enabled"), True),
+                    "active": self._image_entry_active(entry, kind, master_enabled),
+                    "detail": self._image_entry_detail(entry, kind),
+                    "reason": self._image_entry_reason(entry, kind, master_enabled),
+                }
+            )
+        return items
+
+    def _config_image_items(self) -> list[dict[str, Any]]:
+        """conf 里的图床条目原始数据（含未启用，供面板表单编辑回显）。"""
+        items: list[dict[str, Any]] = []
+        for index, entry in enumerate(self._conf_image_entries()):
+            if not isinstance(entry, dict):
+                continue
+            kind = self._image_entry_kind(entry)
+            items.append(
+                {
+                    "index": index,
+                    "template_key": str(entry.get("__template_key") or "").strip()
+                    or (
+                        _IMAGE_TEMPLATE_KEY_BUILTIN
+                        if kind == "builtin"
+                        else _IMAGE_TEMPLATE_KEY_CUSTOM
+                    ),
+                    "entry": entry,
+                }
+            )
+        return items
+
+    def _find_image_entry(self, entries: list[Any], index: Any) -> tuple[int, dict[str, Any]] | None:
+        """按 index 定位图床条目，返回 (下标, 条目)；无效定位返回 None。
+
+        index 为布尔、空串、非数字或越界时一律视为定位失败，由调用方回 400。
+        """
+        if isinstance(index, bool) or index is None:
+            return None
+        try:
+            position = int(str(index).strip())
+        except (TypeError, ValueError):
+            return None
+        if 0 <= position < len(entries) and isinstance(entries[position], dict):
+            return position, entries[position]
+        return None
+
+    def _image_bed_response(self, **extra: Any) -> Any:
+        """统一返回格式：最新条目原始列表 + 当前根级开关/超时。"""
+        payload: dict[str, Any] = {
+            "items": self._config_image_items(),
+            "enable_image_upload": _as_bool(
+                self.plugin.config.get("enable_image_upload") if self.plugin is not None else None,
+                False,
+            ),
+            "image_upload_timeout": self._image_bed_timeout(),
+        }
+        payload.update(extra)
+        return json_response(payload)
+
+    async def get_config_image_bed(self) -> Any:
+        """列出配置里的图床条目原始数据（含未启用条目）。
+
+        与 /image_bed/status 的 items[] 不同：这里返回的是 conf 里的原始
+        条目（带 __template_key），供面板表单编辑回显；status 的 items[]
+        是带生效原因的运行态视图。
+        """
+        return self._image_bed_response()
+
+    async def create_config_image_bed(self) -> Any:
+        """新建图床条目并局部生效（不触碰 MC 连接）。
+
+        请求体：``{"template_key": "builtin_http"|"custom"|"catbox"|...}`` 必填，
+        条目其余字段按 schema 模板默认值补齐；仅显式出现的字段覆盖默认值。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        template_key = str(payload.get("template_key") or "").strip()
+        templates = (
+            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
+        )
+        if template_key not in templates:
+            return error_response(f"未知的图床模板: {template_key or '(空)'}", status_code=400)
+
+        entries = copy.deepcopy(self._conf_image_entries())
+        entry = self._new_image_entry(template_key)
+        for key in _IMAGE_ENTRY_FIELDS:
+            if key == "enabled":
+                entry[key] = _as_bool(payload.get(key), True)
+                continue
+            if key in payload:
+                if key in ("port",):
+                    entry[key] = _as_int(payload.get(key), entry.get(key) or 8765)
+                else:
+                    entry[key] = str(payload.get(key) or "")
+        entries.append(entry)
+        try:
+            await self._persist_config(self._conf_with_image_entries(entries), reload=False)
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 新建图床条目失败")
+            return error_response(f"新建图床条目失败: {exc}", status_code=500)
+        logger.info(f"[{PLUGIN_NAME}] 面板新建图床条目: {template_key}")
+        return self._image_bed_response(saved=True, template_key=template_key)
+
+    async def update_config_image_bed(self) -> Any:
+        """修改图床条目字段 / 启用状态 / 切换模板并局部生效。
+
+        请求体需带 ``index`` 定位条目；其余字段仅「显式出现」才覆盖，避免
+        前端漏传把已有配置清空。``template_key`` 出现且与当前模板不同时，
+        按新模板重建条目默认值后再套用显式字段（换模板）。
+        """
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        entries = copy.deepcopy(self._conf_image_entries())
+        found = self._find_image_entry(entries, payload.get("index"))
+        if found is None:
+            return error_response("未找到对应的图床条目（index 无效）", status_code=400)
+        position, entry = found
+
+        new_template_key = str(payload.get("template_key") or "").strip()
+        current_key = str(entry.get("__template_key") or "").strip()
+        if new_template_key and new_template_key != current_key:
+            templates = (
+                (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
+            )
+            if new_template_key not in templates:
+                return error_response(f"未知的图床模板: {new_template_key}", status_code=400)
+            entry = self._new_image_entry(new_template_key)
+            entries[position] = entry
+        for key in _IMAGE_ENTRY_FIELDS:
+            if key == "enabled":
+                if "enabled" in payload:
+                    entry[key] = _as_bool(payload.get("enabled"), True)
+                continue
+            if key in payload:
+                if key in ("port",):
+                    entry[key] = _as_int(payload.get(key), entry.get(key) or 8765)
+                else:
+                    entry[key] = str(payload.get(key) or "")
+        try:
+            await self._persist_config(self._conf_with_image_entries(entries), reload=False)
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 更新图床条目失败")
+            return error_response(f"更新图床条目失败: {exc}", status_code=500)
+        logger.info(f"[{PLUGIN_NAME}] 面板更新图床条目: #{position}")
+        return self._image_bed_response(saved=True, index=position)
+
+    async def delete_config_image_bed(self) -> Any:
+        """按 index 删除图床条目并局部生效（配置备份已留存）。"""
+        if self.plugin is None:
+            return error_response("插件实例未注入，无法修改配置", status_code=503)
+        payload = await request.json(default={}) or {}
+        if not isinstance(payload, dict):
+            return error_response("请求体需为 JSON 对象", status_code=400)
+
+        entries = copy.deepcopy(self._conf_image_entries())
+        found = self._find_image_entry(entries, payload.get("index"))
+        if found is None:
+            return error_response("未找到对应的图床条目（index 无效）", status_code=400)
+        position, entry = found
+        removed_key = str(entry.get("__template_key") or "").strip() or "条目"
+
+        entries.pop(position)
+        try:
+            await self._persist_config(self._conf_with_image_entries(entries), reload=False)
+        except Exception as exc:
+            logger.exception(f"[{PLUGIN_NAME}] 删除图床条目失败")
+            return error_response(f"删除图床条目失败: {exc}", status_code=500)
+        logger.info(f"[{PLUGIN_NAME}] 面板删除图床条目: #{position} ({removed_key})")
+        return self._image_bed_response(saved=True, removed=removed_key)
 
     def get_panel_prefs(self) -> Any:
         """获取面板级偏好（互通终端加载天数等，长期存储在后端）。

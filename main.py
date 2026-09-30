@@ -122,6 +122,11 @@ class MinecraftQueQiaoPlugin(Star):
         供 initialize() 与配置热重载（reload_config）共用；调用方需保证
         先清空旧的运行时状态（self._configs / message_bridge 索引）。
         """
+        # 图片转存与 MC 服务器无关：必须在「无服务器配置」的空判之前启动，
+        # 否则一台服务器都没配时图床被静默跳过，reload_config() 停掉后也不再
+        # 恢复（历史缺陷，本次修复）
+        await self._setup_image_services()
+
         raw_servers = self.config.get("mc_servers", []) or []
         if not isinstance(raw_servers, list) or not raw_servers:
             logger.warning(f"[{PLUGIN_NAME}] 未配置任何服务器")
@@ -171,7 +176,6 @@ class MinecraftQueQiaoPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 没有可用的服务器配置")
             return
 
-        await self._setup_image_services()
         await self.server_manager.start_all()
         # 性能监控（TPS/延迟）采集任务：仅对启用了监控的服务器启动
         self.monitor.start(self._configs)
@@ -197,6 +201,8 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_join_leave_to_astrbot",
         "forward_death_to_astrbot",
         "forward_achievement_to_astrbot",
+        "forward_image_to_mc",
+        "forward_image_from_mc",
         "auto_forward_prefix",
         "target_sessions",
         "terminal_days",
@@ -208,6 +214,8 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
         "forward_achievement_to_astrbot": False,
+        "forward_image_to_mc": False,
+        "forward_image_from_mc": False,
     }
 
     def apply_soft_config(self, server_name: str, fields: dict) -> bool:
@@ -266,6 +274,22 @@ class MinecraftQueQiaoPlugin(Star):
         self.renderer.enabled = False
         await self._apply_runtime_config()
         logger.info(f"[{PLUGIN_NAME}] 配置热重载完成")
+
+    async def apply_image_bed_config(self) -> None:
+        """只重建图片转存子系统，不触碰 MC 连接与监控采集。
+
+        面板保存图床条目/开关时调用：先停内置 HTTP 监听，再按 self.config
+        当前值重建条目并重启监听。与 reload_config() 的区别在于**不会断开
+        任何 MC 服务器连接**，保存图床配置不引发全服重连抖动。
+        _setup_image_services() 本身幂等（先清空 uploaders 再重建），可安全
+        重复调用。
+        """
+        logger.info(f"[{PLUGIN_NAME}] 图床配置已更新，正在重建图片转存子系统...")
+        await self.image_bed.stop_builtin()
+        await self._setup_image_services()
+        logger.info(
+            f"[{PLUGIN_NAME}] 图床配置生效: {self.image_bed.service_names}"
+        )
 
     async def terminate(self) -> None:
         """插件卸载时清理所有连接。"""

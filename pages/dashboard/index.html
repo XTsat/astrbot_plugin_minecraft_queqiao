@@ -36,16 +36,26 @@
       <button class="btn" id="btn-config-link" title="总设置（自动刷新间隔等全局偏好）">
         <span>⚙️ 设置</span>
       </button>
+      <button class="btn" id="btn-config-view"
+        title="配置管理：完整配置编辑（可视化表单 / JSON 直改），更底层的设置，保存后热重载。
+        三态循环：进入当前页面的表单配置 → 全部 JSON → 返回原视图">
+        <span>⚙️ 配置管理</span>
+      </button>
     </div>
   </header>
 
-  <!-- 服务器标签切换栏：全局视图 + 每台服务器独立标签页 -->
+  <!-- 服务器标签切换栏：全局视图 + 每台服务器独立标签页；最右侧为
+       图床面板标签（独立视图，不受 renderServerTabs 的 innerHTML 重建影响） -->
   <nav class="server-tabs-bar" aria-label="服务器视图切换">
     <div class="server-tabs" id="server-tabs">
       <button type="button" class="server-tab" data-view="all" disabled>
         <span class="server-tab-spinner"></span> 加载中...
       </button>
     </div>
+    <button type="button" class="server-tab-pinned" id="tab-image-bed" data-view="image_bed"
+      title="图床面板：管理图片转存（内置图片HTTP服务 + 第三方图床），保存免重连">
+      🖼️ 图床
+    </button>
   </nav>
 
   <!-- 全局统计指标看板 -->
@@ -226,6 +236,34 @@
             </span>
             <span class="settings-row-hint">玩家获得成就提示转发到目标会话</span>
           </label>
+          <div class="settings-row" id="image-fwd-toggle-row">
+            <span class="settings-row-label">转发图片消息</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-image" />
+            </span>
+            <span class="settings-row-hint">
+              勾选 = 同时开启两个方向的图片转发（MC ↔ 外部会话），默认关闭；
+              点「展开」可分别控制每个方向
+              <button type="button" class="settings-inline-toggle" id="st-fwd-image-toggle"
+                aria-expanded="false" aria-controls="st-fwd-image-subgroup">展开 ⯈</button>
+            </span>
+          </div>
+          <div class="settings-subgroup hidden" id="st-fwd-image-subgroup">
+            <label class="settings-row">
+              <span class="settings-row-label">外部 → MC 图片转发</span>
+              <span class="settings-row-control">
+                <input type="checkbox" id="st-fwd-image-to-mc" />
+              </span>
+              <span class="settings-row-hint">外部会话图片转发到游戏内，需游戏端装 ChatImage 模组（https://github.com/kitUIN/ChatImage），否则显示为 [[CICode,...]] 文本</span>
+            </label>
+            <label class="settings-row">
+              <span class="settings-row-label">MC → 外部 图片转发</span>
+              <span class="settings-row-control">
+                <input type="checkbox" id="st-fwd-image-from-mc" />
+              </span>
+              <span class="settings-row-hint">游戏内图片（ChatImage 的 [[CICode,url=...]] 代码或直贴链接）自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
+            </label>
+          </div>
           <label class="settings-row">
             <span class="settings-row-label">群 → MC 触发前缀</span>
             <span class="settings-row-control">
@@ -293,7 +331,81 @@
     </section>
   </main>
 
+  <!-- 图床面板：独立视图（🖼️ 图床）。承载图片转存管理——总开关/超时、
+       条目增删改、内置HTTP服务运行态、测试上传。保存走局部生效
+       （apply_image_bed_config，免重连 MC） -->
+  <section class="image-bed-panel hidden" id="image-bed-panel" aria-label="图床面板">
+    <div class="ib-header">
+      <div class="ib-title-row">
+        <span class="ib-title">🖼️ 图床管理</span>
+        <span class="ib-status" id="ib-status">--</span>
+      </div>
+      <div class="ib-toolbar">
+        <label class="ib-toggle" title="根级 enable_image_upload：关闭后所有图床条目与内置服务全部不生效">
+          <input type="checkbox" id="ib-enabled" />
+          <span>启用图片转存</span>
+        </label>
+        <label class="ib-timeout" title="第三方图床单次上传超时（秒），非正数回落默认值">
+          <span>超时</span>
+          <input type="number" id="ib-timeout" min="1" step="1" value="30" />
+          <span>秒</span>
+        </label>
+      </div>
+      <div class="ib-actions">
+        <button class="btn btn-sm" id="ib-test" title="用内置测试图跑一遍完整上传链（按条目顺序逐个尝试）">🧪 测试上传</button>
+        <button class="btn btn-sm" id="ib-new" title="新建图片转存条目（按 conf 模板补齐字段）">＋ 新建条目</button>
+      </div>
+    </div>
+    <div class="ib-test-result hidden" id="ib-test-result"></div>
+    <div class="ib-list" id="ib-list">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <p>正在加载图床条目...</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 配置管理面板：内嵌视图（⚙️ 配置管理），与图床面板同级，由顶部标签
+       切换。承载完整配置编辑（可视化表单 + JSON 直编辑 + 保存热重载） -->
+  <section id="config-view" class="config-view hidden" aria-label="配置管理面板">
+    <header class="cfg-header">
+      <div class="cfg-header-title">
+        <span class="cfg-header-icon">⚙️</span>
+        <div>
+          <h1 class="cfg-title">鹊桥配置管理</h1>
+          <div class="cfg-subtitle" id="cfg-subtitle">正在加载配置...</div>
+        </div>
+      </div>
+      <div class="cfg-header-actions">
+        <span class="cfg-save-state" id="cfg-save-state"></span>
+        <button class="btn" id="btn-json-toggle" title="在可视化表单与原始 JSON 之间切换">📝 JSON 模式</button>
+        <button class="btn btn-primary" id="btn-save" disabled>💾 保存并重载</button>
+      </div>
+    </header>
+
+    <div class="cfg-layout">
+      <!-- 表单主体（无侧边导航，按进入前视图只渲染对应部分） -->
+      <main class="cfg-main">
+        <!-- 可视化表单模式 -->
+        <div id="cfg-form-panel">
+          <div class="cfg-loading" id="cfg-loading">正在加载配置 Schema...</div>
+          <form id="cfg-form" class="hidden" autocomplete="off"></form>
+        </div>
+
+        <!-- JSON 模式 -->
+        <div id="cfg-json-panel" class="hidden">
+          <div class="json-hint">直接编辑完整配置 JSON。保存时后端会校验对象结构并保留 UTF-8 BOM；修改服务器/图床条目时请保留 <code>__template_key</code> 字段。</div>
+          <textarea id="cfg-json-text" class="json-editor" spellcheck="false"></textarea>
+        </div>
+      </main>
+    </div>
+
+    <!-- 操作结果提示条 -->
+    <div class="cfg-toast hidden" id="cfg-toast"></div>
+  </section>
+
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./config-view.js"></script>
 
   <!-- 性能监控设置弹窗（监控参数仅在此维护，不走插件 WebUI 配置） -->
   <div class="modal-overlay hidden" id="monitor-settings-modal">
@@ -416,9 +528,8 @@
   </div>
 
   <!-- 服务器条目弹窗：面板内直接管理插件 conf 的 mc_servers（新建 / 编辑 /
-       启用 / 删除）。保存链路与配置页一致：备份 → 原子落盘 → 热重载。
-       仅暴露常用字段，其余字段沿用 _conf_schema.json 模板默认值，完整
-       字段编辑仍在「配置管理」页里做 -->
+       启用 / 删除）。保存链路一致：备份 → 原子落盘 → 热重载。
+       仅暴露常用字段，其余字段沿用 _conf_schema.json 模板默认值 -->
   <div class="modal-overlay hidden" id="server-form-modal">
     <div class="modal-card">
       <div class="modal-header">
@@ -498,6 +609,121 @@
         <button class="btn btn-danger btn-sm hidden" id="sf-delete" title="从配置中删除该服务器条目">🗑 删除服务器</button>
         <button class="btn btn-sm" id="sf-cancel">取消</button>
         <button class="btn btn-primary btn-sm" id="sf-save">保存并热重载</button>
+      </div>
+    </div>
+  </div>
+  <!-- 图床条目弹窗：面板「图床」视图内直接管理 conf 的 image_upload_services
+       （新建 / 编辑 / 启用 / 删除）。保存链路与服务器条目一致：备份 → 原子
+       落盘 → 局部生效（免重连 MC）。仅暴露常用字段，其余沿用 schema 模板
+       默认值，完整字段编辑仍在「配置管理」页做 -->
+  <div class="modal-overlay hidden" id="image-bed-form-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title" id="ibf-title">新建图床条目</span>
+        <button class="modal-close" id="ibf-close" title="关闭">✕</button>
+      </div>
+      <div class="modal-sub" id="ibf-sub">按 conf 模板补齐其余字段，保存后免重连生效</div>
+      <div class="modal-body">
+        <label class="modal-row">
+          <span class="modal-row-label">模板</span>
+          <span class="modal-row-control">
+            <select id="ibf-template" title="图床方案模板：字段默认值取自 conf schema">
+              <option value="builtin_http">builtin_http · 内置图片HTTP服务</option>
+              <option value="custom">custom · 通用图床接口</option>
+              <option value="catbox">catbox</option>
+              <option value="litterbox">litterbox</option>
+              <option value="imglink">imglink</option>
+              <option value="imgloc">imgloc</option>
+              <option value="img402">img402</option>
+              <option value="pngurl">pngurl</option>
+              <option value="see">see</option>
+              <option value="imgbb">imgbb</option>
+              <option value="picui">picui</option>
+              <option value="anyapi">anyapi</option>
+              <option value="xinyew">xinyew</option>
+              <option value="xunjinlu">xunjinlu</option>
+            </select>
+          </span>
+          <span class="modal-row-hint">切换模板会重置为该方案的字段默认值；其余字段随下方显示</span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">启用此条目</span>
+          <span class="modal-row-control">
+            <input type="checkbox" id="ibf-enabled" checked />
+          </span>
+        </label>
+        <label class="modal-row">
+          <span class="modal-row-label">条目名称</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-name" placeholder="如：我的NAS / catbox" />
+          </span>
+          <span class="modal-row-hint">面板与测试结果里展示的名字；留空自动按类型取名</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-builtin-host">
+          <span class="modal-row-label">监听地址</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-host" placeholder="0.0.0.0" />
+            <input type="number" id="ibf-port" min="1" max="65535" step="1" placeholder="8765" />
+          </span>
+          <span class="modal-row-hint">内置HTTP服务监听的本机地址与端口（玩家经 base_url 访问）</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-builtin-url">
+          <span class="modal-row-label">对外地址前缀</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-base-url" placeholder="http://公网IP:8765" />
+          </span>
+          <span class="modal-row-hint">玩家客户端访问该服务的地址，必须是 http(s):// 开头；留空则不启动（不能用 127.0.0.1，除非玩家与服务同机）</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-url">
+          <span class="modal-row-label">上传地址</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-upload-url" placeholder="https://catbox.moe/user/api.php" />
+          </span>
+          <span class="modal-row-hint">图床的上传接口地址，必须是 http(s):// 开头；留空则该条目不生效</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-token">
+          <span class="modal-row-label">Token</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-token" />
+          </span>
+          <span class="modal-row-hint">图床要求的鉴权令牌（可选，具体格式看图床文档）</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-response">
+          <span class="modal-row-label">响应解析</span>
+          <span class="modal-row-control">
+            <select id="ibf-response">
+              <option value="text">text · 响应文本即 URL</option>
+              <option value="json">json · 从 JSON 提取 url</option>
+            </select>
+          </span>
+          <span class="modal-row-hint">图床返回图片地址的格式；两者都不是则条目不生效</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-file">
+          <span class="modal-row-label">文件字段名</span>
+          <span class="modal-row-control">
+            <input type="text" id="ibf-file-field" placeholder="file" />
+          </span>
+          <span class="modal-row-hint">multipart 上传时的文件字段名（catbox 为 fileToUpload）</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-headers">
+          <span class="modal-row-label">请求头</span>
+          <span class="modal-row-control">
+            <textarea id="ibf-headers" rows="2" placeholder="每行一个：名字: 值"></textarea>
+          </span>
+          <span class="modal-row-hint">附加请求头；每行一个 `名字: 值`，或以 `{` 开头的 JSON 对象</span>
+        </label>
+        <label class="modal-row hidden" id="ibf-row-third-forms">
+          <span class="modal-row-label">额外表单字段</span>
+          <span class="modal-row-control">
+            <textarea id="ibf-form-fields" rows="2" placeholder="每行一个：名字: 值"></textarea>
+          </span>
+          <span class="modal-row-hint">multipart 额外字段（litterbox 必填 `time: 72h`）；格式同请求头</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-danger btn-sm hidden" id="ibf-delete" title="从配置中删除该图床条目">🗑 删除条目</button>
+        <button class="btn btn-sm" id="ibf-cancel">取消</button>
+        <button class="btn btn-primary btn-sm" id="ibf-save">保存并生效</button>
       </div>
     </div>
   </div>
