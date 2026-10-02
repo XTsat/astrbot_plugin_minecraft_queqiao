@@ -550,7 +550,7 @@ class MinecraftQueQiaoPlugin(Star):
                 f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} 离开了游戏"
             )
         elif event.is_death:
-            death_text = event.death.as_text() or "死亡"
+            death_text = event.death.text or "死亡"
             self.metrics.record_event(
                 "death",
                 server_name,
@@ -564,7 +564,14 @@ class MinecraftQueQiaoPlugin(Star):
                 f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} {death_text}"
             )
         elif event.is_achievement:
-            ach_text = event.achievement.as_text() or "达成成就"
+            # display_text 可能为空（未开翻译 + 服务端仅给 key），
+            # 与 message_bridge.format_event 保持一致：退到 display_name，
+            # 最差也能给出成就 key，避免无信息量的「达成成就」
+            ach_text = (
+                event.achievement.display_text
+                or event.achievement.display_name
+                or "达成成就"
+            )
             self.metrics.record_event(
                 "achievement",
                 server_name,

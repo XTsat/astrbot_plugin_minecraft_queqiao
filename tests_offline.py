@@ -5271,3 +5271,68 @@ print("OK  路由注册 / 状态视图4字段兼容+items+building_running / 总
       "CRUD 默认值取 schema·不动 mc_servers / index 越界非数字→400 / "
       "switch 免重连·非法超时400 / test 全链结果透传 / builtin_status 运行态翻转 / "
       "无MC配置图床仍启动 / apply_image_bed_config 幂等 / 前端静态守卫")
+
+print("\n=== 45. main._on_queqiao_event 死亡/成就分支（as_text 幽灵方法回归） ===")
+# 回归：曾调用不存在的 event.death.as_text() / event.achievement.as_text()，
+# 导致 PlayerDeathEvent / PlayerAchievementEvent 一进入 _on_queqiao_event 就抛
+# AttributeError，被 queqiao_client 捕获为「事件处理异常」，死亡/成就整体丢失
+# （实测日志：'QueQiaoTranslate' object has no attribute 'as_text'）。
+# 不实例化完整插件（需 AstrBot 环境），用 __new__ 绕过 __init__，
+# 只注入该函数依赖的四个成员，验证分支不抛异常且事件有记录。
+import astrbot_plugin_minecraft_queqiao.main as _m45
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC45
+from astrbot_plugin_minecraft_queqiao.services.metrics import MetricsCollector as _MC45
+
+class _TL45:
+    def __init__(self):
+        self.rows = []
+    def append(self, server, kind, text):
+        self.rows.append((server, kind, text))
+
+class _BR45:
+    async def forward_event(self, server_name, config, event):
+        return False
+
+_plugin45 = _m45.MinecraftQueQiaoPlugin.__new__(_m45.MinecraftQueQiaoPlugin)
+_plugin45._configs = {"Server": _SC45.from_dict(
+    {"server": {"server_name": "Server"},
+     "message": {"target_sessions": ["umo:GroupMessage:9"]}})}
+_plugin45.metrics = _MC45()
+_plugin45.terminal_logs = _TL45()
+_plugin45.message_bridge = _BR45()
+
+_death45 = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "death": {"text": "Astrbot_Queqiao was killed"},
+})
+_ach45 = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerAchievementEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "achievement": {"translation": {
+        "text": "Astrbot_Queqiao has made the advancement [Getting an Upgrade]"}},
+})
+_asch_bare45 = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerAchievementEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "achievement": {"key": "minecraft:story/upgrade_tools", "display": {
+        "title": {"key": "advancements.story.upgrade_tools.title", "args": [], "text": ""}}},
+})
+
+async def _run45():
+    await _plugin45._on_queqiao_event("Server", _death45)
+    await _plugin45._on_queqiao_event("Server", _ach45)
+    await _plugin45._on_queqiao_event("Server", _asch_bare45)
+
+asyncio.run(_run45())
+_rows45 = _plugin45.terminal_logs.rows
+_kinds45 = [r[1] for r in _rows45]
+assert "death" in _kinds45, f"死亡事件未被记录: {_rows45}"
+assert "achievement" in _kinds45, f"成就事件未被记录: {_rows45}"
+assert any("Astrbot_Queqiao was killed" in r[2] for r in _rows45), \
+    "死亡文本应取自 death.text"
+assert any("Getting an Upgrade" in r[2] for r in _rows45), \
+    "成就文本应取自 translation.text 降级链"
+assert any("upgrade_tools" in r[2] for r in _rows45), \
+    "翻译缺失时成就应降级到 display.title/key，而非丢消息或抛异常"
+print("OK  死亡/成就事件不再抛 as_text AttributeError，且正确进入记录链路")
