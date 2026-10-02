@@ -4486,6 +4486,7 @@ from astrbot_plugin_minecraft_queqiao.core.models_config import _to_bool as _to_
 _plugin44.SOFT_CONFIG_KEYS = (
     "enable_ai_chat",
     "ai_chat_prefix",
+    "enable_local_translation",
     "forward_chat_to_astrbot",
     "forward_chat_format",
     "forward_join_leave_to_astrbot",
@@ -4504,6 +4505,7 @@ def _apply_soft44(server_name, fields):
         return False
     _bool_keys44 = {
         "enable_ai_chat": True,
+        "enable_local_translation": False,
         "forward_chat_to_astrbot": True,
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
@@ -4645,11 +4647,26 @@ assert _entry44m2["message"]["forward_chat_format"] == "<{player}> {message}", \
     "message 子对象漏传键不得清空既有值（合并语义）"
 assert _entry44m2["message"]["auto_forward_prefix"] == "!"
 assert _cfg44_run.forward_chat_to_astrbot is True and _plugin44.reloads == 0
+# 本地翻译开关（message 子对象）：与转发开关同属软字段，开 / 关都要落盘
+_set_payload44({"index": 0, "message": {"enable_local_translation": True}})
+asyncio.run(_wac44.update_config_server())
+_entry44n = _plugin44.config["mc_servers"][0]
+assert _entry44n["message"]["enable_local_translation"] is True, "本地翻译开启必须落盘"
+assert _cfg44_run.enable_local_translation is True, "运行时 ServerConfig 必须就地更新"
+assert _plugin44.reloads == 0, "本地翻译属软字段，不得热重载"
+_set_payload44({"index": 0, "message": {"enable_local_translation": False}})
+asyncio.run(_wac44.update_config_server())
+assert _plugin44.config["mc_servers"][0]["message"]["enable_local_translation"] is False, \
+    "本地翻译关闭同样必须落盘（false 不得被过滤）"
+assert _cfg44_run.enable_local_translation is False
+assert _plugin44.reloads == 0
 # 回读与落盘一致（面板保存后 refreshAll 会重新拉这个接口）
 _it44e = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
 assert _it44e["message"]["forward_chat_format"] == "<{player}> {message}"
 assert _it44e["message"]["auto_forward_prefix"] == "!"
 assert _it44e["target_sessions"] == ["umo:GroupMessage:9", "umo:GroupMessage:2"]
+# 本地翻译开关回显：面板保存后必须原样返回，否则前端把复选框重置为取消
+assert _it44e["message"]["enable_local_translation"] is False
 
 # 连接类字段（display_name / ws_url / enabled 等）仍走完整热重载
 _set_payload44({"index": 0, "enable_ai_chat": True, "display_name": "新名字"})
@@ -5336,3 +5353,174 @@ assert any("Getting an Upgrade" in r[2] for r in _rows45), \
 assert any("upgrade_tools" in r[2] for r in _rows45), \
     "翻译缺失时成就应降级到 display.title/key，而非丢消息或抛异常"
 print("OK  死亡/成就事件不再抛 as_text AttributeError，且正确进入记录链路")
+
+print("\n=== 46. 插件本地翻译（Translator：键/英文/模板/回退） ===")
+from astrbot_plugin_minecraft_queqiao.services.translator import Translator as _T46
+
+_t46 = _T46()
+_t46._load_key2zh()  # 预热，避免误报数据文件缺失
+assert len(_t46._key2zh) > 5000, f"翻译库过小: {len(_t46._key2zh)}"
+assert _t46.key_to_zh("death.attack.mob") == "%1$s被%2$s杀死了", \
+    f"死亡键翻译错误: {_t46.key_to_zh('death.attack.mob')}"
+assert _t46.key_to_zh("advancements.story.upgrade_tools.title") == "获得升级", \
+    "成就键翻译错误"
+assert _t46.en_to_zh("Zombie") == "僵尸", f"英文实体名翻译错误: {_t46.en_to_zh('Zombie')}"
+assert _t46.en_to_zh("Getting an Upgrade") == "获得升级", "英文成就名翻译错误"
+
+# 死亡：key + args（实体名为翻译键）→ 中文模板替换
+_d46 = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "death": {"key": "death.attack.mob",
+              "args": ["Astrbot_Queqiao", "entity.minecraft.zombie"],
+              "text": "Astrbot_Queqiao was slain by Zombie"},
+})
+_zh46 = _t46.translate_death(_d46.death)
+assert "被僵尸杀死了" in _zh46 and "Astrbot_Queqiao" in _zh46, \
+    f"key+args 死亡翻译错误: {_zh46}"
+
+# 死亡：args 为英文实体名 → en_zh 表兜底
+_d46b = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Steve"},
+    "death": {"key": "death.attack.mob", "args": ["Steve", "Zombie"],
+              "text": "Steve was slain by Zombie"},
+})
+_zh46b = _t46.translate_death(_d46b.death)
+assert "Steve被僵尸杀死了" in _zh46b, f"英文实体名参数翻译错误: {_zh46b}"
+
+# 死亡：无 key，英文整句模板匹配（%1$s was killed → 被杀死了）
+_d46c = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "death": {"text": "Astrbot_Queqiao was killed"},
+})
+_zh46c = _t46.translate_death(_d46c.death)
+assert "被杀死了" in _zh46c, f"英文整句模板匹配失败: {_zh46c}"
+
+# 死亡：未命中任何翻译路径 → 原样回退
+_d46d = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "X"},
+    "death": {"text": "X vanished into the void of mods"},
+})
+_zh46d = _t46.translate_death(_d46d.death)
+assert _zh46d == "X vanished into the void of mods", f"未命中应回退原文: {_zh46d}"
+
+# 死亡：已是中文 → 透传不二次翻译
+_d46e = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "death": {"text": "Astrbot_Queqiao被僵尸杀死了"},
+})
+assert _t46.translate_death(_d46e.death) == "Astrbot_Queqiao被僵尸杀死了", \
+    "中文文本应透传"
+
+# 死亡：args 为嵌套组件对象（鹊桥实测形态：{key,args,text} 壳包玩家名）
+# 回归：曾把 str(dict) 字典字面量拼进模板 → `💀 {'key': None, ...}被杀死了`
+_d46f = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "XTxiaotong"},
+    "death": {"key": "death.attack.genericKill",
+              "args": [{"key": None, "args": None, "text": "XTxiaotong"}],
+              "text": "XTxiaotong was killed"},
+})
+_zh46f = _t46.translate_death(_d46f.death)
+assert _zh46f == "XTxiaotong被杀死了", f"嵌套组件 args 应提取纯文本: {_zh46f}"
+
+# 死亡：args 为 translate 组件（实体名只给翻译键）→ 保留键供查库
+_d46g = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Steve"},
+    "death": {"key": "death.attack.mob",
+              "args": [{"text": "Steve"},
+                       {"translate": "entity.minecraft.zombie", "with": []}],
+              "text": "Steve was slain by Zombie"},
+})
+_zh46g = _t46.translate_death(_d46g.death)
+assert "Steve被僵尸杀死了" in _zh46g, f"translate 组件 args 应走查库: {_zh46g}"
+
+# 成就：title_key → 翻译键查库
+_a46 = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerAchievementEvent",
+    "player": {"nickname": "Astrbot_Queqiao"},
+    "achievement": {"key": "minecraft:story/upgrade_tools", "display": {
+        "title": {"key": "advancements.story.upgrade_tools.title",
+                  "args": [], "text": "Getting an Upgrade"}}},
+})
+assert _a46.achievement.title_key == "advancements.story.upgrade_tools.title", \
+    "title_key 未保留 display.title.key"
+assert _t46.translate_achievement(_a46.achievement) == "获得升级", \
+    "成就 title_key 翻译错误"
+
+# 成就：title 为英文名（无 title_key 时经 en_zh 表）
+_a46b = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerAchievementEvent",
+    "player": {"nickname": "Steve"},
+    "achievement": {"display": {"title": {"text": "Getting an Upgrade"}}},
+})
+assert _t46.translate_achievement(_a46b.achievement) == "获得升级", \
+    "成就英文名翻译错误"
+
+# 成就：未开翻译、鹊桥只给空壳 key → display_name 回落键本身也能翻译
+_a46c = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerAchievementEvent",
+    "player": {"nickname": "Steve"},
+    "achievement": {"key": "minecraft:story/upgrade_tools",
+                    "display": {"title": {"key": "advancements.story.upgrade_tools.title",
+                                          "args": [], "text": ""}}},
+})
+assert _t46.translate_achievement(_a46c.achievement) == "获得升级", \
+    "空壳成就键回落翻译错误"
+print("OK  Translator 键翻译 / 英文表 / 整句模板 / 回退 / 中文透传 / 成就 title_key 全通过")
+
+print("\n=== 47. 本地翻译开关集成（_on_queqiao_event + format_event） ===")
+from astrbot_plugin_minecraft_queqiao.services.message_bridge import MessageBridge as _MB46
+from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC46
+
+class _TL46:
+    def __init__(self):
+        self.rows = []
+    def append(self, server, kind, text):
+        self.rows.append((server, kind, text))
+
+_plugin46 = _m45.MinecraftQueQiaoPlugin.__new__(_m45.MinecraftQueQiaoPlugin)
+_plugin46._configs = {"Server": _SC46.from_dict(
+    {"server": {"server_name": "Server"},
+     "message": {"target_sessions": ["umo:GroupMessage:9"],
+                 "enable_local_translation": True}})}
+_plugin46.metrics = _MC45()
+_plugin46.terminal_logs = _TL46()
+_plugin46.message_bridge = _BR45()  # 不转发，只看记录链路
+_plugin46.translator = _t46
+
+async def _run46():
+    await _plugin46._on_queqiao_event("Server", _d46)   # key+args 死亡
+    await _plugin46._on_queqiao_event("Server", _d46c)  # 英文整句死亡
+    await _plugin46._on_queqiao_event("Server", _a46)   # title_key 成就
+
+asyncio.run(_run46())
+_rows46 = [r[2] for r in _plugin46.terminal_logs.rows]
+assert any("被僵尸杀死了" in r for r in _rows46), f"死亡未走本地翻译: {_rows46}"
+assert any("被杀死了" in r for r in _rows46), f"英文整句未走本地翻译: {_rows46}"
+assert any("获得升级" in r for r in _rows46), f"成就未走本地翻译: {_rows46}"
+
+# format_event：开关开启时死亡/成就转发文本为翻译后中文
+_cfg46 = _plugin46._configs["Server"]
+_bridge46 = MessageBridge(None, _t46)
+_f46 = _bridge46.format_event(_cfg46, _d46)
+assert "被僵尸杀死了" in _f46 and "💀" in _f46, f"format_event 死亡翻译错误: {_f46}"
+_f46b = _bridge46.format_event(_cfg46, _a46)
+assert "获得升级" in _f46b and "🏆" in _f46b, f"format_event 成就翻译错误: {_f46b}"
+
+# format_event：开关关闭 → 保持原逻辑（英文原样）
+_cfg46off = _SC46.from_dict(
+    {"server": {"server_name": "Server"},
+     "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_f46c = _bridge46.format_event(_cfg46off, _d46)
+assert "was slain by Zombie" in _f46c, f"开关关闭应保持原文: {_f46c}"
+
+# format_event：args 嵌套组件（实测回归：禁止 {dict} 字面量进转发文本）
+_f46d = _bridge46.format_event(_cfg46, _d46f)
+assert _f46d == "💀 XTxiaotong被杀死了", f"format_event 嵌套组件回归: {_f46d}"
+print("OK  开关开启走本地翻译（记录+转发），关闭保持原逻辑")

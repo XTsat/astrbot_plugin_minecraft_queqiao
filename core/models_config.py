@@ -194,6 +194,10 @@ class ServerConfig:
     forward_join_leave_to_astrbot: bool = False
     forward_death_to_astrbot: bool = False
     forward_achievement_to_astrbot: bool = False
+    # 本地翻译：给上面两个转发（死亡/成就）做翻译——开启后鹊桥传来的
+    # 英文 / 翻译键在插件侧直接转成中文，不依赖服务端鹊桥 enable_translation
+    # （无需重启服务端，翻译库内置在插件 translations/ 目录）
+    enable_local_translation: bool = False
     target_sessions: list[str] = field(default_factory=list)
     # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
     auto_forward_prefix: str = ""
@@ -441,6 +445,9 @@ class ServerConfig:
             ),
             forward_achievement_to_astrbot=_to_bool(
                 message.get("forward_achievement_to_astrbot"), False
+            ),
+            enable_local_translation=_to_bool(
+                message.get("enable_local_translation"), False
             ),
             target_sessions=target_sessions,
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),

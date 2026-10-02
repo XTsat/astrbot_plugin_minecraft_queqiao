@@ -152,6 +152,12 @@
                 "hint": "原版端与 Velocity 不支持该事件",
                 "default": false
               },
+              "enable_local_translation": {
+                "type": "bool",
+                "description": "本地翻译",
+                "hint": "内置翻译库，专给死亡/成就转发翻译：无需服务端开翻译",
+                "default": false
+              },
               "auto_forward_prefix": {
                 "type": "string",
                 "description": "外部消息转发到MC的前缀",

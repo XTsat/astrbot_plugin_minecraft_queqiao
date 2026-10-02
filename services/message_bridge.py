@@ -286,8 +286,10 @@ async def download_image_bytes(
 class MessageBridge:
     """负责 MC 事件到外部会话的格式化与发送。"""
 
-    def __init__(self, context) -> None:
+    def __init__(self, context, translator=None) -> None:
         self.context = context
+        # 本地翻译器（插件侧把鹊桥英文/翻译键转中文），None 表示未启用
+        self._translator = translator
         self._configs: dict[str, ServerConfig] = {}
         # 会话 UMO -> [(server_name, config)]，用于外部消息反查目标服务器
         self._session_to_servers: dict[str, list[tuple[str, ServerConfig]]] = {}
@@ -358,9 +360,18 @@ class MessageBridge:
         if event.is_quit:
             return f"🔴 {player} 离开了服务器[{config.display_label}]"
         if event.is_death:
-            text = event.death.text or "死亡"
+            if config.enable_local_translation and self._translator is not None:
+                text = self._translator.translate_death(event.death) or "死亡"
+            else:
+                text = event.death.text or "死亡"
             return f"💀 {text}"
         if event.is_achievement:
+            # 本地翻译开启：直接翻成就名（display_name），固定拼接玩家名
+            if config.enable_local_translation and self._translator is not None:
+                name = self._translator.translate_achievement(event.achievement)
+                if name:
+                    return f"🏆 {player} 达成了成就 {name}"
+                return f"🏆 {player} 达成了成就"
             # display_text 可能为空（未开翻译 + 服务端仅给 key），
             # 此时退到 display_name，最差也能给出成就 key，避免无信息量的「达成成就」
             text = event.achievement.display_text or event.achievement.display_name

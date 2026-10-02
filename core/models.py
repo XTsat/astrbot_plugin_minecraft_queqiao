@@ -123,6 +123,27 @@ def _component_text(value: object) -> str:
     return ""
 
 
+def _translate_arg_text(value: object) -> str:
+    """把 Translate 模型 args 的单项转成可翻译的纯文本。
+
+    鹊桥实测会把死亡消息 args 里的玩家/实体名推成**嵌套组件对象**
+    （如 ``{"key": null, "args": null, "text": "XTxiaotong"}``），
+    直接 ``str()`` 会得到 ``{'key': None, ...}`` 的字典字面量，
+    进而被拼进翻译模板（实测日志：`💀 {'key': None, ...}被杀死了`）。
+    这里优先递归提取可读文本；提取不到时保留 ``translate``/``key``
+    原始键，交由翻译层查库。
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        text = _component_text(value)
+        if text:
+            return text
+        key = value.get("translate") or value.get("key")
+        return key if isinstance(key, str) and key else ""
+    return _component_text(value)
+
+
 def _as_image_source(value: object) -> str:
     """把字段安全转为可直接用于 ``<img>`` 的图片源。
 
@@ -201,11 +222,15 @@ class QueQiaoTranslate:
         if not isinstance(data, dict):
             return cls()
         raw_args = data.get("args")
-        args = [_as_str(item) for item in raw_args] if isinstance(raw_args, list) else []
+        args = (
+            [_translate_arg_text(item) for item in raw_args]
+            if isinstance(raw_args, list)
+            else []
+        )
         return cls(
             key=_as_str(data.get("key")),
             args=args,
-            text=_as_str(data.get("text")),
+            text=_component_text(data.get("text")),
         )
 
 
@@ -229,6 +254,10 @@ class QueQiaoAchievement:
     description: str = ""
     text: str = ""
     translate: QueQiaoTranslate = field(default_factory=QueQiaoTranslate)
+    # display.title 为 Translate 对象时的原始翻译键（如
+    # advancements.story.upgrade_tools.title），供插件侧本地翻译使用；
+    # title 字段里存的是 text 或回落后的 key，两者可能混在一起
+    title_key: str = ""
 
     @classmethod
     def from_dict(cls, data: object) -> "QueQiaoAchievement":
@@ -245,6 +274,9 @@ class QueQiaoAchievement:
             # 该形态下 text 同样是「回退文本」，缺失时回落到 key（即翻译键本身）
             title=cls._translate_text(title),
             description=cls._translate_text(description),
+            title_key=(
+                _as_str(title.get("key")) if isinstance(title, dict) else ""
+            ),
             text=_as_str(data.get("text")),
             # 字段名以实测为准：鹊桥实际推送的是 `translation`（见原始 payload），
             # 文档中的 `translate` 作为兼容一并接受，两者取先有值者。

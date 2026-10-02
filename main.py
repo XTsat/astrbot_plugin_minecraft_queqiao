@@ -43,6 +43,7 @@ from .services.monitor import MonitorCollector
 from .services.panel_prefs import PanelPrefsStore
 from .services.renderer import InfoRenderer
 from .services.terminal_log import TerminalLogStore
+from .services.translator import Translator
 from .services.web_api import WebApiController
 
 DEFAULT_TIMEOUT = 30
@@ -71,7 +72,8 @@ class MinecraftQueQiaoPlugin(Star):
 
         self.server_manager = ServerManager()
         self.binding_service = BindingService(data_dir)
-        self.message_bridge = MessageBridge(context)
+        self.translator = Translator()
+        self.message_bridge = MessageBridge(context, self.translator)
         self.renderer = InfoRenderer()
         self.image_bed = ImageBedUploaderGroup()
         self.metrics = MetricsCollector()
@@ -196,6 +198,7 @@ class MinecraftQueQiaoPlugin(Star):
     SOFT_CONFIG_KEYS = (
         "enable_ai_chat",
         "ai_chat_prefix",
+        "enable_local_translation",
         "forward_chat_to_astrbot",
         "forward_chat_format",
         "forward_join_leave_to_astrbot",
@@ -210,6 +213,7 @@ class MinecraftQueQiaoPlugin(Star):
     # 布尔型软配置键 → (解析失败时的兜底默认值)，与 _conf_schema.json 默认一致
     _SOFT_BOOL_DEFAULTS = {
         "enable_ai_chat": True,
+        "enable_local_translation": False,
         "forward_chat_to_astrbot": True,
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
@@ -550,7 +554,10 @@ class MinecraftQueQiaoPlugin(Star):
                 f"[{PLUGIN_NAME}][{server_name}] 玩家 {event.player_name} 离开了游戏"
             )
         elif event.is_death:
-            death_text = event.death.text or "死亡"
+            if config.enable_local_translation:
+                death_text = self.translator.translate_death(event.death)
+            else:
+                death_text = event.death.text or "死亡"
             self.metrics.record_event(
                 "death",
                 server_name,
@@ -566,12 +573,16 @@ class MinecraftQueQiaoPlugin(Star):
         elif event.is_achievement:
             # display_text 可能为空（未开翻译 + 服务端仅给 key），
             # 与 message_bridge.format_event 保持一致：退到 display_name，
-            # 最差也能给出成就 key，避免无信息量的「达成成就」
-            ach_text = (
-                event.achievement.display_text
-                or event.achievement.display_name
-                or "达成成就"
-            )
+            # 最差也能给出成就 key，避免无信息量的「达成成就」；
+            # 本地翻译开启时直接翻译成就名（整句 display_text 由转发层处理）
+            if config.enable_local_translation:
+                ach_text = self.translator.translate_achievement(event.achievement)
+            else:
+                ach_text = (
+                    event.achievement.display_text
+                    or event.achievement.display_name
+                    or "达成成就"
+                )
             self.metrics.record_event(
                 "achievement",
                 server_name,

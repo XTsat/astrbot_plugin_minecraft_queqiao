@@ -1206,6 +1206,9 @@ class WebApiController:
             "forward_achievement_to_astrbot": _as_bool(
                 msg.get("forward_achievement_to_astrbot"), False
             ),
+            "enable_local_translation": _as_bool(
+                msg.get("enable_local_translation"), False
+            ),
             "forward_image_to_mc": _as_bool(msg.get("forward_image_to_mc"), False),
             "forward_image_from_mc": _as_bool(msg.get("forward_image_from_mc"), False),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
@@ -1369,6 +1372,7 @@ class WebApiController:
             raw_msg = entry.get("message")
             msg = raw_msg if isinstance(raw_msg, dict) else {}
             for key in (
+                "enable_local_translation",
                 "forward_chat_to_astrbot",
                 "forward_chat_format",
                 "forward_join_leave_to_astrbot",
@@ -1380,7 +1384,8 @@ class WebApiController:
             ):
                 if key not in message_payload:
                     continue
-                if key in ("forward_chat_to_astrbot", "forward_join_leave_to_astrbot",
+                if key in ("enable_local_translation", "forward_chat_to_astrbot",
+                           "forward_join_leave_to_astrbot",
                            "forward_death_to_astrbot", "forward_achievement_to_astrbot",
                            "forward_image_to_mc", "forward_image_from_mc"):
                     # 布尔键：字符串布尔（表单 / WebUI 可能传字符串）统一转真布尔

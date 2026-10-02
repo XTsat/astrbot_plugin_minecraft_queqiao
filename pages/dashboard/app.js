@@ -3236,6 +3236,7 @@ class DashboardApp {
       join: document.getElementById('st-fwd-joinleave'),
       death: document.getElementById('st-fwd-death'),
       ach: document.getElementById('st-fwd-achievement'),
+      localTr: document.getElementById('st-fwd-local-translate'),
       image: document.getElementById('st-fwd-image'),
       imageToMc: document.getElementById('st-fwd-image-to-mc'),
       imageFromMc: document.getElementById('st-fwd-image-from-mc'),
@@ -3255,6 +3256,7 @@ class DashboardApp {
       if (fwdBoxes.join) fwdBoxes.join.checked = !!msg.forward_join_leave_to_astrbot;
       if (fwdBoxes.death) fwdBoxes.death.checked = !!msg.forward_death_to_astrbot;
       if (fwdBoxes.ach) fwdBoxes.ach.checked = !!msg.forward_achievement_to_astrbot;
+      if (fwdBoxes.localTr) fwdBoxes.localTr.checked = !!msg.enable_local_translation;
       // 图片转发：两个方向分别回显；总开关 = 两个方向都开启才勾选
       if (fwdBoxes.imageToMc) fwdBoxes.imageToMc.checked = !!msg.forward_image_to_mc;
       if (fwdBoxes.imageFromMc) fwdBoxes.imageFromMc.checked = !!msg.forward_image_from_mc;
@@ -3337,6 +3339,9 @@ class DashboardApp {
           msg.forward_join_leave_to_astrbot = !!fwdJoin.checked;
           msg.forward_death_to_astrbot = !!fwdDeath.checked;
           msg.forward_achievement_to_astrbot = !!fwdAch.checked;
+          // 本地翻译（给死亡/成就转发做翻译）；独立处理：旧缓存页面缺该控件时跳过写回
+          const fwdLocalTr = document.getElementById('st-fwd-local-translate');
+          if (fwdLocalTr) msg.enable_local_translation = !!fwdLocalTr.checked;
           // 图片转发：按两个方向的实际勾选分别保存（总开关只做快捷全开/全关联动）
           msg.forward_image_to_mc = !!(fwdImageToMc && fwdImageToMc.checked);
           msg.forward_image_from_mc = !!(fwdImageFromMc && fwdImageFromMc.checked);
