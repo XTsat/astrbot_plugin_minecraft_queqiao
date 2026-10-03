@@ -210,9 +210,9 @@ async def _run():
 asyncio.run(_run())
 for umo, text in sent: print("   ->", umo, "|", text)
 assert sent[0][1] == "<Steve> 大家好", sent[0][1]
-assert "🟢 Alex 加入了服务器[MC]" == sent[1][1]
-assert sent[2][1] == "💀 Steve was slain by Zombie"
-print("OK  聊天(富文本剥离)/加入/死亡 三类事件均正确转发（加入消息带服务器显示名称 [MC]）")
+assert "[MC] 🟢 Alex 加入了服务器" == sent[1][1]
+assert sent[2][1] == "[MC] 💀 Steve was slain by Zombie"
+print("OK  聊天(富文本剥离)/加入/死亡 三类事件均正确转发（加入/死亡消息前置服务器标识 [MC]）")
 
 print("=== 12. main.py 可导入 ===")
 import astrbot_plugin_minecraft_queqiao.main as m
@@ -574,7 +574,7 @@ _ev_ach = QueQiaoEvent.from_dict({
     "achievement": {"key": "minecraft:husbandry/sweet_dreams",
                     "display": {"title": "Sweet Dreams", "frame": "goal"}}})
 _text = _br.format_event(_bcfg, _ev_ach)
-assert _text == "🏆 Steve 达成了成就 Sweet Dreams", _text
+assert _text == "[MC] 🏆 Steve 达成了成就 Sweet Dreams", _text
 assert "Sweet Dreams" in _text, _text
 
 # 玩家名兜底：连成就信息都没有时才用「<玩家> 达成了成就」
@@ -582,7 +582,7 @@ _ev_bare = QueQiaoEvent.from_dict({
     "event_name": "PlayerAchievementEvent", "player": {"nickname": "Steve"},
     "achievement": {}})
 _bare = _br.format_event(_bcfg, _ev_bare)
-assert _bare == "🏆 Steve 达成了成就", _bare
+assert _bare == "[MC] 🏆 Steve 达成了成就", _bare
 
 # 未开翻译 + display.title：成就名有了但整句不含玩家名 → 必须补上玩家名
 # （线上曾出现「🏆 Getting an Upgrade」缺名字）
@@ -594,7 +594,7 @@ _ev_nick = QueQiaoEvent.from_dict({
                                           "args": []},
                                 "frame": "task"}}})
 _nick = _br.format_event(_bcfg, _ev_nick)
-assert _nick == "🏆 Steve 达成了成就 Getting an Upgrade", _nick
+assert _nick == "[MC] 🏆 Steve 达成了成就 Getting an Upgrade", _nick
 
 # 开翻译：整句已含玩家名 → 不得重复拼接
 _ev_tr = QueQiaoEvent.from_dict({
@@ -603,7 +603,7 @@ _ev_tr = QueQiaoEvent.from_dict({
         "key": "chat.type.advancement.task", "args": [],
         "text": "Steve has made the advancement [Hot Stuff]"}}})
 _tr = _br.format_event(_bcfg, _ev_tr)
-assert _tr == "🏆 Steve has made the advancement [Hot Stuff]", _tr
+assert _tr == "[MC] 🏆 Steve has made the advancement [Hot Stuff]", _tr
 assert _tr.count("Steve") == 1, _tr   # 关键：不重复
 
 # should_forward 仍受开关控制（关闭时不转发，避免兜底文案掩盖配置问题）
@@ -615,6 +615,22 @@ assert _br.should_forward(_bcfg, _ev_ach) is True
 print("OK  未开翻译时补玩家名（🏆 Steve 达成了成就 Getting an Upgrade）")
 print("OK  开翻译时整句已含玩家名，判重不重复拼接")
 print("OK  成就转发开关仍生效（关闭时不转发）")
+
+# 死亡/成就同样前置服务器标识：两台服务器指向同一会话时能区分来源
+_bcfg_lbl = _S2.from_dict({"server": {"server_name": "S", "display_name": "生存服"},
+                           "message": {"target_sessions": ["umo:GroupMessage:1"],
+                                       "forward_achievement_to_astrbot": True,
+                                       "forward_death_to_astrbot": True}})
+_ev_death_lbl = QueQiaoEvent.from_dict({
+    "event_name": "PlayerDeathEvent", "post_type": "notice",
+    "player": {"nickname": "Steve"}, "death": {"text": "Steve was slain by Zombie"}})
+assert _br.format_event(_bcfg_lbl, _ev_death_lbl) == "[生存服] 💀 Steve was slain by Zombie", \
+    _br.format_event(_bcfg_lbl, _ev_death_lbl)
+assert _br.format_event(_bcfg_lbl, _ev_ach) == "[生存服] 🏆 Steve 达成了成就 Sweet Dreams", \
+    _br.format_event(_bcfg_lbl, _ev_ach)
+assert _br.format_event(_bcfg, _ev_death_lbl) == "[MC] 💀 Steve was slain by Zombie", \
+    _br.format_event(_bcfg, _ev_death_lbl)
+print("OK  死亡/成就转发前置服务器标识（[生存服] / [MC] 可区分来源）")
 
 print("\n全部离线逻辑校验通过 ✅（含成就文本降级链）")
 
@@ -757,20 +773,20 @@ _live_named = _S3.from_dict({"server": {"server_name": "Server", "display_name":
 assert _br4.format_event(_live_named, _ev_live) == "[生存服]<Steve> 测试空服务器"
 print("OK  什么都不填显示 [MC]（线上用例）、默认值可自定义、清空才无前缀")
 
-# (f) 进出消息必须在「服务器」后附上展示名称（display_name → 默认值 → server_name），
+# (f) 进出消息前置服务器标识（display_name → 默认值 → server_name），
 #     多台服务器指向同一会话时能区分来源
 _ev_j = QueQiaoEvent.from_dict({"event_name": "PlayerJoinEvent", "player": {"nickname": "Alex"}})
 _ev_q = QueQiaoEvent.from_dict({"event_name": "PlayerQuitEvent", "player": {"nickname": "Alex"}})
-assert _br4.format_event(_live_named, _ev_j) == "🟢 Alex 加入了服务器[生存服]"
-assert _br4.format_event(_live_named, _ev_q) == "🔴 Alex 离开了服务器[生存服]"
+assert _br4.format_event(_live_named, _ev_j) == "[生存服] 🟢 Alex 加入了服务器"
+assert _br4.format_event(_live_named, _ev_q) == "[生存服] 🔴 Alex 离开了服务器"
 # 未填 display_name：走默认值 MC
-assert _br4.format_event(_live, _ev_j) == "🟢 Alex 加入了服务器[MC]"
-assert _br4.format_event(_live, _ev_q) == "🔴 Alex 离开了服务器[MC]"
+assert _br4.format_event(_live, _ev_j) == "[MC] 🟢 Alex 加入了服务器"
+assert _br4.format_event(_live, _ev_q) == "[MC] 🔴 Alex 离开了服务器"
 # 显示名称与默认值都清空：回退 server_name（仍能标识来源，不会退化回无标识）
 _live_nolabel = _S3.from_dict({"server": {"server_name": "survival",
     "display_name_default": ""}})
-assert _br4.format_event(_live_nolabel, _ev_j) == "🟢 Alex 加入了服务器[survival]"
-print("OK  进出消息附服务器显示名称且保持同一条取值链")
+assert _br4.format_event(_live_nolabel, _ev_j) == "[survival] 🟢 Alex 加入了服务器"
+print("OK  进出消息前置服务器标识且保持同一条取值链")
 
 print("\n全部离线逻辑校验通过 ✅（含服务器显示名称）")
 
@@ -5522,5 +5538,5 @@ assert "was slain by Zombie" in _f46c, f"开关关闭应保持原文: {_f46c}"
 
 # format_event：args 嵌套组件（实测回归：禁止 {dict} 字面量进转发文本）
 _f46d = _bridge46.format_event(_cfg46, _d46f)
-assert _f46d == "💀 XTxiaotong被杀死了", f"format_event 嵌套组件回归: {_f46d}"
+assert _f46d == "[MC] 💀 XTxiaotong被杀死了", f"format_event 嵌套组件回归: {_f46d}"
 print("OK  开关开启走本地翻译（记录+转发），关闭保持原逻辑")

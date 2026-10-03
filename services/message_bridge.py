@@ -353,37 +353,37 @@ class MessageBridge:
             )
             return self._format_chat(config, player, message)
 
+        # 多台服务器指向同一会话时必须能区分来源：
+        # 进出/死亡/成就统一前置 `[{display_label}]`（display_name → 默认值 → server_name）
         if event.is_join:
-            # 多台服务器指向同一会话时，进出消息必须能区分来源：
-            # 在「服务器」后附上展示名称（display_name → 默认值 → server_name）
-            return f"🟢 {player} 加入了服务器[{config.display_label}]"
+            return f"[{config.display_label}] 🟢 {player} 加入了服务器"
         if event.is_quit:
-            return f"🔴 {player} 离开了服务器[{config.display_label}]"
+            return f"[{config.display_label}] 🔴 {player} 离开了服务器"
         if event.is_death:
             if config.enable_local_translation and self._translator is not None:
                 text = self._translator.translate_death(event.death) or "死亡"
             else:
                 text = event.death.text or "死亡"
-            return f"💀 {text}"
+            return f"[{config.display_label}] 💀 {text}"
         if event.is_achievement:
             # 本地翻译开启：直接翻成就名（display_name），固定拼接玩家名
             if config.enable_local_translation and self._translator is not None:
                 name = self._translator.translate_achievement(event.achievement)
                 if name:
-                    return f"🏆 {player} 达成了成就 {name}"
-                return f"🏆 {player} 达成了成就"
+                    return f"[{config.display_label}] 🏆 {player} 达成了成就 {name}"
+                return f"[{config.display_label}] 🏆 {player} 达成了成就"
             # display_text 可能为空（未开翻译 + 服务端仅给 key），
             # 此时退到 display_name，最差也能给出成就 key，避免无信息量的「达成成就」
             text = event.achievement.display_text or event.achievement.display_name
             if not text:
-                return f"🏆 {player} 达成了成就"
+                return f"[{config.display_label}] 🏆 {player} 达成了成就"
 
             # 补玩家名：开启翻译时整句已含玩家名（`X has made the advancement [Y]`），
             # 未开启时只降级到 display.title，那里**只有成就名**。
             # 故先判重，避免出现 `X X has made the advancement [Y]`。
             if event.player_name and event.player_name not in text:
-                return f"🏆 {player} 达成了成就 {text}"
-            return f"🏆 {text}"
+                return f"[{config.display_label}] 🏆 {player} 达成了成就 {text}"
+            return f"[{config.display_label}] 🏆 {text}"
         return ""
 
     @staticmethod
