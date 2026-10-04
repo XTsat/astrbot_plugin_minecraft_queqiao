@@ -9,6 +9,7 @@ Velocity 仅有 nickname/uuid/is_op），因此所有解析一律走 `.get()` �
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 from .constants import (
     EVENT_ACHIEVEMENT,
@@ -127,7 +128,7 @@ def _translate_arg_text(value: object) -> str:
     """把 Translate 模型 args 的单项转成可翻译的纯文本。
 
     鹊桥实测会把死亡消息 args 里的玩家/实体名推成**嵌套组件对象**
-    （如 ``{"key": null, "args": null, "text": "XTxiaotong"}``），
+    （如 ``{"key": null, "args": null, "text": "Player_A"}``），
     直接 ``str()`` 会得到 ``{'key': None, ...}`` 的字典字面量，
     进而被拼进翻译模板（实测日志：`💀 {'key': None, ...}被杀死了`）。
     这里优先递归提取可读文本；提取不到时保留 ``translate``/``key``
@@ -142,6 +143,44 @@ def _translate_arg_text(value: object) -> str:
         key = value.get("translate") or value.get("key")
         return key if isinstance(key, str) and key else ""
     return _component_text(value)
+
+
+def fill_placeholders(
+    template: str,
+    args: list[str],
+    arg_render: Optional[Callable[[str], str]] = None,
+) -> str:
+    """把翻译模板的占位符替换为参数文本。
+
+    Minecraft 翻译模板存在两种占位写法，必须都支持：
+    - 带序号 ``%1$s`` / ``%2$s``（原版与大多数 mod）
+    - 无序号 ``%s``（mod 中文包常用，如 ``%s被%s烧掉了``；实测
+      灵魂主题死亡消息即此形态，旧逻辑只认 ``%n$s`` 导致占位符原样
+      外露成 ``%s的灵魂被%s烧掉了``）
+
+    顺序：先按序号替换 ``%n$s``；剩余 ``%s`` 按出现顺序消费**未被序号
+    占用**的参数；参数不足的残留占位符统一替换为 ``？``，避免把模板
+    裸传给玩家。MC 玩家名/实体名只允许 ``[A-Za-z0-9_]``，参数不可能
+    含 ``%``，因此逐位 replace 安全。
+
+    ``arg_render`` 缺省为原样返回（纯文本机械填充）；翻译层传入查库函数。
+    """
+    render = arg_render or (lambda s: s)
+    if not template:
+        return ""
+    used: set[int] = set()
+    for i, a in enumerate(args, 1):
+        marker = f"%{i}$s"
+        if marker in template:
+            template = template.replace(marker, render(a))
+            used.add(i - 1)
+    if "%s" in template:
+        remaining = [render(a) for idx, a in enumerate(args) if idx not in used]
+        for a in remaining:
+            if "%s" not in template:
+                break
+            template = template.replace("%s", a, 1)
+    return re.sub(r"%\d+\$s", "？", template).replace("%s", "？")
 
 
 def _as_image_source(value: object) -> str:
@@ -232,6 +271,18 @@ class QueQiaoTranslate:
             args=args,
             text=_component_text(data.get("text")),
         )
+
+    @property
+    def render_text(self) -> str:
+        """带参数填充的渲染文本（未开本地翻译时使用）。
+
+        服务端可能把**未格式化的模板**直接放进 ``text``（实测
+        ``%s的灵魂被%s烧掉了``，参数在 ``args`` 里），此时按占位符
+        机械填充；无参数可填时原样返回，由调用方回退兜底文案。
+        """
+        if not self.text:
+            return ""
+        return fill_placeholders(self.text, self.args)
 
 
 @dataclass

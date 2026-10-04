@@ -2288,15 +2288,15 @@ from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as 
 _st30 = _SS30.from_dict({
     "server_type": "Fabric", "server_version": "1.20.1",
     "server_list_ping": {"players": {"online": 2, "max": 20, "sample": [
-        {"name": "XTxiaotong", "id": "cd62632e-bd77-33d1-9516-206063e6d244"},
+        {"name": "Player_A", "id": "00000000-0000-0000-0000-000000000001"},
         {"name": "§6Steve", "id": "00000000-0000-0000-0000-000000000000"},
         {"name": "", "id": "x"},      # 空名跳过
         "not-a-dict",                  # 畸形项跳过
         {"id": "y"},                   # 无名跳过
     ]}}})
-assert _st30.online_player_names == ["XTxiaotong", "Steve"], _st30.online_player_names
+assert _st30.online_player_names == ["Player_A", "Steve"], _st30.online_player_names
 assert _st30.player_sample[0] == \
-    ("XTxiaotong", "cd62632e-bd77-33d1-9516-206063e6d244"), _st30.player_sample[0]
+    ("Player_A", "00000000-0000-0000-0000-000000000001"), _st30.player_sample[0]
 # 真实在线查询形态：sample 带真实玩家名+UUID（对应用户服 8.162.6.112:59209）
 # 无 sample 字段 / 无 players / 空对象 均不得抛异常
 assert _SS30.from_dict({"players": {"online": 0, "max": 20}}).online_player_names == []
@@ -2378,9 +2378,9 @@ assert _i1.client.rcon_calls == 1
 #     对应用户服场景：不开 RCON 也能拿到玩家名
 _i2 = _mk_inst30(_Cli30(connected=True, rcon_out=None,
     status={"server_list_ping": {"players": {"online": 1, "max": 20, "sample": [
-        {"name": "XTxiaotong", "id": "cd62632e-bd77-33d1-9516-206063e6d244"}]}}}))
+        {"name": "Player_A", "id": "00000000-0000-0000-0000-000000000001"}]}}}))
 _r2 = asyncio.run(_i2.fetch_player_list())
-assert _r2.source == "slp" and _r2.names == ["XTxiaotong"], (_r2.source, _r2.names)
+assert _r2.source == "slp" and _r2.names == ["Player_A"], (_r2.source, _r2.names)
 assert _r2.online == 1 and _r2.max == 20
 
 # c3) RCON 失败 + SLP sample 为空但有人数 → source=count
@@ -2913,7 +2913,7 @@ assert "queqiao" not in _server_srv1["rcon_channels"]
 # 重置为 None 模拟重连后，以 force=1（进入面板/手动刷新）触发重新探测
 _mock_instance.queqiao_rcon_ok = None
 async def _fake_queqiao_rcon(cmd: str) -> str:
-    return "There are 1 of a max of 20 players online: XTxiaotong"
+    return "There are 1 of a max of 20 players online: Player_A"
 
 _mock_instance.client.send_rcon_command = _fake_queqiao_rcon  # type: ignore[method-assign]
 import astrbot_plugin_minecraft_queqiao.services.web_api as _wam34b
@@ -2924,7 +2924,7 @@ _server_srv1 = next(
 )
 assert "queqiao" in _server_srv1["rcon_channels"]
 assert _server_srv1["players"]["source"] == "rcon"
-assert _server_srv1["players"]["names"] == ["XTxiaotong"]
+assert _server_srv1["players"]["names"] == ["Player_A"]
 del _mock_instance.client.send_rcon_command  # 还原真实方法
 _wam34b.request.query = {}  # 复位，避免影响后续 (c) 段 force 传递断言
 _mock_instance.client._connected = False  # 复位
@@ -5436,13 +5436,13 @@ assert _t46.translate_death(_d46e.death) == "Astrbot_Queqiao被僵尸杀死了",
 # 回归：曾把 str(dict) 字典字面量拼进模板 → `💀 {'key': None, ...}被杀死了`
 _d46f = QueQiaoEvent.from_dict({
     "post_type": "notice", "event_name": "PlayerDeathEvent",
-    "player": {"nickname": "XTxiaotong"},
+    "player": {"nickname": "Player_A"},
     "death": {"key": "death.attack.genericKill",
-              "args": [{"key": None, "args": None, "text": "XTxiaotong"}],
-              "text": "XTxiaotong was killed"},
+              "args": [{"key": None, "args": None, "text": "Player_A"}],
+              "text": "Player_A was killed"},
 })
 _zh46f = _t46.translate_death(_d46f.death)
-assert _zh46f == "XTxiaotong被杀死了", f"嵌套组件 args 应提取纯文本: {_zh46f}"
+assert _zh46f == "Player_A被杀死了", f"嵌套组件 args 应提取纯文本: {_zh46f}"
 
 # 死亡：args 为 translate 组件（实体名只给翻译键）→ 保留键供查库
 _d46g = QueQiaoEvent.from_dict({
@@ -5538,5 +5538,65 @@ assert "was slain by Zombie" in _f46c, f"开关关闭应保持原文: {_f46c}"
 
 # format_event：args 嵌套组件（实测回归：禁止 {dict} 字面量进转发文本）
 _f46d = _bridge46.format_event(_cfg46, _d46f)
-assert _f46d == "[MC] 💀 XTxiaotong被杀死了", f"format_event 嵌套组件回归: {_f46d}"
+assert _f46d == "[MC] 💀 Player_A被杀死了", f"format_event 嵌套组件回归: {_f46d}"
 print("OK  开关开启走本地翻译（记录+转发），关闭保持原逻辑")
+
+print("\n=== 48. 死亡消息 `%s` 无序占位符填充（互杀场景回归） ===")
+# 回归：两个玩家互相击杀，mod 中文死亡键用无序号 `%s` 占位（实测外露为
+# `%s的灵魂被%s烧掉了`），旧 `_fill` 只认 `%n$s` 导致占位符原样进群。
+
+# 1) key 命中无序模板（翻译库实存键）+ args → 参数按顺序回填
+_d48a = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Player_A"},
+    "death": {"key": "death.attack.spirit_dinosaur_1.entity",
+              "args": ["Player_A", "Player_B"],
+              "text": "Player_A was killed"},
+})
+_zh48a = _t46.translate_death(_d48a.death)
+assert _zh48a == "Player_A被Player_B操纵的史前恐龙灵魂杀死了", \
+    f"无序 %s 模板回填失败: {_zh48a}"
+
+# 2) 无 key、text 是未格式化的中文模板 + args（用户实测形态）
+_d48b = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Player_A"},
+    "death": {"key": "", "args": ["Player_A", "Player_B"],
+              "text": "%s的灵魂被%s烧掉了"},
+})
+_zh48b = _t46.translate_death(_d48b.death)
+assert _zh48b == "Player_A的灵魂被Player_B烧掉了", \
+    f"中文模板占位符填充失败: {_zh48b}"
+
+# 3) 中文文本已渲染（无占位符）→ 仍原样透传
+_d48c = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Player_A"},
+    "death": {"key": "", "args": ["Player_A", "Player_B"],
+              "text": "Player_A的灵魂被Player_B烧掉了"},
+})
+assert _t46.translate_death(_d48c.death) == "Player_A的灵魂被Player_B烧掉了", \
+    "已渲染中文文本应透传"
+
+# 4) 中文模板但 args 缺失 → 原样透传，不误伤
+_d48d = QueQiaoEvent.from_dict({
+    "post_type": "notice", "event_name": "PlayerDeathEvent",
+    "player": {"nickname": "Player_A"},
+    "death": {"key": "", "args": [], "text": "%s的灵魂被%s烧掉了"},
+})
+assert _t46.translate_death(_d48d.death) == "%s的灵魂被%s烧掉了", \
+    "无 args 时应原样透传"
+
+# 5) 序号/无序混合：`%n$s` 优先，`%s` 用剩余参数
+_zh48e = _t46._fill("%1$s把%s烧死了", ["A", "B"])
+assert _zh48e == "A把B烧死了", f"混合占位符填充失败: {_zh48e}"
+
+# 6) args 不足：残留占位符统一 `？`，不再外露模板
+_zh48f = _t46._fill("%s的灵魂被%s烧掉了", ["A"])
+assert _zh48f == "A的灵魂被？烧掉了", f"参数不足兜底失败: {_zh48f}"
+
+# 7) 未开本地翻译：format_event 走 render_text，同样回填占位符
+_f48 = _bridge46.format_event(_cfg46off, _d48b)
+assert _f48 == "[MC] 💀 Player_A的灵魂被Player_B烧掉了", \
+    f"未开翻译时 render_text 填充失败: {_f48}"
+print("OK  `%s` 无序占位符填充 / 中文模板透传 / 混合占位符 / 参数不足兜底 全通过")

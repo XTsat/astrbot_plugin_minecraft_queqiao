@@ -20,7 +20,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from ..core.models import QueQiaoAchievement, QueQiaoTranslate
+from ..core.models import (
+    QueQiaoAchievement,
+    QueQiaoTranslate,
+    fill_placeholders,
+)
 
 # 以这些前缀开头的参数值本身就是翻译键（arg 携带键而非渲染文本）
 _KEY_PREFIXES = (
@@ -41,6 +45,9 @@ _KEY_PREFIXES = (
 
 # 中文（CJK 统一表意文字）检测：含中文则视为已翻译文本
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+# 翻译模板占位符检测：带序号 `%1$s` 与 mod 中文包常用的无序号 `%s`
+_PLACEHOLDER_RE = re.compile(r"%\d+\$s|%s")
 
 
 class Translator:
@@ -140,10 +147,15 @@ class Translator:
         return self.en_to_zh(arg) or arg
 
     def _fill(self, zh_template: str, args: list[str]) -> str:
-        """把中文模板的 `%n$s` 占位依次替换为（翻译后的）参数。"""
-        for i, a in enumerate(args, 1):
-            zh_template = zh_template.replace(f"%{i}$s", self._arg_to_zh(a))
-        return re.sub(r"%\d+\$s", "？", zh_template)
+        """把中文模板的占位符依次替换为（翻译后的）参数。
+
+        同时支持带序号 ``%n$s`` 与 mod 中文包常用的无序号 ``%s``。
+        """
+        return fill_placeholders(zh_template, args, self._arg_to_zh)
+
+    @staticmethod
+    def _has_placeholder(text: str) -> bool:
+        return bool(_PLACEHOLDER_RE.search(text or ""))
 
     # ---- 事件翻译 ----
 
@@ -153,10 +165,6 @@ class Translator:
             return ""
         key, args, text = death.key, death.args, death.text
 
-        # 服务端已翻译成中文：直接透传
-        if not key and text and self._has_cjk(text):
-            return text
-
         if key:
             zh = self.key_to_zh(key)
             if zh:
@@ -165,6 +173,14 @@ class Translator:
         text = (text or "").strip()
         if not text:
             return key or ""
+
+        # 文本已是中文：服务端可能把**未格式化的模板**直接当 text 发出
+        # （实测：`%s的灵魂被%s烧掉了`，参数在 args 里）。此时若仍带
+        # 占位符且有参数，先做参数填充；否则原样透传不二次翻译。
+        if self._has_cjk(text):
+            if args and self._has_placeholder(text):
+                return self._fill(text, args)
+            return text
 
         # 英文整句模板匹配（覆盖服务端只给渲染文本、无 key 的场景）
         for pattern, zh_tpl in self._load_death_templates():

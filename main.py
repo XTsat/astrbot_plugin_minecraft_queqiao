@@ -557,7 +557,8 @@ class MinecraftQueQiaoPlugin(Star):
             if config.enable_local_translation:
                 death_text = self.translator.translate_death(event.death)
             else:
-                death_text = event.death.text or "死亡"
+                # text 可能是未格式化模板（%s占位），render_text 做参数填充
+                death_text = event.death.render_text or "死亡"
             self.metrics.record_event(
                 "death",
                 server_name,

@@ -363,7 +363,8 @@ class MessageBridge:
             if config.enable_local_translation and self._translator is not None:
                 text = self._translator.translate_death(event.death) or "死亡"
             else:
-                text = event.death.text or "死亡"
+                # text 可能是未格式化模板（%s占位），render_text 做参数填充
+                text = event.death.render_text or "死亡"
             return f"[{config.display_label}] 💀 {text}"
         if event.is_achievement:
             # 本地翻译开启：直接翻成就名（display_name），固定拼接玩家名
