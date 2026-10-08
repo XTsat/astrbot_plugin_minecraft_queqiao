@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.6.4-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.6.5-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -10,7 +10,7 @@
 
 Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/17TheWord/QueQiao) mod, bridging group chat with in-game chat and providing server management.
 
-- **Chat bridge**: two-way forwarding between in-game chat and group messages
+- **Chat bridge**: two-way forwarding between in-game chat and group messages; replying to a game message forwarded by the bot automatically prepends `@原玩家名` (the original player name) in-game, so everyone sees who replied
 - **Image forwarding**: group images relayed into the game (players need the [ChatImage](https://github.com/kitUIN/ChatImage) mod installed to render them); in-game images / links are downloaded and sent back to the group
 - **Event broadcast**: player join / quit / death / achievement events forwarded to sessions (death & achievements unsupported on Vanilla/Velocity)
 - **Server management**: status queries, online player list, remote command execution

@@ -60,7 +60,14 @@ class Image:
         return Image(file="base64://" + base64.b64encode(data).decode())
     async def register_to_file_service(self):
         raise RuntimeError("stub: no callback_api_base")
-mc.Plain = Plain; mc.Image = Image
+class Reply:
+    """桩：与真实 Reply 组件字段对齐（id/chain/sender_id/sender_nickname/time/message_str）。"""
+    def __init__(self, id=0, chain=None, sender_id=0, sender_nickname="", time=0,
+                 message_str=""):
+        self.id = id; self.chain = chain or []
+        self.sender_id = sender_id; self.sender_nickname = sender_nickname
+        self.time = time; self.message_str = message_str
+mc.Plain = Plain; mc.Image = Image; mc.Reply = Reply
 sys.modules["astrbot.api.message_components"] = mc
 st = types.ModuleType("astrbot.api.star")
 class Star:
@@ -5600,3 +5607,164 @@ _f48 = _bridge46.format_event(_cfg46off, _d48b)
 assert _f48 == "[MC] 💀 Player_A的灵魂被Player_B烧掉了", \
     f"未开翻译时 render_text 填充失败: {_f48}"
 print("OK  `%s` 无序占位符填充 / 中文模板透传 / 混合占位符 / 参数不足兜底 全通过")
+
+print("\n=== 49. 回复 Bot 消息（QQ 自动 @Bot）仍转发到 MC ===")
+# 场景：群友「回复」Bot 发的游戏消息，QQ 客户端自动在消息前附带 @Bot。
+# AstrBot 唤醒判定（core/pipeline/waking_check/stage.py）会把 At(@Bot) 或
+# Reply(Bot) 标记为 is_at_or_wake_command=True；旧逻辑在 on_message 对唤醒
+# 命令直接 return，导致这类回复永远无法转发到游戏。
+# 修复：不再短路；message_str 里首个 @Bot 已由 aiocqhttp 适配器剥除，
+# 转发到游戏的只是纯回复文本。
+class _Ev49(_Ev26):
+    """带 AstrBot 唤醒判定的外部消息事件（模拟 QQ 回复 Bot 消息的形态）。"""
+    def __init__(self, text="", images=(), is_wake=True):
+        super().__init__(text=text, images=images)
+        self.is_at_or_wake_command = is_wake
+
+def _run49(agen):
+    """消费 on_message 这一 async generator 并返回 yield 结果列表。"""
+    async def _drain():
+        out = []
+        async for item in agen:
+            out.append(item)
+        return out
+    return asyncio.new_event_loop().run_until_complete(_drain())
+
+from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P49
+
+# (a) 回复 Bot 的游戏消息（is_at_or_wake_command=True）→ 仍转发到 MC
+_pi49 = _P49(_Ctx26(), {})
+_cfg49 = SC.from_dict({"server": {"server_name": "S49"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_pi49.message_bridge.register_server(_cfg49)
+_inst49 = _Inst26()
+_pi49.server_manager._servers["S49"] = _inst49
+_ev49a = _Ev49(text="收到，马上来")
+assert _run49(_pi49.on_message(_ev49a)) == []
+assert _inst49.client.sent == [("[QQ]群友A: 收到，马上来", "white")], _inst49.client.sent
+assert _ev49a.stopped is True, "转发成功后应 stop 后续处理"
+
+# (b) 纯 @Bot 无内容 → 不转发（空消息统一过滤，不是 wake 短路的结果）
+_pi49b = _P49(_Ctx26(), {})
+_pi49b.message_bridge.register_server(_cfg49)
+_inst49b = _Inst26()
+_pi49b.server_manager._servers["S49"] = _inst49b
+_ev49b = _Ev49(text="")
+assert _run49(_pi49b.on_message(_ev49b)) == []
+assert _inst49b.client.sent == [], "纯 @Bot 空消息不得转发"
+
+# (c) 配置 auto_forward_prefix 后，回复内容仍按前缀规则过滤
+_cfg49p = SC.from_dict({"server": {"server_name": "S49"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"],
+                "auto_forward_prefix": "!"}})
+_pi49c = _P49(_Ctx26(), {})
+_pi49c.message_bridge.register_server(_cfg49p)
+_inst49c = _Inst26()
+_pi49c.server_manager._servers["S49"] = _inst49c
+_ev49c1 = _Ev49(text="收到，马上来")  # 未命中转发前缀 → 不转发
+assert _run49(_pi49c.on_message(_ev49c1)) == []
+assert _inst49c.client.sent == [], "回复内容未命中转发前缀不得转发"
+_ev49c2 = _Ev49(text="!kick 小明")  # 命中前缀 → 转发且剥掉前缀
+assert _run49(_pi49c.on_message(_ev49c2)) == []
+assert _inst49c.client.sent == [("[QQ]群友A: kick 小明", "white")], _inst49c.client.sent
+print("OK  回复 Bot 消息（wake=True）正常转发 / 纯 @Bot 空消息不转发 / 前缀过滤仍生效")
+
+print("\n=== 50. 回复 Bot 的游戏消息 → 游戏内显示 @原玩家 ===")
+# 场景：群友回复 Bot 转发的游戏消息（如 `[MC]Player_A: 1`），转发到游戏的
+# 内容前拼 `@Player_A`，让游戏内玩家知道是谁在群里回复了他。
+# 解析依据：Reply 组件的 message_str（被引用消息纯文本）按 forward_chat_format
+# 结构反解玩家名；player 段须为合法 Minecraft 玩家名（3-16 位字母/数字/
+# 下划线），格式含 display_name 段时还须与服务器显示名一致（防止把 QQ 聊天
+# 等其它回复误判为游戏消息）。
+from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P50
+from astrbot.api.message_components import Reply as _Reply50
+
+class _Ev50(_Ev49):
+    """带 Reply 组件的外部消息事件（模拟 QQ 回复 Bot 转发的游戏消息）。"""
+    def __init__(self, text="", images=(), reply=None, is_wake=True):
+        super().__init__(text=text, images=images, is_wake=is_wake)
+        self._reply = reply
+    def get_messages(self):
+        msgs = list(self._images)
+        if self._reply is not None:
+            msgs.insert(0, self._reply)
+        return msgs
+
+def _mk50(cfg_dict):
+    """构造独立插件实例 + 注册单台服务器，返回 (plugin, instance)。"""
+    pi = _P50(_Ctx26(), {})
+    cfg = SC.from_dict(cfg_dict)
+    pi.message_bridge.register_server(cfg)
+    inst = _Inst26()
+    pi.server_manager._servers[cfg.server_name] = inst
+    return pi, inst
+
+# (a) 回复默认格式转发的游戏消息 → 转发文本前拼 @玩家名
+_pi50, _inst50 = _mk50({"server": {"server_name": "S50"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50a = _Ev50(text="收到，马上来",
+               reply=_Reply50(id=1, message_str="[MC]Player_A: 1"))
+assert _run49(_pi50.on_message(_ev50a)) == []
+assert _inst50.client.sent == [("[QQ]群友A: @Player_A 收到，马上来", "white")], \
+    _inst50.client.sent
+assert _ev50a.stopped is True, "转发成功后应 stop 后续处理"
+
+# (b) 普通消息（无 Reply 组件）→ 不加 @
+_pi50b, _inst50b = _mk50({"server": {"server_name": "S50"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50b = _Ev49(text="收到，马上来")
+assert _run49(_pi50b.on_message(_ev50b)) == []
+assert _inst50b.client.sent == [("[QQ]群友A: 收到，马上来", "white")], \
+    _inst50b.client.sent
+
+# (c) 回复的是 QQ 聊天（display_name 段 != 服务器显示名）→ 不加 @
+_pi50c, _inst50c = _mk50({"server": {"server_name": "S50"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50c = _Ev50(text="收到",
+               reply=_Reply50(id=1, message_str="[QQ]XiaoMing: 你好"))
+assert _run49(_pi50c.on_message(_ev50c)) == []
+assert _inst50c.client.sent == [("[QQ]群友A: 收到", "white")], \
+    _inst50c.client.sent
+
+# (d) 自定义 forward_chat_format 结构同样能反解
+_pi50d, _inst50d = _mk50({"server": {"server_name": "S50d"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"],
+                "forward_chat_format": "[{display_name}]<{player}> {message}"}})
+_ev50d = _Ev50(text="1", reply=_Reply50(id=1, message_str="[MC]<Player_B> 1"))
+assert _run49(_pi50d.on_message(_ev50d)) == []
+assert _inst50d.client.sent == [("[QQ]群友A: @Player_B 1", "white")], \
+    _inst50d.client.sent
+
+# (e) 玩家名非法（过短）→ 不加 @
+_pi50e, _inst50e = _mk50({"server": {"server_name": "S50"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50e = _Ev50(text="收到", reply=_Reply50(id=1, message_str="[MC]P: 1"))
+assert _run49(_pi50e.on_message(_ev50e)) == []
+assert _inst50e.client.sent == [("[QQ]群友A: 收到", "white")], \
+    _inst50e.client.sent
+
+# (f) 被引用文本为空 → 不加 @
+_pi50f, _inst50f = _mk50({"server": {"server_name": "S50"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50f = _Ev50(text="收到", reply=_Reply50(id=1, message_str=""))
+assert _run49(_pi50f.on_message(_ev50f)) == []
+assert _inst50f.client.sent == [("[QQ]群友A: 收到", "white")], \
+    _inst50f.client.sent
+
+# (g) 自定义服务器显示名（display_name）匹配 → 解析成功
+_pi50g, _inst50g = _mk50({"server": {"server_name": "S50g", "display_name": "生存服"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"]}})
+_ev50g = _Ev50(text="在吗", reply=_Reply50(id=1, message_str="[生存服]Player_C: 1"))
+assert _run49(_pi50g.on_message(_ev50g)) == []
+assert _inst50g.client.sent == [("[QQ]群友A: @Player_C 在吗", "white")], \
+    _inst50g.client.sent
+
+# (h) 格式不含 display_name 段 → 无显示名校验，直接反解玩家名
+_pi50h, _inst50h = _mk50({"server": {"server_name": "S50h"},
+    "message": {"target_sessions": ["umo:GroupMessage:9"],
+                "forward_chat_format": "{player}: {message}"}})
+_ev50h = _Ev50(text="1", reply=_Reply50(id=1, message_str="Player_D: 1"))
+assert _run49(_pi50h.on_message(_ev50h)) == []
+assert _inst50h.client.sent == [("[QQ]群友A: @Player_D 1", "white")], \
+    _inst50h.client.sent
+print("OK  回复游戏消息反解玩家名 / 非游戏消息不加 @ / 自定义格式与显示名 / 非法玩家名 全通过")

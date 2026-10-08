@@ -6,6 +6,7 @@
 
 import asyncio
 import contextlib
+import re
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -853,10 +854,12 @@ class MinecraftQueQiaoPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """处理外部消息：自定义指令匹配与转发到 MC（含图片）。"""
-        if event.is_at_or_wake_command:
-            return
+        """处理外部消息：自定义指令匹配与转发到 MC（含图片）。
 
+        不要用 `is_at_or_wake_command` 短路：QQ 回复/转发 Bot 消息时客户端
+        会自动附带 @Bot（AstrBot 唤醒判定会因此标记唤醒命令），若在此 return，
+        这类回复内容将永远无法转发到游戏。空消息（无文本无图片）由下方统一过滤。
+        """
         umo = event.unified_msg_origin
         text = event.get_message_str().strip()
 
@@ -899,6 +902,49 @@ class MinecraftQueQiaoPlugin(Star):
             return []
         components = event.get_messages() or []
         return [comp for comp in components if isinstance(comp, Image)]
+
+    @staticmethod
+    def _extract_reply_mention(
+        event: AstrMessageEvent, config: ServerConfig
+    ) -> str | None:
+        """从「回复消息」的被引用文本解析游戏玩家名。
+
+        QQ 群友回复 Bot 转发的游戏消息时，AstrBot 事件链携带 Reply 组件，
+        其 message_str 为被引用消息的纯文本（由 forward_chat_format 渲染，
+        形如 `[MC]Player_A: 1`）。按该服务器的 forward_chat_format 结构生成
+        解析正则：player 段须为合法 Minecraft 玩家名（3-16 位字母/数字/
+        下划线），格式含 display_name 段时还须与服务器显示名一致（防止把
+        QQ 聊天等其它回复误判为游戏消息）。解析成功返回玩家名，转发时在
+        游戏内显示 `@玩家名`；失败返回 None（不加 @，转发照常）。
+        """
+        try:
+            from astrbot.api.message_components import Reply
+        except Exception:
+            return None
+        components = event.get_messages() or []
+        reply = next((comp for comp in components if isinstance(comp, Reply)), None)
+        if reply is None:
+            return None
+        referenced = (getattr(reply, "message_str", "") or "").strip()
+        if not referenced:
+            return None
+
+        # 占位符 → 捕获组，其余字面部分转义后整体匹配
+        pattern = re.escape(config.forward_chat_format)
+        pattern = pattern.replace(re.escape("{display_name}"), r"(?P<display>.*?)")
+        pattern = pattern.replace(
+            re.escape("{player}"), r"(?P<player>[A-Za-z0-9_]{3,16})"
+        )
+        pattern = pattern.replace(re.escape("{message}"), r"(?P<msg>.*)")
+        match = re.fullmatch(pattern, referenced, re.DOTALL)
+        if not match:
+            return None
+        if (
+            "display" in match.groupdict()
+            and match.group("display") != config.server_label
+        ):
+            return None
+        return match.group("player")
 
     @staticmethod
     def _describe_image(comp: object | None) -> str:
@@ -989,6 +1035,11 @@ class MinecraftQueQiaoPlugin(Star):
                 continue
 
             message = content
+            # 回复 Bot 转发的游戏消息时，被引用文本可反解出游戏玩家名，
+            # 在游戏内显示 `@玩家名`（回声抑制仍以 content 为准，不含 @）
+            mention = self._extract_reply_mention(event, config)
+            if mention:
+                message = f"@{mention}" + (f" {message}" if message else "")
             if image_codes:
                 message = (message + " " if message else "") + " ".join(image_codes)
 

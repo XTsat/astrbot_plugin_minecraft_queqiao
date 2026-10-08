@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.6.4-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.6.5-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -10,7 +10,7 @@
 
 通过 [鹊桥（QueQiao）](https://github.com/17TheWord/QueQiao) 模组连接 Minecraft 服务器与 AstrBot，实现群服消息互通与服务器管理。
 
-- **群服互通**：游戏内聊天与群消息双向转发
+- **群服互通**：游戏内聊天与群消息双向转发；回复 Bot 转发的游戏消息时，转发进游戏的内容自动附 `@原玩家名`，游戏内一目了然是谁在群里回复
 - **图片互通**：群消息图片转发进游戏（需玩家安装 [ChatImage](https://github.com/kitUIN/ChatImage) 模组渲染）；游戏内图片 / 链接自动下载后发回群
 - **事件播报**：玩家进出 / 死亡 / 成就事件转发到指定会话（死亡与成就原版端与 Velocity 不支持）
 - **服务器管理**：状态查询、在线玩家列表、远程指令执行
