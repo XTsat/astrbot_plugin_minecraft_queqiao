@@ -207,6 +207,7 @@ class ServerConfig:
 
     # ---- 功能开关 ----
     enable_ai_chat: bool = True
+    ai_persona_id: str = ""
     ai_chat_prefix: str = "ai"
     text2image: bool = True
     # 互通终端加载最近几天的日志分片（0=全部保留分片），每台服务器独立
@@ -533,6 +534,7 @@ class ServerConfig:
                 ),
             ),
             enable_ai_chat=_to_bool(data.get("enable_ai_chat"), True),
+            ai_persona_id=_to_str(data.get("ai_persona_id"), ""),
             ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "ai"),
             text2image=_to_bool(data.get("text2image"), True),
             terminal_days=_to_int_clamped(

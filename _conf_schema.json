@@ -7,6 +7,7 @@
   "mc_servers": {
     "type": "template_list",
     "description": "MC服务器列表",
+    "default": [],
     "templates": {
       "server": {
         "name": "MC服务器",
@@ -99,6 +100,12 @@
             "description": "启用 AI 对话功能",
             "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
             "default": true
+          },
+          "ai_persona_id": {
+            "type": "string",
+            "description": "AI 对话人格 ID",
+            "hint": "可选，填写 AstrBot 中已有的人格名称，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
+            "default": ""
           },
           "ai_chat_prefix": {
             "type": "string",

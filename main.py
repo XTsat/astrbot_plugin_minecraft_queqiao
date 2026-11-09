@@ -211,6 +211,7 @@ class MinecraftQueQiaoPlugin(Star):
     # message 子对象，Web API 侧先展平再交给本方法。
     SOFT_CONFIG_KEYS = (
         "enable_ai_chat",
+        "ai_persona_id",
         "ai_chat_prefix",
         "enable_local_translation",
         "forward_chat_to_astrbot",
@@ -810,7 +811,7 @@ class MinecraftQueQiaoPlugin(Star):
             f"[{PLUGIN_NAME}][{server_name}] AI 提问来自 {player.display_name}: {question}"
         )
 
-        reply = await self._ask_llm(event, question)
+        reply = await self._ask_llm(config, event, question)
         self.metrics.record_ai_chat(
             server_name, player.display_name, question, bool(reply)
         )
@@ -843,18 +844,37 @@ class MinecraftQueQiaoPlugin(Star):
                 f"@{player.display_name} {reply}", config.broadcast_color
             )
 
-    async def _ask_llm(self, event: QueQiaoEvent, question: str) -> str:
+    async def _ask_llm(
+        self, config: ServerConfig, event: QueQiaoEvent, question: str
+    ) -> str:
         """调用 AstrBot LLM，返回纯文本回复；不可用时返回空串。
 
         使用 `get_using_provider` + `text_chat`，与 AstrBot 4.x 的 provider 接口一致。
+        - uma 优先取该服务器的首个 target_sessions，以匹配对应适配器的 provider；
+          无 target_sessions 时 uma=None，回退默认 provider。
+        - 若配置了 ai_persona_id，取该人格 prompt 作为 system_prompt，与 UMO 会话
+          默认人格解耦，用户可自行选择对话人格。
         """
         try:
-            provider = self.context.get_using_provider(umo=None)
+            uma = config.target_sessions[0] if config.target_sessions else None
+            provider = self.context.get_using_provider(umo=uma)
             if provider is None:
                 logger.warning(f"[{PLUGIN_NAME}] 未找到可用的 LLM 提供商")
                 return ""
 
-            response = await provider.text_chat(prompt=question)
+            system_prompt = None
+            persona_id = getattr(config, "ai_persona_id", "") or ""
+            if persona_id:
+                persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
+                if persona:
+                    system_prompt = str(persona.get("prompt") or "").strip() or None
+
+            if system_prompt:
+                response = await provider.text_chat(
+                    system_prompt=system_prompt, prompt=question
+                )
+            else:
+                response = await provider.text_chat(prompt=question)
             return (getattr(response, "completion_text", "") or "").strip()
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] LLM 调用失败: {exc}")
@@ -1006,6 +1026,10 @@ class MinecraftQueQiaoPlugin(Star):
         """
         umo = event.unified_msg_origin
         text = event.get_message_str().strip()
+
+        # 过滤机器人自身消息，避免 QQ<->MC 回环导致卡死
+        if event.get_sender_id() == event.get_self_id():
+            return
 
         # 图片不参与文本匹配，但可随消息一起转发到 MC
         images = self._extract_images(event)
@@ -1205,9 +1229,10 @@ class MinecraftQueQiaoPlugin(Star):
                 )
                 continue
             # 记录以防止该消息从游戏回传时形成回声。
-            # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
-            # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
-            self.message_bridge.mark_forwarded(server_name, content)
+            # 记录实际广播到 MC 的 formatted 文本，与 forward_event 中
+            # _is_echo 比对的 event.message 保持一致（均含格式前缀），
+            # 才能正确抑制 QQ->MC->QQ 的回声刷屏。
+            self.message_bridge.mark_forwarded(server_name, formatted)
             self.metrics.record_relay_to_mc(server_name)
             relayed = True
             # QQ → 游戏方向的转发同时写入互通终端，与游戏事件同流展示
