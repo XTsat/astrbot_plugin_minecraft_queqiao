@@ -1089,6 +1089,7 @@ body {
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
+  margin-bottom: 16px;
 }
 
 .settings-group-head {
@@ -1111,17 +1112,34 @@ body {
 
 .settings-row {
   display: grid;
-  grid-template-columns: 130px 400px minmax(0, 1fr);
+  grid-template-columns: 130px 1fr auto;
+  gap: 10px 12px;
   align-items: center;
-  gap: 10px;
   font-size: 13px;
+  margin-bottom: 10px;
 }
 
 .settings-row-label {
+  grid-column: 1;
   color: var(--text-secondary);
 }
 
-.settings-row-control input[type='number'],
+.settings-row-control {
+  grid-column: 2;
+}
+
+.settings-row-hint {
+  grid-column: 3;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  padding-left: 12px;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  opacity: 0.85;
+  max-width: 100%;
+}
 .settings-row-control input[type='text'],
 .settings-row-control textarea {
   width: 100%;
@@ -2450,13 +2468,6 @@ body {
   .terminal-panel { height: 60vh; min-height: 320px; }
 }
 
-
-/* ==========================================================================
-   Dashboard-embedded Config View (原独立 config 页样式并入 dashboard)
-   ========================================================================== */
-  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.4);
-}
-
 * {
   box-sizing: border-box;
   margin: 0;
@@ -2717,20 +2728,21 @@ body {
 .entry-card-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
+  gap: 8px;
+  padding: 10px 14px;
   background: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-color);
 }
 
 .entry-card-header .entry-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 14px;
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
 }
 
 .entry-card-header .entry-badge {
@@ -2757,8 +2769,68 @@ body {
   color: var(--text-muted);
 }
 
+.entry-toggle-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.entry-toggle-enable {
+  width: 36px;
+  height: 18px;
+  accent-color: var(--mc-green);
+  cursor: pointer;
+}
+
+.entry-card-header .entry-card-del {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.entry-card-header .entry-card-del:hover {
+  color: var(--text-danger);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+}
+
+.entry-card-header .entry-card-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.entry-card-header .entry-card-toggle:hover {
+  background: var(--bg-hover);
+}
+
 .entry-card-body {
   padding: 8px 14px 12px;
+}
+
+.entry-toggle {
+  margin-left: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.entry-toggle:hover {
+  background: var(--bg-hover);
 }
 
 .entry-add {

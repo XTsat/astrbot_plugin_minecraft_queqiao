@@ -360,6 +360,12 @@ class WebApiController:
                         ["POST"],
                         "清空某台服务器的性能监控采样数据（不可恢复）",
                     ),
+                    (
+                        "/personas",
+                        self.get_personas,
+                        ["GET"],
+                        "获取 AstrBot 框架中所有可用人格列表（用于 AI 聊天人格选择）",
+                    ),
                 ]
             )
 
@@ -393,6 +399,27 @@ class WebApiController:
         data["reconnecting_servers"] = reconnecting
         data["exhausted_servers"] = exhausted
         return json_response(data)
+
+    async def get_personas(self) -> Any:
+        """获取 AstrBot 框架中所有可用人格列表。
+
+        用于 AI 聊天人格选择下拉/复选框。
+        """
+        personas = []
+        try:
+            pm = getattr(self.context, "persona_manager", None)
+            if pm is not None:
+                all_personas = getattr(pm, "personas_v3", None) or []
+                for p in all_personas:
+                    # 兼容 dict 或对象
+                    name = p.get("name") if isinstance(p, dict) else getattr(
+                        p, "name", None
+                    ) or getattr(p, "prompt_name", None) or str(p)
+                    if name:
+                        personas.append({"name": name})
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 获取人格列表失败: {exc}")
+        return json_response({"personas": personas})
 
     async def get_servers(self) -> Any:
         """获取所有服务器列表及其连接状态，并附带各服务器的实时状态与在线玩家。

@@ -104,8 +104,9 @@
           "ai_persona_id": {
             "type": "string",
             "description": "AI 对话人格 ID",
-            "hint": "可选，填写 AstrBot 中已有的人格名称，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
-            "default": ""
+            "hint": "可选，选择 AstrBot 中已有的人格，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
+            "default": "",
+            "render_type": "persona_select"
           },
           "ai_chat_prefix": {
             "type": "string",
