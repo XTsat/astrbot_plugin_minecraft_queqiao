@@ -263,9 +263,22 @@
               "e33chat_media_dir": {
                 "type": "string",
                 "description": "E33Chat 服务端媒体目录",
-                "hint": "E33Chat 模式必填：填写 E33Chat 服务端实际使用的 e33chat-media 目录（服务端 media_enabled 需开启，默认开启），AstrBot 运行账户必须能读取和写入（远程服务器需挂载共享目录）。该目录用于群图写入和游戏图片读取；留空或不可写时，群图不会回退到 ChatImage",
+                "hint": "仅本地/远程共享目录后端需要：填写 E33Chat 服务端媒体目录；推荐使用 MCSManager 面板 API；ChatImage 与 E33Chat 是不同模组链路，请按服务端安装的模组二选一",
                 "default": ""
               },
+              "e33chat_media_backend": {
+                "type": "string",
+                "description": "E33Chat 媒体存储方式",
+                "hint": "推荐 MCSManager 面板 API；本地/共享目录仅适用于 AstrBot 已能直接访问服务端媒体目录的情况",
+                "options": ["local", "mcsm"],
+                "default": "local"
+              },
+              "mcsm_panel_url": {"type": "string", "description": "MCSManager 面板地址", "hint": "如 http://服务器IP:23333/；运行 AstrBot 的主机需能访问", "default": ""},
+              "mcsm_api_key": {"type": "string", "description": "MCSManager API Key", "hint": "在面板用户/API 设置中创建；请勿公开分享", "default": ""},
+              "mcsm_daemon_id": {"type": "string", "description": "MCSManager Daemon ID", "hint": "在面板节点信息中查看", "default": ""},
+              "mcsm_instance_uuid": {"type": "string", "description": "MCSManager 实例 UUID", "hint": "在实例详情或实例链接中查看", "default": ""},
+              "mcsm_media_dir": {"type": "string", "description": "MCSManager 实例内媒体目录", "hint": "相对于实例根目录的路径，如 /world/serverconfig/e33chat-media；须用面板文件管理确认", "default": ""},
+              "mcsm_daemon_url": {"type": "string", "description": "Daemon 文件传输地址（高级，可选）", "hint": "通常留空，插件默认使用 MCSManager API 返回的 Daemon 地址。只有 AstrBot 无法访问该地址（如返回 localhost 或错误的内网地址）时，填写 AstrBot 可访问的 Daemon 地址和端口，如 http://10.x.x.x:24444。此项不是 MCSManager 面板地址", "default": ""},
               "forward_bot_self_messages": {
                 "type": "bool",
                 "description": "转发机器人自己的消息，不剥离唤醒词",

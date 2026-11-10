@@ -2368,6 +2368,33 @@ assert ServerConfig.from_dict(
 assert ServerConfig.from_dict(
     {"message": {"forward_image_from_mc": "true"}}
 ).forward_image_from_mc is True
+_mcsm_cfg = ServerConfig.from_dict({"message": {
+    "e33chat_media_backend": "mcsm",
+    "mcsm_panel_url": " http://10.0.0.5:23333 ",
+    "mcsm_api_key": " key ",
+    "mcsm_daemon_id": " daemon ",
+    "mcsm_instance_uuid": " uuid ",
+    "mcsm_media_dir": "/world/serverconfig/e33chat-media/",
+    "mcsm_daemon_url": "http://10.0.0.8:24444",
+}})
+assert _mcsm_cfg.e33chat_media_backend == "mcsm"
+assert (_mcsm_cfg.mcsm_panel_url, _mcsm_cfg.mcsm_api_key) == ("http://10.0.0.5:23333", "key")
+assert (_mcsm_cfg.mcsm_daemon_id, _mcsm_cfg.mcsm_instance_uuid) == ("daemon", "uuid")
+assert _mcsm_cfg.mcsm_media_dir == "/world/serverconfig/e33chat-media/"
+assert _mcsm_cfg.mcsm_daemon_url == "http://10.0.0.8:24444"
+assert ServerConfig.from_dict({}).e33chat_media_backend == "local"
+from astrbot_plugin_minecraft_queqiao.services.mcsmanager_media import MCSManagerMedia as _MCSMMedia
+_mcsm_media = _MCSMMedia("http://10.0.0.5:23333", "key", "daemon", "uuid",
+                         "/world/serverconfig/e33chat-media", "http://10.0.0.8:24444")
+assert _mcsm_media._transfer_url({"addr": "localhost:24444"}, "upload/token") == "http://10.0.0.8:24444/upload/token"
+_mcsm_default = _MCSMMedia("http://10.0.0.5:23333", "key", "daemon", "uuid", "/media")
+assert _mcsm_default._transfer_url({"addr": "localhost:24444"}, "download/token/file") == "http://localhost:24444/download/token/file"
+try:
+    _MCSMMedia("", "", "", "", "")._validate()
+except ValueError:
+    pass
+else:
+    raise AssertionError("MCSManager 配置缺失时必须拒绝请求")
 
 # (f) 端到端：游戏内 CICode 图片 → 文本剥离 + 图片组件发送
 _sent29 = []

@@ -251,6 +251,13 @@ class ServerConfig:
     auto_forward_prefix: str = ""
     # E33Chat 服务端媒体目录；仅当 AstrBot 可读取该目录时才能转发 e33chat://media 图片
     e33chat_media_dir: str = ""
+    e33chat_media_backend: str = "local"
+    mcsm_panel_url: str = ""
+    mcsm_api_key: str = ""
+    mcsm_daemon_id: str = ""
+    mcsm_instance_uuid: str = ""
+    mcsm_media_dir: str = ""
+    mcsm_daemon_url: str = ""
     # 游戏 → 外部图片来源：默认保留 ChatImage / 图片链接处理，E33Chat 模式额外读取服务端媒体目录
     mc_image_mode: str = "chatimage"
     # 同时保留唤醒消息原文并转发机器人自己的群消息；插件自身发出的消息仍由回声标记拦截
@@ -593,6 +600,18 @@ class ServerConfig:
             target_sessions=target_sessions,
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
             e33chat_media_dir=_to_str(message.get("e33chat_media_dir"), "").strip(),
+            e33chat_media_backend=(
+                "mcsm"
+                if _to_str(message.get("e33chat_media_backend"), "local").strip().lower()
+                == "mcsm"
+                else "local"
+            ),
+            mcsm_panel_url=_to_str(message.get("mcsm_panel_url"), "").strip(),
+            mcsm_api_key=_to_str(message.get("mcsm_api_key"), "").strip(),
+            mcsm_daemon_id=_to_str(message.get("mcsm_daemon_id"), "").strip(),
+            mcsm_instance_uuid=_to_str(message.get("mcsm_instance_uuid"), "").strip(),
+            mcsm_media_dir=_to_str(message.get("mcsm_media_dir"), "").strip(),
+            mcsm_daemon_url=_to_str(message.get("mcsm_daemon_url"), "").strip(),
             mc_image_mode=(
                 "e33chat"
                 if _to_str(message.get("mc_image_mode"), "chatimage").strip().lower()

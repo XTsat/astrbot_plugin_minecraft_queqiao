@@ -404,6 +404,13 @@ async def download_image_bytes(
     timeout: float = IMAGE_DOWNLOAD_TIMEOUT,
     max_bytes: int = MAX_IMAGE_DOWNLOAD_BYTES,
     e33chat_media_dir: str = "",
+    e33chat_media_backend: str = "local",
+    mcsm_panel_url: str = "",
+    mcsm_api_key: str = "",
+    mcsm_daemon_id: str = "",
+    mcsm_instance_uuid: str = "",
+    mcsm_media_dir: str = "",
+    mcsm_daemon_url: str = "",
 ) -> bytes | None:
     """把图片引用取成本地字节；失败返回 None。
 
@@ -413,9 +420,23 @@ async def download_image_bytes(
     """
     e33chat_match = _E33CHAT_MEDIA_RE.fullmatch(url)
     if e33chat_match:
+        media_id = url.rsplit("/", 1)[-1].lower()
+        if e33chat_media_backend == "mcsm":
+            try:
+                from services.mcsmanager_media import MCSManagerMedia
+
+                return await MCSManagerMedia(
+                    mcsm_panel_url, mcsm_api_key, mcsm_daemon_id,
+                    mcsm_instance_uuid, mcsm_media_dir, mcsm_daemon_url,
+                ).download(media_id)
+            except Exception as exc:
+                logger.warning(
+                    f"[{PLUGIN_NAME}] 从 MCSManager 读取 E33Chat 媒体失败 "
+                    f"{media_id}（{type(exc).__name__}；详情可能含敏感凭据，已隐藏）"
+                )
+                return None
         if not e33chat_media_dir:
             return None
-        media_id = url.rsplit("/", 1)[-1].lower()
         media_max_bytes = E33CHAT_MEDIA_MAX_FILE_BYTES
         try:
             root = Path(e33chat_media_dir).expanduser().resolve()
@@ -705,7 +726,15 @@ class MessageBridge:
         converted: list[str] = []
         for ref in refs:
             data = await download_image_bytes(
-                ref, e33chat_media_dir=config.e33chat_media_dir
+                ref,
+                e33chat_media_dir=config.e33chat_media_dir,
+                e33chat_media_backend=config.e33chat_media_backend,
+                mcsm_panel_url=config.mcsm_panel_url,
+                mcsm_api_key=config.mcsm_api_key,
+                mcsm_daemon_id=config.mcsm_daemon_id,
+                mcsm_instance_uuid=config.mcsm_instance_uuid,
+                mcsm_media_dir=config.mcsm_media_dir,
+                mcsm_daemon_url=config.mcsm_daemon_url,
             )
             if data is None:
                 continue

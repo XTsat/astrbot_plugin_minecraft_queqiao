@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import uuid
 import contextlib
 import functools
 import re
@@ -242,6 +243,13 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_image_from_mc",
         "auto_forward_prefix",
         "e33chat_media_dir",
+        "e33chat_media_backend",
+        "mcsm_panel_url",
+        "mcsm_api_key",
+        "mcsm_daemon_id",
+        "mcsm_instance_uuid",
+        "mcsm_media_dir",
+        "mcsm_daemon_url",
         "mc_image_mode",
         "target_sessions",
         "terminal_days",
@@ -1768,9 +1776,30 @@ class MinecraftQueQiaoPlugin(Star):
                         )
                         media_id = None
                         if data:
-                            media_id, reason = await store_e33chat_media(
-                                data, config.e33chat_media_dir
-                            )
+                            if config.e33chat_media_backend == "mcsm":
+                                try:
+                                    from services.mcsmanager_media import MCSManagerMedia
+
+                                    media_id = uuid.uuid4().hex
+                                    await MCSManagerMedia(
+                                        config.mcsm_panel_url,
+                                        config.mcsm_api_key,
+                                        config.mcsm_daemon_id,
+                                        config.mcsm_instance_uuid,
+                                        config.mcsm_media_dir,
+                                        config.mcsm_daemon_url,
+                                    ).upload(media_id, data)
+                                    reason = ""
+                                except Exception as exc:
+                                    media_id = None
+                                    reason = (
+                                        "MCSManager 媒体上传失败（"
+                                        f"{type(exc).__name__}；详情可能含敏感凭据，已隐藏）"
+                                    )
+                            else:
+                                media_id, reason = await store_e33chat_media(
+                                    data, config.e33chat_media_dir
+                                )
                         if media_id:
                             image_codes.append(
                                 build_e33chat_media_code(

@@ -1566,6 +1566,13 @@ class WebApiController:
                 "forward_image_from_mc",
                 "auto_forward_prefix",
                 "e33chat_media_dir",
+                "e33chat_media_backend",
+                "mcsm_panel_url",
+                "mcsm_api_key",
+                "mcsm_daemon_id",
+                "mcsm_instance_uuid",
+                "mcsm_media_dir",
+                "mcsm_daemon_url",
                 "mc_image_mode",
             ):
                 if key not in message_payload:

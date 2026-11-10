@@ -199,7 +199,7 @@
 
 ### 图片转发到游戏内
 
-开启 `forward_image_to_mc` 后，群消息以及已开启机器人自身转发的管道回复/自身群消息中的图片，会按「游戏图片模式」转发进游戏。`chatimage` 模式继续广播图片 URL；`e33chat` 模式把图片原始字节写入 `e33chat_media_dir`，再广播 E33Chat 媒体引用。
+开启 `forward_image_to_mc` 后，群消息以及已开启机器人自身转发的管道回复/自身群消息中的图片，会按「游戏图片模式」转发进游戏。**ChatImage 和 E33Chat 是两条不同链路，按服务端安装的模组任选其一即可**：ChatImage 模式为 ChatImage 模组准备，通过图片 URL 转发；E33Chat 模式为 E33Chat 模组准备，通过服务端媒体 ID 转发。
 
 ChatImage 模式示例：
 
@@ -213,31 +213,31 @@ E33Chat 模式示例：
 [QQ]群友A: [[CICode,url=e33chat://media/0123456789abcdef0123456789abcdef,name=图片]]
 ```
 
-- `chatimage` 模式要求玩家端安装 [ChatImage](https://github.com/kitUIN/ChatImage)，并确保图片 URL 对玩家客户端可达；没有公开 URL 时可配置 `enable_image_upload` 与 `image_upload_services`（见下方）
-- `e33chat` 模式要求启用 E33Chat 服务端媒体托管（`media_enabled`，默认开启），并确保 AstrBot 对服务端实际使用的媒体目录有读写权限。游戏→群可读取 E33Chat 媒体 ID、`E33Emote` 与 `ChatUpgrade` 图片标记，也继续复用 CICode 图片 URL 链路。文件写入失败、图片超过 8 MiB 或目录配额不足时，该图片会跳过并记录原因，不会回退到 ChatImage
+- `chatimage` 模式用于安装了 [ChatImage](https://github.com/kitUIN/ChatImage) 的服务端；AstrBot 转发可访问的图片 URL，没有可访问 URL 时可配置 `enable_image_upload` 与 `image_upload_services`
+- `e33chat` 模式用于安装了 E33Chat 的服务端，需要开启服务端媒体托管（`media_enabled`）。推荐使用下方的 MCSManager 面板 API，让 AstrBot 通过面板读写服务端媒体；游戏→群可读取 E33Chat 媒体 ID、`E33Emote` 与 `ChatUpgrade` 图片标记，并继续支持 CICode 图片 URL
 - 群 → 游戏与游戏 → 群仍分别受 `forward_image_to_mc` / `forward_image_from_mc` 控制；模式选择决定开启方向使用哪条图片链路
 - 图片不受 `auto_forward_prefix` 限制；启用图片转发后，裸图片消息也可转发。附带的文字会随图片一起转发
 
-#### 配置 E33Chat 共享媒体目录
+#### E33Chat 媒体配置（推荐：MCSManager 面板 API）
 
-1. 确认 Minecraft 服务端安装了支持服务端媒体托管的 E33Chat 版本；服务端配置 `media_enabled` 必须为 `true`（默认开启）。`media_auto_clean` 默认也开启，会清理 7 天前的媒体文件；关闭后文件保留，但仍受 512 MiB 总配额限制。
-2. 在 MCSM 选择正确的实例，查看 `server.properties` 中的 `level-name`（默认 `world`），进入该存档目录下的 `serverconfig/e33chat-media`。E33Chat 服务端会在这里保存无扩展名的 32 位小写十六进制 ID 文件；若目录/文件尚不存在，先从游戏客户端发送一张图片并刷新文件列表。不要填 MCSM 面板网址、实例根目录、`serverconfig` 或媒体目录的父目录。
-3. 在 MCSM 主机的文件系统中定位这个**媒体目录本身**，并通过 SMB/NFS 共享给 ZeroTier 网段。若 MCSM 主机是 Windows：在目录属性的「共享」中启用高级共享、共享名设为 `e33chat-media`，给专用账户共享权限「更改」，并在「安全」页给同一账户 NTFS「修改」权限；防火墙只允许 ZeroTier 网段访问 SMB。不要把 SMB 端口暴露到公网。若 MCSM 主机是 Linux，使用 Samba/NFS 导出该实际目录，并确认共享账户和 Minecraft 服务账户都能读写。Windows AstrBot 可用 UNC `\\10.x.x.x\e33chat-media`；Linux 可把共享挂载到 `/mnt/e33chat-media`。
-4. 若 AstrBot 在 Docker/容器中运行，先让容器宿主机挂载 SMB/NFS，再将宿主机挂载目录 bind mount 到容器路径，例如 `/mnt/e33chat-media`。插件配置必须填写容器内路径，不能填写 MCSM 的 Linux 路径、宿主机路径或 Windows 映射盘符，除非该路径确实映射进容器。
-5. 用运行 AstrBot 的同一账户/容器验证共享：能列出 ID 文件、读取一张已有图片，并能新建后删除临时文件。若 AstrBot 是 Windows 服务，在 `services.msc` 查看其「登录」账户，并确保该身份能访问共享；映射盘符可能在服务中不可见。只在 MCSM 网页文件管理器里看到文件不代表 AstrBot 有文件系统访问权限。Windows 示例路径为 `\\10.0.0.2\e33chat-media`；Linux 挂载后的示例为 `/mnt/e33chat-media`。
-6. 打开 AstrBot 的鹊桥插件 Dashboard，选中对应 Minecraft 服务器，在「转发功能」里展开图片转发设置，将「游戏图片模式」设为 `E33Chat 服务端媒体`，把上一步验证过的**目录路径**填入「E33Chat 服务端媒体目录」（`e33chat_media_dir`），不要填文件名、MCSM URL 或上级目录。按需要分别开启「外部 → MC 图片转发」和「MC → 外部 图片转发」，点击保存。
-7. 分方向验证：群里发送小于 8 MiB 的图片，确认游戏内显示且目录新增一个无扩展名的 ID 文件；游戏内发送图片，确认目标群收到图片组件。若群图没有进入游戏，先查看 AstrBot 日志中的目录写入错误；若游戏图未到群，确认游戏事件文本中的媒体 ID / 图片标记以及该 ID 文件是否仍在共享目录。
+先确认服务端安装的是 E33Chat，并开启 `media_enabled`。然后在插件 Dashboard 的「转发功能」中选择「游戏图片模式：E33Chat 服务端媒体」，再选择「媒体存储方式：MCSManager 面板 API」，填写：
 
-如果 MCSM 上的路径是 Linux 路径而 AstrBot 是 Windows，不能把 Linux 路径原样填入 Windows 输入框；需要先在 Windows 主机挂载 SMB/NFS 共享并填写挂载后的路径（例如 `Z:\\e33chat-media` 或 `\\\\10.x.x.x\\minecraft\\serverconfig\\e33chat-media`）。如果 AstrBot 在 Docker 中，填写容器内部挂载路径（例如 `/mnt/e33chat-media`），同时在 Docker 卷配置中把远端共享映射到该路径。ZeroTier 负责两台机器的网络连通，不会自动把远端文件路径变成本机文件路径。
+- 面板地址、API Key、目标节点 Daemon ID、实例 UUID：可在 MCSManager 面板和节点/实例详情中找到。API Key 使用面板用户权限，请妥善保管。
+- 实例内媒体目录：在目标实例的文件管理器中找到 E33Chat 的 `e33chat-media` 目录，填写从实例根目录开始的路径，例如 `/world/serverconfig/e33chat-media`。不要填 Linux 主机上的 `/opt/...` 绝对路径。
+- Daemon 文件传输地址（高级，可选）：通常留空，插件会使用 MCSManager API 返回的地址。只有 AstrBot 无法访问该地址（例如返回 `localhost` 或错误的内网地址）时，才填写 AstrBot 可访问的 Daemon 地址和端口。这里填写的不是面板地址。
+
+AstrBot 所在主机需要能访问 MCSManager 面板和 Daemon 文件传输端口。保存后分别测试群→游戏、游戏→群图片转发。MCSManager API 模式不需要挂载目录，也不需要填写上面的本地媒体目录。
+
+**备选：本地/共享目录。** 将 E33Chat 的媒体目录共享或挂载到 AstrBot 可访问的位置，在「媒体存储方式」选择「本地/共享目录」，然后把该位置填入「E33Chat 服务端媒体目录」。Windows 可填写 UNC 路径（如 `\\10.x.x.x\e33chat-media`）；Linux 可填写已挂载路径（如 `/mnt/e33chat-media`）。
 
 ### 游戏内图片转发到外部会话
 
 开启 `forward_image_from_mc` 后，游戏内图片会按 `mc_image_mode` 选择的方式下载并作为图片发送到群，且不受 `forward_chat_prefix` 限制：
 
-- `chatimage`（默认）：处理 ChatImage `[[CICode,url=...]]` 代码与可访问图片链接，保留原有行为
+- `chatimage`（默认）：处理 ChatImage `[[CICode,url=...]]` 代码与可访问图片链接，供 ChatImage 模组显示
 - `e33chat`：处理 E33Chat `[[E33Emote,url=...]]`、`[[ChatUpgrade,url=...,type=image]]` 标记和服务端托管媒体 ID，同时保留 CICode 图片 URL 与原有图片链接下载
 - `http(s)://` 链接直接下载；`file://` 本地文件仅在 AstrBot 与游戏端同机时才能读取
-- E33Chat 服务端媒体需选择 E33Chat 模式，并配置 `e33chat_media_dir`；AstrBot 必须能读取该路径（群图进入游戏时还需写入权限）
+- E33Chat 服务端媒体需选择 E33Chat 模式；使用 MCSManager API 后端时按上方填写面板配置，本地/共享目录后端才需要 `e33chat_media_dir`
 - 下载失败（链接失效、本地文件不可见等）时保留原始代码/链接文本
 - ChatImage / 普通链接单张图片上限 5 MB；E33Chat 媒体上限 8 MiB；HTTP 下载超时 15 秒。E33Chat 服务端媒体目录共用服务端的 512 MiB 配额与自动清理策略
 

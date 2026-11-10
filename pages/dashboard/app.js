@@ -3427,6 +3427,13 @@ class DashboardApp {
       prefix: document.getElementById('st-fwd-prefix'),
       chatPrefix: document.getElementById('st-fwd-chat-prefix'),
       e33chatMediaDir: document.getElementById('st-fwd-e33chat-media-dir'),
+      e33chatBackend: document.getElementById('st-fwd-e33chat-backend'),
+      mcsmUrl: document.getElementById('st-fwd-mcsm-url'),
+      mcsmKey: document.getElementById('st-fwd-mcsm-key'),
+      mcsmDaemon: document.getElementById('st-fwd-mcsm-daemon'),
+      mcsmUuid: document.getElementById('st-fwd-mcsm-uuid'),
+      mcsmDir: document.getElementById('st-fwd-mcsm-dir'),
+      mcsmDaemonUrl: document.getElementById('st-fwd-mcsm-daemon-url'),
       mcImageMode: document.getElementById('st-fwd-mc-image-mode'),
       sessions: document.getElementById('st-fwd-sessions'),
     };
@@ -3450,6 +3457,13 @@ class DashboardApp {
           ? msg.e33chat_media_dir
           : '';
       }
+      if (fwdBoxes.e33chatBackend) fwdBoxes.e33chatBackend.value = msg.e33chat_media_backend === 'mcsm' ? 'mcsm' : 'local';
+      if (fwdBoxes.mcsmUrl) fwdBoxes.mcsmUrl.value = msg.mcsm_panel_url || '';
+      if (fwdBoxes.mcsmKey) fwdBoxes.mcsmKey.value = msg.mcsm_api_key || '';
+      if (fwdBoxes.mcsmDaemon) fwdBoxes.mcsmDaemon.value = msg.mcsm_daemon_id || '';
+      if (fwdBoxes.mcsmUuid) fwdBoxes.mcsmUuid.value = msg.mcsm_instance_uuid || '';
+      if (fwdBoxes.mcsmDir) fwdBoxes.mcsmDir.value = msg.mcsm_media_dir || '';
+      if (fwdBoxes.mcsmDaemonUrl) fwdBoxes.mcsmDaemonUrl.value = msg.mcsm_daemon_url || '';
       if (fwdBoxes.mcImageMode) {
         fwdBoxes.mcImageMode.value = msg.mc_image_mode === 'e33chat'
           ? 'e33chat'
@@ -3597,6 +3611,13 @@ class DashboardApp {
           if (fwdE33chatMediaDir) {
             msg.e33chat_media_dir = fwdE33chatMediaDir.value.trim();
           }
+          msg.e33chat_media_backend = document.getElementById('st-fwd-e33chat-backend')?.value === 'mcsm' ? 'mcsm' : 'local';
+          msg.mcsm_panel_url = document.getElementById('st-fwd-mcsm-url')?.value.trim() || '';
+          msg.mcsm_api_key = document.getElementById('st-fwd-mcsm-key')?.value.trim() || '';
+          msg.mcsm_daemon_id = document.getElementById('st-fwd-mcsm-daemon')?.value.trim() || '';
+          msg.mcsm_instance_uuid = document.getElementById('st-fwd-mcsm-uuid')?.value.trim() || '';
+          msg.mcsm_media_dir = document.getElementById('st-fwd-mcsm-dir')?.value.trim() || '';
+          msg.mcsm_daemon_url = document.getElementById('st-fwd-mcsm-daemon-url')?.value.trim() || '';
           if (fwdMcImageMode) msg.mc_image_mode = fwdMcImageMode.value;
           payload.message = msg;
           // 目标会话：每行一个 UMO（同服务器表单解析规则）
