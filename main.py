@@ -25,6 +25,7 @@ from .core.constants import (
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_START,
+    E33CHAT_MEDIA_MAX_FILE_BYTES,
     PLUGIN_DATA_DIR,
     PLUGIN_NAME,
     QUIET_HOURS_ITEM_KEYS,
@@ -47,8 +48,11 @@ from .services.image_bed import (
 )
 from .services.message_bridge import (
     MessageBridge,
+    acquire_image_bytes,
     build_chatimage_code,
+    build_e33chat_media_code,
     resolve_image_url,
+    store_e33chat_media,
 )
 from .services.metrics import MetricsCollector
 from .services.monitor import MonitorCollector
@@ -1704,8 +1708,8 @@ class MinecraftQueQiaoPlugin(Star):
         """把外部会话消息按前缀规则转发到绑定的 MC 服务器。
 
         `images` 为消息链中的图片组件列表；仅当服务器开启了
-        `forward_image_to_mc` 且能解析出玩家客户端可访问的 URL 时，
-        才以 ChatImage 代码形式追加到广播内容。
+        `forward_image_to_mc` 且服务器连接正常时，图片按所选模式转换为
+        ChatImage URL 引用或 E33Chat 服务端媒体引用后追加到广播内容。
         """
         targets = self.message_bridge.servers_for_session(umo)
         if not targets:
@@ -1751,25 +1755,44 @@ class MinecraftQueQiaoPlugin(Star):
             if self_mention and self_mention not in content:
                 content = f"{self_mention} {content}".strip()
 
-            # 图片 → ChatImage 代码（[[CICode,url=...,name=...]]）
+            # 图片按模式转换为 ChatImage URL 或 E33Chat 媒体引用。
             image_codes = []
             skipped_images = 0
             skipped_sample: object | None = None
             skip_reason: str | None = None
             if images and config.forward_image_to_mc:
                 for comp in images:
-                    url, reason = await resolve_image_url(
-                        comp, self.image_bed
-                    )
-                    if url:
-                        image_codes.append(
-                            build_chatimage_code(url, config.chatimage_name)
+                    if config.mc_image_mode == "e33chat":
+                        data, reason = await acquire_image_bytes(
+                            comp, max_bytes=E33CHAT_MEDIA_MAX_FILE_BYTES
                         )
+                        media_id = None
+                        if data:
+                            media_id, reason = await store_e33chat_media(
+                                data, config.e33chat_media_dir
+                            )
+                        if media_id:
+                            image_codes.append(
+                                build_e33chat_media_code(
+                                    media_id, config.chatimage_name
+                                )
+                            )
+                        else:
+                            skipped_images += 1
+                            if skipped_sample is None:
+                                skipped_sample = comp
+                                skip_reason = reason
                     else:
-                        skipped_images += 1
-                        if skipped_sample is None:
-                            skipped_sample = comp
-                            skip_reason = reason
+                        url, reason = await resolve_image_url(comp, self.image_bed)
+                        if url:
+                            image_codes.append(
+                                build_chatimage_code(url, config.chatimage_name)
+                            )
+                        else:
+                            skipped_images += 1
+                            if skipped_sample is None:
+                                skipped_sample = comp
+                                skip_reason = reason
             elif images:
                 # 默认关闭：多数服务器未装 ChatImage，开箱不应外溢；
                 # 但用户排查时这里必须有可见日志，否则图片静默丢失无从查起
@@ -1788,11 +1811,16 @@ class MinecraftQueQiaoPlugin(Star):
 
             if not content and not image_codes:
                 if skipped_images:
+                    image_service_status = (
+                        f"图床状态: {self.image_bed.status_text}；"
+                        if config.mc_image_mode == "chatimage"
+                        else ""
+                    )
                     logger.warning(
-                        f"[{PLUGIN_NAME}][{server_name}] 消息中的图片均无可访问"
-                        f"的公开 URL（{skipped_images} 张），已跳过。"
+                        f"[{PLUGIN_NAME}][{server_name}] 消息中的图片未能按"
+                        f"{config.mc_image_mode} 模式转发（{skipped_images} 张），已跳过。"
                         f"图片组件: {self._describe_image(skipped_sample)}；"
-                        f"兜底状态: {self.image_bed.status_text}；"
+                        f"{image_service_status}"
                         f"原因: {skip_reason or '未知'}"
                     )
                 continue

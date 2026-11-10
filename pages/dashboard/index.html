@@ -268,7 +268,7 @@
               <span class="settings-row-control">
                 <input type="checkbox" id="st-fwd-image-to-mc" />
               </span>
-              <span class="settings-row-hint">外部会话图片转发到游戏内，需游戏端装 ChatImage 模组（https://github.com/kitUIN/ChatImage），否则显示为 [[CICode,...]] 文本</span>
+              <span class="settings-row-hint">开启后按「游戏图片模式」转发：ChatImage 使用可访问图片 URL；E33Chat 将图片写入下方媒体目录</span>
             </label>
             <label class="settings-row">
               <span class="settings-row-label">MC → 外部 图片转发</span>
@@ -285,14 +285,14 @@
                   <option value="e33chat">E33Chat 服务端媒体</option>
                 </select>
               </span>
-              <span class="settings-row-hint">默认保留 ChatImage CICode / 可访问图片链接处理；选择 E33Chat 后才解析 e33chat://media 图片</span>
+              <span class="settings-row-hint">ChatImage 保留原链路；E33Chat 时群→游戏写入媒体目录、游戏→群读取媒体目录并兼容 E33Emote / ChatUpgrade 图片标记；写入失败不会回退 ChatImage</span>
             </label>
             <label class="settings-row">
               <span class="settings-row-label">E33Chat 服务端媒体目录</span>
               <span class="settings-row-control">
-                <input type="text" id="st-fwd-e33chat-media-dir" placeholder="游戏世界目录/serverconfig/e33chat-media" autocomplete="off" spellcheck="false" />
+                <input type="text" id="st-fwd-e33chat-media-dir" placeholder="E33Chat 实际媒体目录（需 AstrBot 可读写）" autocomplete="off" spellcheck="false" />
               </span>
-              <span class="settings-row-hint">仅 E33Chat 模式需要填写；AstrBot 必须能读取此目录，远程游戏服务器需先挂载共享目录</span>
+              <span class="settings-row-hint">E33Chat 模式必填：指向 E33Chat 服务端正在使用的媒体目录；AstrBot 运行账户必须能读写，跨机部署需先挂载共享目录</span>
             </label>
           </div>
           <label class="settings-row">

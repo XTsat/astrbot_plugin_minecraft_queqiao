@@ -263,7 +263,7 @@
               "e33chat_media_dir": {
                 "type": "string",
                 "description": "E33Chat 服务端媒体目录",
-                "hint": "可选。将 E33Chat 的 e33chat://media/<ID> 图片转发到外部会话时，填写游戏世界目录下 serverconfig/e33chat-media 的路径；AstrBot 必须能读取该目录（远程服务器需挂载共享目录）。留空时无法解析该协议图片",
+                "hint": "E33Chat 模式必填：填写 E33Chat 服务端实际使用的 e33chat-media 目录（服务端 media_enabled 需开启，默认开启），AstrBot 运行账户必须能读取和写入（远程服务器需挂载共享目录）。该目录用于群图写入和游戏图片读取；留空或不可写时，群图不会回退到 ChatImage",
                 "default": ""
               },
               "forward_bot_self_messages": {
@@ -312,7 +312,7 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。需要游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本。图片以广播消息携带 URL 的形式发送，玩家客户端自行加载，需保证图片 URL 对玩家客户端可达；无公开 URL 时可启用根级图床配置",
+                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。ChatImage 模式广播可访问 URL；E33Chat 模式把图片写入 e33chat_media_dir 并广播服务端媒体引用。E33Chat 模式要求 AstrBot 对实际媒体目录可读写",
                 "default": false
               },
               "chatimage_name": {
@@ -324,13 +324,13 @@
               "forward_image_from_mc": {
                 "type": "bool",
                 "description": "转发游戏内图片到外部会话",
-                "hint": "游戏内聊天消息中的图片自动下载后作为图片发送到外部会话。图片不受游戏→群触发前缀限制。支持方式由「游戏图片模式」选择",
+                "hint": "游戏内聊天中的 E33Emote、ChatUpgrade 图片标记、E33Chat 媒体 ID、CICode 和图片链接会按「游戏图片模式」下载并作为图片发送到外部会话。图片不受游戏→群触发前缀限制",
                 "default": false
               },
               "mc_image_mode": {
                 "type": "string",
                 "description": "游戏图片模式",
-                "hint": "ChatImage（默认）：保留原有 CICode / 可访问图片链接处理；E33Chat：额外解析 E33Chat 服务端媒体，需填写 e33chat_media_dir 并确保 AstrBot 可读取",
+                "hint": "ChatImage（默认）：保留原有 ChatImage / 图片链接链路；E33Chat：群图写入 e33chat_media_dir 并广播 E33Chat 媒体 ID，游戏图读取该目录并兼容 E33Emote、ChatUpgrade 图片标记与 CICode 图片 URL。需启用 E33Chat 服务端媒体并确保 AstrBot 对实际目录可读写；写入失败时不回退 ChatImage",
                 "options": [
                   "chatimage",
                   "e33chat"

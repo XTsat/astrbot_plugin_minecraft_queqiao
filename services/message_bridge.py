@@ -8,9 +8,14 @@
   模组渲染（https://github.com/kitUIN/ChatImage）
 """
 
+import asyncio
 import json
+import os
 import re
+import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
@@ -20,6 +25,8 @@ from astrbot.api import logger
 from ..core.constants import (
     API_SET_MSG_EMOJI_LIKE,
     DEFAULT_CHATIMAGE_NAME,
+    E33CHAT_MEDIA_MAX_FILE_BYTES,
+    E33CHAT_MEDIA_QUOTA_BYTES,
     ECHO_SUPPRESS_WINDOW,
     EMOJI_OK_GESTURE,
     IMAGE_DOWNLOAD_TIMEOUT,
@@ -143,7 +150,9 @@ async def resolve_image_url(
     return None, reason
 
 
-async def acquire_image_bytes(comp: Any) -> tuple[bytes | None, str]:
+async def acquire_image_bytes(
+    comp: Any, *, max_bytes: int | None = None
+) -> tuple[bytes | None, str]:
     """把图片组件解析为本地字节，返回 `(bytes, fail_reason)`。
 
     借助 AstrBot 的 `Image.convert_to_file_path()` 统一处理 http(s) URL、
@@ -159,7 +168,16 @@ async def acquire_image_bytes(comp: Any) -> tuple[bytes | None, str]:
     if not path:
         return None, "convert_to_file_path 返回空"
     try:
-        return Path(path).read_bytes(), ""
+        local_path = Path(path)
+        if max_bytes is not None:
+            if local_path.stat().st_size > max_bytes:
+                return None, f"图片超过大小上限 {max_bytes} 字节"
+            with local_path.open("rb") as image_file:
+                data = image_file.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                return None, f"图片超过大小上限 {max_bytes} 字节"
+            return data, ""
+        return local_path.read_bytes(), ""
     except OSError as exc:
         return None, f"读取本地文件失败: {path}: {exc}"
 
@@ -172,13 +190,69 @@ _IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|jfif|avif)$", re.IGNORECA
 # ChatImage 代码：[[CICode,url=...,name=...]]，group(1) 为 url（url 是第一个参数）
 _CICODE_RE = re.compile(r"\[\[CICode,url=([^\],\s]+)(?:,[^\]]*)?\]\]", re.IGNORECASE)
 _E33EMOTE_RE = re.compile(
-    r"\[\[E33Emote,url=(e33chat://media/[0-9a-f]{32})(?:,[^\]]*)?\]\]",
+    r"\[\[E33Emote,url=([^\],\s]+)(?:,[^\]]*)?\]\]",
     re.IGNORECASE,
 )
+_CHATUPGRADE_RE = re.compile(r"\[\[ChatUpgrade,([^\]]+)\]\]", re.IGNORECASE)
 
 # 裸链接：http(s) / file（file:// 一般只出现在 CICode 内，这里兼容裸写）
 _URL_RE = re.compile(r"(?:https?|file)://[^\s]+", re.IGNORECASE)
 _E33CHAT_MEDIA_RE = re.compile(r"e33chat://media/[0-9a-f]{32}", re.IGNORECASE)
+_E33CHAT_MEDIA_WRITE_LOCK = threading.Lock()
+
+
+def build_e33chat_media_code(media_id: str, name: str = "") -> str:
+    """Build a CICode media reference that E33Chat can load."""
+    display = (name or DEFAULT_CHATIMAGE_NAME).strip() or DEFAULT_CHATIMAGE_NAME
+    return f"[[CICode,url=e33chat://media/{media_id},name={display}]]"
+
+
+def _store_e33chat_media_sync(data: bytes, media_dir: str) -> tuple[str | None, str]:
+    if not media_dir:
+        return None, "E33Chat media directory is not configured"
+    if not data:
+        return None, "image content is empty"
+    if len(data) > E33CHAT_MEDIA_MAX_FILE_BYTES:
+        return None, f"image exceeds E33Chat per-file limit ({E33CHAT_MEDIA_MAX_FILE_BYTES} bytes)"
+
+    temporary_path: Path | None = None
+    with _E33CHAT_MEDIA_WRITE_LOCK:
+        try:
+            root = Path(media_dir).expanduser().resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            used_bytes = sum(
+                item.stat().st_size
+                for item in root.rglob("*")
+                if item.is_file()
+            )
+            if used_bytes + len(data) > E33CHAT_MEDIA_QUOTA_BYTES:
+                return None, f"E33Chat media directory exceeds quota ({E33CHAT_MEDIA_QUOTA_BYTES} bytes)"
+
+            media_id = uuid.uuid4().hex
+            final_path = root / media_id
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".astrbot-upload-", dir=root, delete=False
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(data)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary_path, final_path)
+            temporary_path = None
+            return media_id, ""
+        except OSError as exc:
+            return None, f"failed to write E33Chat media directory: {exc}"
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
+async def store_e33chat_media(data: bytes, media_dir: str) -> tuple[str | None, str]:
+    """Write an image atomically to E33Chat media storage."""
+    return await asyncio.to_thread(_store_e33chat_media_sync, data, media_dir)
 
 
 def _is_image_url(url: str) -> bool:
@@ -188,38 +262,72 @@ def _is_image_url(url: str) -> bool:
 
 
 def extract_image_refs(text: str, *, include_e33chat: bool = False) -> list[str]:
-    """提取 ChatImage 与裸图片链接；按需包含 E33Emote/E33Chat 媒体。"""
+    """提取 ChatImage 图片引用，并按需识别 E33Chat 图片标记。"""
     if not text:
         return []
     refs: list[str] = []
     seen: set[str] = set()
-    for match in _CICODE_RE.finditer(text):
-        url = match.group(1).strip()
-        if url and url not in seen:
-            seen.add(url)
-            refs.append(url)
     if include_e33chat:
         for match in _E33EMOTE_RE.finditer(text):
             url = match.group(1).strip()
             if url and url not in seen:
                 seen.add(url)
                 refs.append(url)
-    for match in _URL_RE.finditer(text):
-        raw = match.group(0)
-        url = raw.rstrip(".,;!?)]}'\"")
-        if url and url not in seen and _is_image_url(url):
-            seen.add(url)
-            refs.append(url)
-    if include_e33chat:
+        for match in _CHATUPGRADE_RE.finditer(text):
+            url = _chatupgrade_image_url(match.group(1))
+            if url and url not in seen:
+                seen.add(url)
+                refs.append(url)
         for match in _E33CHAT_MEDIA_RE.finditer(text):
             url = match.group(0)
             if url not in seen:
                 seen.add(url)
                 refs.append(url)
+
+    for match in _CICODE_RE.finditer(text):
+        url = match.group(1).strip()
+        if (
+            url
+            and (include_e33chat or not _E33CHAT_MEDIA_RE.fullmatch(url))
+            and url not in seen
+        ):
+            seen.add(url)
+            refs.append(url)
+
+    # Marker URLs are extracted above; exclude wrappers from naked-link parsing
+    # so optional name parameters cannot become part of a second malformed URL.
+    url_text = _CICODE_RE.sub("", _E33EMOTE_RE.sub("", text))
+    if include_e33chat:
+        url_text = _CHATUPGRADE_RE.sub("", url_text)
+    for match in _URL_RE.finditer(url_text):
+        raw = match.group(0)
+        url = raw.rstrip(".,;!?)]}'\"")
+        if url and url not in seen and _is_image_url(url):
+            seen.add(url)
+            refs.append(url)
     return refs
 
 
-def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
+def _chatupgrade_image_url(attrs: str) -> str | None:
+    """Parse E33Chat's ChatUpgrade attributes, accepting image tags only."""
+    values: dict[str, str] = {}
+    for item in attrs.split(","):
+        key, separator, value = item.partition("=")
+        if separator and value.strip():
+            values[key.strip().lower()] = value.strip()
+    url = values.get("url")
+    image_type = values.get("type", "").lower()
+    if not url or (image_type and image_type != "image"):
+        return None
+    return url
+
+
+def strip_image_refs(
+    text: str,
+    keep: set[str] | None = None,
+    *,
+    remove: set[str] | None = None,
+) -> str:
     """移除已成功转成图片的引用；`keep` 中的引用（下载失败）保留原文。
 
     只有被成功下载的引用才会被剥离成图片；失败的引用不能凭空消失，
@@ -232,22 +340,46 @@ def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
 
     def _cic(match: re.Match) -> str:
         url = match.group(1).strip()
+        if remove is not None:
+            return "" if url in remove else match.group(0)
         return match.group(0) if url in keep else ""
 
     def _url(match: re.Match) -> str:
         raw = match.group(0)
         url = raw.rstrip(".,;!?)]}'\"")
+        if remove is not None:
+            return "" if url in remove and _is_image_url(url) else raw
         if url in keep:
             return raw
         return "" if _is_image_url(url) else raw
 
     text = _E33EMOTE_RE.sub(
-        lambda match: match.group(0) if match.group(1).strip() in keep else "", text
+        lambda match: (
+            "" if match.group(1).strip() in remove else match.group(0)
+        ) if remove is not None else (
+            match.group(0) if match.group(1).strip() in keep else ""
+        ),
+        text,
     )
+
+    def _chatupgrade(match: re.Match[str]) -> str:
+        url = _chatupgrade_image_url(match.group(1))
+        if not url:
+            return match.group(0)
+        if remove is not None:
+            return "" if url in remove else match.group(0)
+        return match.group(0) if url in keep else ""
+
+    text = _CHATUPGRADE_RE.sub(_chatupgrade, text)
     text = _CICODE_RE.sub(_cic, text)
     text = _URL_RE.sub(_url, text)
     text = _E33CHAT_MEDIA_RE.sub(
-        lambda match: match.group(0) if match.group(0) in keep else "", text
+        lambda match: (
+            "" if match.group(0) in remove else match.group(0)
+        ) if remove is not None else (
+            match.group(0) if match.group(0) in keep else ""
+        ),
+        text,
     )
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
@@ -284,17 +416,20 @@ async def download_image_bytes(
         if not e33chat_media_dir:
             return None
         media_id = url.rsplit("/", 1)[-1].lower()
+        media_max_bytes = E33CHAT_MEDIA_MAX_FILE_BYTES
         try:
             root = Path(e33chat_media_dir).expanduser().resolve()
             path = (root / media_id).resolve()
             if path.parent != root:
                 return None
+            if path.stat().st_size > media_max_bytes:
+                return None
             with path.open("rb") as media_file:
-                data = media_file.read(max_bytes + 1)
+                data = media_file.read(media_max_bytes + 1)
         except OSError as exc:
             logger.debug(f"[{PLUGIN_NAME}] 读取 E33Chat 媒体失败 {media_id}: {exc}")
             return None
-        return data if 0 < len(data) <= max_bytes else None
+        return data if 0 < len(data) <= media_max_bytes else None
 
     if url.startswith(("file://", "file:/")):
         path = file_uri_to_local_path(url)
@@ -585,8 +720,7 @@ class MessageBridge:
         if not images:
             return content, []
 
-        keep = {ref for ref in refs if ref not in converted}
-        clean = strip_image_refs(message, keep=keep)
+        clean = strip_image_refs(message, remove=set(converted))
         player = event.player_name or "未知"
         return self._format_chat(config, player, clean), images
 

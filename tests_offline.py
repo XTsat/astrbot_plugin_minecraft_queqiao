@@ -45,6 +45,12 @@ class _Filter:
     def event_message_type(self, *a, **k):
         def deco(fn): return fn
         return deco
+    def on_decorating_result(self, *a, **k):
+        def deco(fn): return fn
+        return deco
+    def after_message_sent(self, *a, **k):
+        def deco(fn): return fn
+        return deco
 ev.filter = _Filter()
 sys.modules["astrbot.api.event"] = ev
 mc = types.ModuleType("astrbot.api.message_components")
@@ -277,9 +283,9 @@ cfg_empty = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":""})
 assert P._match_ai_prefix(cfg_empty, chat_norm) is False
 
 # 前缀冲突检测：互相包含即告警
-assert SC.from_dict({"ai_chat_prefix":"*","message":{"auto_forward_prefix":"*"}}).prefixes_conflict
-assert SC.from_dict({"ai_chat_prefix":"a","message":{"auto_forward_prefix":"ab"}}).prefixes_conflict
-assert SC.from_dict({"ai_chat_prefix":"#ai","message":{"auto_forward_prefix":"*"}}).prefixes_conflict is False
+assert SC.from_dict({"ai_chat_prefix":"*","message":{"forward_chat_prefix":"*"}}).prefixes_conflict
+assert SC.from_dict({"ai_chat_prefix":"a","message":{"forward_chat_prefix":"ab"}}).prefixes_conflict
+assert SC.from_dict({"ai_chat_prefix":"#ai","message":{"forward_chat_prefix":"*"}}).prefixes_conflict is False
 print("OK  AI 前缀命中走 AI、普通聊天走互通、空前缀不触发、冲突可检测")
 
 print("=== 14. 端到端：同一条游戏内消息只走一条路径 ===")
@@ -428,12 +434,19 @@ class _Ev:
     def __init__(self, bot, mid="12345"):
         self.bot = bot
         self.message_obj = _MsgObj(mid)
+        self.unified_msg_origin = "umo:GroupMessage:123"
         self.sent = []
     async def send(self, chain): self.sent.append(chain)
 
+class _MarkContext:
+    def __init__(self): self.sent = []
+    async def send_message(self, umo, chain):
+        self.sent.append((umo, chain))
+        return True
+
 def _run(coro): return _asyncio.new_event_loop().run_until_complete(coro)
 
-_bridge = _MB(context=None)
+_bridge = _MB(context=_MarkContext())
 
 # (a) emoji 模式：走平台接口贴表情，且不额外发文本
 _bot = _Bot(); _ev = _Ev(_bot)
@@ -447,8 +460,8 @@ assert _ev.sent == [], "emoji 模式不应再发文本"
 _bot2 = _Bot(); _ev2 = _Ev(_bot2)
 cfg2 = _S2.from_dict({"message": {"mark_option": "text"}})
 _run(_bridge.mark_relayed(_ev2, cfg2))
-assert len(_ev2.sent) == 1, _ev2.sent
-assert _ev2.sent[0].chain[0].text.startswith("✅"), _ev2.sent[0].chain[0].text
+assert len(_bridge.context.sent) == 1, _bridge.context.sent
+assert _bridge.context.sent[0][1].chain[0].text.startswith("✅"), _bridge.context.sent[0]
 assert _bot2.calls == [], "text 模式不应贴表情"
 
 # (c) none 模式：什么都不做
@@ -1189,6 +1202,10 @@ assert SC.from_dict({"message": {"forward_image_to_mc": "false", "chatimage_name
     .chatimage_name == "图片"
 assert SC.from_dict({"message": {"forward_image_to_mc": "true"}}).forward_image_to_mc is True
 assert SC.from_dict({"message": {"chatimage_name": "  "}}).chatimage_name == "图片"
+_cfg_e33_26 = SC.from_dict({"message": {
+    "mc_image_mode": "e33chat", "e33chat_media_dir": "D:/mc/e33chat-media"}})
+assert _cfg_e33_26.mc_image_mode == "e33chat"
+assert _cfg_e33_26.e33chat_media_dir == "D:/mc/e33chat-media"
 
 # (d) 端到端：外部图片消息 → 转发为 ChatImage 代码广播进游戏
 from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P26
@@ -1217,6 +1234,7 @@ class _Ev26:
     def get_messages(self): return self._images
     def get_sender_name(self): return self._sender
     def get_sender_id(self): return ""
+    def get_self_id(self): return "bot"
     def get_platform_name(self): return self._platform
     def stop_event(self): self.stopped = True
     def plain_result(self, text): return text
@@ -1262,7 +1280,7 @@ assert _instI26c.client.sent == [
     ("[QQ]群友A: 看看这张图 [[CICode,url=https://qpic.cn/c.png,name=图片]]", "white"),
 ], _instI26c.client.sent
 
-# d4) 前缀过滤对图片同样生效：配置了转发前缀后，无文本的裸图片不转发
+# d4) 图片开关启用时，图片消息不要求带文本转发前缀
 _cfgI26d = SC.from_dict({"server": {"server_name": "IMG"},
     "message": {"target_sessions": ["umo:GroupMessage:9"],
                 "auto_forward_prefix": "*", "forward_image_to_mc": True}})
@@ -1272,8 +1290,10 @@ _instI26d = _Inst26()
 _pi26d.server_manager._servers["IMG"] = _instI26d
 assert _run26(_pi26d._relay_to_minecraft(
     _Ev26(images=[_Img26(url="https://qpic.cn/d.png")]),
-    "umo:GroupMessage:9", "", [_Img26(url="https://qpic.cn/d.png")])) is False
-assert _instI26d.client.sent == [], "配置转发前缀后裸图片不得转发"
+    "umo:GroupMessage:9", "", [_Img26(url="https://qpic.cn/d.png")])) is True
+assert _instI26d.client.sent == [
+    ("[QQ]群友A: [[CICode,url=https://qpic.cn/d.png,name=图片]]", "white"),
+], "图片开关启用后，图片消息应可独立转发"
 
 # d5) 图片无公开 URL（base64 且注册失败）→ 跳过图片，文本仍转发
 _img_b64 = _Img26(url="", file="base64://aGVsbG8=")
@@ -1301,6 +1321,9 @@ assert _mi26["forward_image_to_mc"]["default"] is False
 assert _mi26["chatimage_name"]["default"] == "图片"
 assert "ChatImage" in _mi26["forward_image_to_mc"]["hint"], \
     "forward_image_to_mc 的 hint 必须说明依赖 ChatImage 模组"
+assert "e33chat_media_dir" in _mi26["mc_image_mode"]["hint"]
+assert "写入失败" in _mi26["mc_image_mode"]["hint"]
+assert "读取和写入" in _mi26["e33chat_media_dir"]["hint"]
 _mk26 = list(_mi26.keys())
 assert _mk26.index("forward_image_to_mc") == _mk26.index("mark_emoji_id") + 1, \
     f"forward_image_to_mc 必须紧跟 mark_emoji_id，实际顺序: {_mk26}"
@@ -1322,8 +1345,12 @@ from astrbot_plugin_minecraft_queqiao.services.image_bed import (
 )
 from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
     acquire_image_bytes as _aib28,
+    build_e33chat_media_code as _bec28,
+    download_image_bytes as _dib28,
     resolve_image_url as _riu28,
+    store_e33chat_media as _sem28,
 )
+import astrbot_plugin_minecraft_queqiao.services.message_bridge as _mb28
 from astrbot_plugin_minecraft_queqiao.core.constants import (
     DEFAULT_IMAGE_HTTP_HOST as _DHOST28,
     DEFAULT_IMAGE_HTTP_PORT as _DPORT28,
@@ -1382,6 +1409,64 @@ _ib28 = _ImgBytes28()
 assert asyncio.run(_aib28(_ib28))[0] == _ib28.data
 assert asyncio.run(_aib28(_ib28))[0] == _ib28.data, "可重复读取（同路径）"
 assert asyncio.run(_aib28(_ib28))[1] == "", "成功时原因应为空"
+
+# E33Chat media storage writes the exact bytes under a protocol-valid ID.
+with tempfile.TemporaryDirectory(prefix="e33chat-media-test-") as _e33dir28:
+    _e33data28 = b"E33Chat test image bytes"
+    _e33id28, _e33err28 = asyncio.run(_sem28(_e33data28, _e33dir28))
+    assert _e33err28 == "" and _e33id28 and _re.fullmatch(r"[0-9a-f]{32}", _e33id28)
+    assert (_pathlib.Path(_e33dir28) / _e33id28).read_bytes() == _e33data28
+    assert asyncio.run(_dib28(
+        f"e33chat://media/{_e33id28}", e33chat_media_dir=_e33dir28)) == _e33data28
+    assert _bec28(_e33id28, "群图") == (
+        f"[[CICode,url=e33chat://media/{_e33id28},name=群图]]")
+    _old_quota28 = _mb28.E33CHAT_MEDIA_QUOTA_BYTES
+    _mb28.E33CHAT_MEDIA_QUOTA_BYTES = len(_e33data28)
+    _e33id_quota28, _e33err_quota28 = asyncio.run(
+        _sem28(b"x", _e33dir28))
+    _mb28.E33CHAT_MEDIA_QUOTA_BYTES = _old_quota28
+    assert _e33id_quota28 is None and "quota" in _e33err_quota28.lower()
+
+    # With a readable shared directory, group -> game broadcasts an E33Chat ID.
+    _cfg_e33_28 = SC.from_dict({
+        "server": {"server_name": "E33IMG"},
+        "message": {
+            "target_sessions": ["umo:GroupMessage:9"],
+            "forward_image_to_mc": True,
+            "mc_image_mode": "e33chat",
+            "e33chat_media_dir": _e33dir28,
+        },
+    })
+    _pi_e33_28 = _P28(_Ctx26(), {})
+    _pi_e33_28.message_bridge.register_server(_cfg_e33_28)
+    _inst_e33_28 = _Inst26()
+    _pi_e33_28.server_manager._servers["E33IMG"] = _inst_e33_28
+    _img_e33_28 = _ImgBytes28(data=b"group image bytes")
+    assert asyncio.run(_pi_e33_28._relay_to_minecraft(
+        _Ev26(images=[_img_e33_28]), "umo:GroupMessage:9", "", [_img_e33_28]))
+    _sent_e33_28 = _inst_e33_28.client.sent[0][0]
+    _sent_id_e33_28 = _re.search(r"e33chat://media/([0-9a-f]{32})", _sent_e33_28)
+    assert _sent_id_e33_28, _sent_e33_28
+    assert (_pathlib.Path(_e33dir28) / _sent_id_e33_28.group(1)).read_bytes() == b"group image bytes"
+
+    # Missing E33Chat storage skips the image instead of falling back to a public ChatImage URL.
+    _cfg_e33_missing28 = SC.from_dict({
+        "server": {"server_name": "E33MISS"},
+        "message": {
+            "target_sessions": ["umo:GroupMessage:9"],
+            "forward_image_to_mc": True,
+            "mc_image_mode": "e33chat",
+        },
+    })
+    _pi_e33_missing28 = _P28(_Ctx26(), {})
+    _pi_e33_missing28.message_bridge.register_server(_cfg_e33_missing28)
+    _inst_e33_missing28 = _Inst26()
+    _pi_e33_missing28.server_manager._servers["E33MISS"] = _inst_e33_missing28
+    _img_e33_missing28 = _ImgBytes28(data=b"image bytes")
+    _img_e33_missing28.url = "https://public.example/image.png"
+    assert not asyncio.run(_pi_e33_missing28._relay_to_minecraft(
+        _Ev26(images=[_img_e33_missing28]), "umo:GroupMessage:9", "", [_img_e33_missing28]))
+    assert _inst_e33_missing28.client.sent == []
 
 # (d) resolve 优先级：无公开 URL + 启用内置服务 → 转存并返回 hosted URL
 _b_d28 = _BIH28(base_url="http://192.168.1.5:8765")
@@ -2172,6 +2257,39 @@ assert _eir29("[[CICode,url=https://a/b.png]] 再看 https://a/b.png") == \
 # 非图片链接（无图片扩展名）不按图片处理
 assert _eir29("https://example.com/page") == []
 assert _eir29("https://example.com/x.htm") == []
+_e33_code29 = "[[CICode,url=e33chat://media/0123456789abcdef0123456789abcdef,name=图片]]"
+assert _eir29(_e33_code29) == [], "ChatImage 模式不应接管 E33Chat 媒体"
+assert _eir29(_e33_code29, include_e33chat=True) == [
+    "e33chat://media/0123456789abcdef0123456789abcdef"]
+_e33_external29 = "[[E33Emote,url=https://cdn.example/image.png,name=image.png]]"
+assert _eir29(_e33_external29) == [], "ChatImage 模式不应接管 E33Emote"
+assert _eir29(_e33_external29, include_e33chat=True) == [
+    "https://cdn.example/image.png"]
+_e33_compat29 = "[[CICode,url=https://cdn.example/compat.png,name=图片]]"
+assert _eir29(_e33_compat29, include_e33chat=True) == [
+    "https://cdn.example/compat.png"]
+_chatupgrade29 = "[[ChatUpgrade,url=https://cdn.example/upgrade.png,type=image]]"
+assert _eir29(_chatupgrade29) == []
+assert _eir29(_chatupgrade29, include_e33chat=True) == [
+    "https://cdn.example/upgrade.png"]
+assert _eir29(
+    "[[ChatUpgrade,url=https://cdn.example/no-type.png]]",
+    include_e33chat=True,
+) == ["https://cdn.example/no-type.png"], "缺省 type 应按图片兼容"
+_legacy_chatupgrade_link29 = (
+    "[[ChatUpgrade,type=image,url=https://cdn.example/reordered.png]]"
+)
+assert _eir29(_legacy_chatupgrade_link29) == [
+    "https://cdn.example/reordered.png"], "默认模式保留原有裸图片链接解析"
+_chatupgrade_reordered29 = (
+    "[[ChatUpgrade,type=image,name=图片,url=https://cdn.example/reordered.png]]"
+)
+assert _eir29(_chatupgrade_reordered29, include_e33chat=True) == [
+    "https://cdn.example/reordered.png"]
+assert _eir29(
+    "[[ChatUpgrade,url=https://cdn.example/clip.png,type=video]]",
+    include_e33chat=True,
+) == [], "非图片 ChatUpgrade 类型不应作为图片转发"
 
 # (b) 剥离：已转图引用移除、失败引用保留原文、普通网页链接不动
 _t_b29 = "看图 [[CICode,url=https://a/b.png]] 和 https://c/d.jpg 完"
@@ -2181,6 +2299,19 @@ assert _sir29(_t_b29, keep={"https://a/b.png"}) == \
     repr(_sir29(_t_b29, keep={"https://a/b.png"}))
 assert _sir29("看 https://example.com/page 完", keep=set()) == \
     "看 https://example.com/page 完", "普通网页链接不得被剥离"
+_mixed_e33_29 = (
+    "图 [[CICode,url=https://a/b.png]] "
+    "表情 [[E33Emote,url=e33chat://media/0123456789abcdef0123456789abcdef]]")
+assert _sir29(_mixed_e33_29, remove={"https://a/b.png"}) == (
+    "图 表情 [[E33Emote,url=e33chat://media/0123456789abcdef0123456789abcdef]]"), \
+    "处理成功的图片应剥离，未处理的 E33Emote 必须原样保留"
+_mixed_chatupgrade_29 = (
+    "图 [[CICode,url=https://a/b.png]] "
+    "升级图 [[ChatUpgrade,url=https://c/d.png,type=image]]"
+)
+assert _sir29(_mixed_chatupgrade_29, remove={"https://a/b.png"}) == (
+    "图 升级图 [[ChatUpgrade,url=https://c/d.png,type=image]]"), \
+    "ChatImage 模式处理 CICode 时必须保留未处理的 ChatUpgrade"
 
 # (c) file:// 本地路径解析
 assert _furi29(r"file:///D:\profile\Downloads\x.jpg") == \
@@ -2267,6 +2398,63 @@ _ch29 = _sent29[0][1]
 assert _ch29[0].text == "Steve: 看图", _ch29[0].text
 assert len(_ch29) == 2 and _ch29[1].file.startswith("base64://"), \
     "应有文本 + 图片两个组件，图片为 base64 形态"
+
+# E33Chat mode reads server-hosted media IDs and retains the existing CICode URL path.
+with tempfile.TemporaryDirectory(prefix="e33chat-reverse-test-") as _e33dir29:
+    _e33id29 = "0123456789abcdef0123456789abcdef"
+    _e33payload29 = b"E33Chat hosted image"
+    (_pathlib.Path(_e33dir29) / _e33id29).write_bytes(_e33payload29)
+    _compat_path29 = _pathlib.Path(_e33dir29) / "compat.png"
+    _compat_path29.write_bytes(b"CICode-compatible image")
+    _cfg29_e33 = ServerConfig.from_dict({
+        "server": {"server_name": "S29E33"},
+        "message": {
+            "target_sessions": ["umo:GroupMessage:29"],
+            "forward_image_from_mc": True,
+            "mc_image_mode": "e33chat",
+            "e33chat_media_dir": _e33dir29,
+            "forward_chat_format": "{player}: {message}",
+        },
+    })
+    _mb29_e33 = _MB29(_Ctx29())
+    _mb29_e33.register_server(_cfg29_e33)
+    _sent29.clear()
+    asyncio.run(_mb29_e33.forward_event("S29E33", _cfg29_e33, QueQiaoEvent.from_dict({
+        "event_name": "PlayerChatEvent",
+        "message": f"看图 [[CICode,url=e33chat://media/{_e33id29}]]",
+        "player": {"nickname": "Steve"},
+    })))
+    assert len(_sent29) == 1 and _sent29[0][1][0].text == "Steve: 看图"
+    assert _sent29[0][1][1].file == "base64://" + __import__("base64").b64encode(
+        _e33payload29
+    ).decode()
+
+    _sent29.clear()
+    asyncio.run(_mb29_e33.forward_event("S29E33", _cfg29_e33, QueQiaoEvent.from_dict({
+        "event_name": "PlayerChatEvent",
+        "message": (
+            f"看图 [[ChatUpgrade,url=e33chat://media/{_e33id29},"
+            "type=image,name=图片]]"
+        ),
+        "player": {"nickname": "Steve"},
+    })))
+    assert len(_sent29) == 1 and len(_sent29[0][1]) == 2, \
+        "E33Chat 模式应从 ChatUpgrade 读取媒体 ID"
+    assert _sent29[0][1][1].file == "base64://" + __import__("base64").b64encode(
+        _e33payload29
+    ).decode()
+
+    _sent29.clear()
+    asyncio.run(_mb29_e33.forward_event("S29E33", _cfg29_e33, QueQiaoEvent.from_dict({
+        "event_name": "PlayerChatEvent",
+        "message": (
+            "看图 [[ChatUpgrade,url=" + _compat_path29.as_uri()
+            + ",name=兼容图,type=image]]"
+        ),
+        "player": {"nickname": "Steve"},
+    })))
+    assert len(_sent29) == 1 and len(_sent29[0][1]) == 2, \
+        "E33Chat 模式应复用 ChatUpgrade 的本地图片读取链路"
 
 # 下载失败（file:// 不存在）→ 保留原始 CICode 文本、无图片组件
 _sent29.clear()
@@ -2595,6 +2783,7 @@ print("OK  数字编号拆分(仅多服) / 单服省略自动命中 / 多服提�
 print("\n=== 32. 重复 server_name 告警发送到目标会话 ===")
 from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P32
 from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as _SC32
+from astrbot_plugin_minecraft_queqiao.services.message_bridge import MessageBridge as _MB32
 import asyncio as _asyncio32
 
 
@@ -2612,6 +2801,7 @@ class _Self32:
 
     def __init__(self, ctx):
         self.context = ctx
+        self.message_bridge = _MB32(ctx)
 
 
 # (a) 有目标会话：告警发到每个 target_session，文本包含重复的 server_name
