@@ -299,6 +299,10 @@ class MessageBridge:
         self._session_to_servers: dict[str, list[tuple[str, ServerConfig]]] = {}
         # (server_name, content) -> 转发时间，用于回声抑制
         self._recently_forwarded: dict[tuple[str, str], float] = {}
+        # (umo, content) -> 发送时间列表，用于识别插件自己发出的群消息回声
+        self._recent_outbound: dict[
+            tuple[str, str], list[tuple[float, int | None]]
+        ] = {}
 
     def register_server(self, config: ServerConfig) -> None:
         """注册服务器并建立目标会话的反向索引。"""
@@ -313,6 +317,7 @@ class MessageBridge:
         self._configs.clear()
         self._session_to_servers.clear()
         self._recently_forwarded.clear()
+        self._recent_outbound.clear()
 
     def servers_for_session(self, umo: str) -> list[tuple[str, ServerConfig]]:
         """查询某会话绑定的服务器列表。"""
@@ -332,6 +337,65 @@ class MessageBridge:
             return False
         del self._recently_forwarded[key]
         return (time.time() - stamp) < ECHO_SUPPRESS_WINDOW
+
+    def _purge_outbound_echoes(self, now: float) -> None:
+        for key, stamps in list(self._recent_outbound.items()):
+            active = [
+                (stamp, image_count)
+                for stamp, image_count in stamps
+                if now - stamp < ECHO_SUPPRESS_WINDOW
+            ]
+            if active:
+                self._recent_outbound[key] = active
+            else:
+                del self._recent_outbound[key]
+
+    def mark_outbound_message(
+        self, umo: str, content: str, image_count: int | None = None
+    ) -> float:
+        """记录插件刚发往会话的文本，以便忽略适配器回传的机器人自身消息。"""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        self._recent_outbound.setdefault((umo, content), []).append(
+            (now, image_count)
+        )
+        return now
+
+    def discard_outbound_message(self, umo: str, content: str, stamp: float) -> None:
+        """发送失败时移除对应的回声标记。"""
+        key = (umo, content)
+        stamps = self._recent_outbound.get(key)
+        if not stamps:
+            return
+        index = next(
+            (i for i, (saved_stamp, _) in enumerate(stamps) if saved_stamp == stamp),
+            None,
+        )
+        if index is None:
+            return
+        stamps.pop(index)
+        if not stamps:
+            del self._recent_outbound[key]
+
+    def consume_outbound_echo_details(
+        self, umo: str, content: str
+    ) -> tuple[bool, int | None]:
+        """Consume an outbound echo and return how many images were already handled."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        key = (umo, content)
+        stamps = self._recent_outbound.get(key)
+        if not stamps:
+            return False, None
+        _, image_count = stamps.pop(0)
+        if not stamps:
+            del self._recent_outbound[key]
+        return True, image_count
+
+    def consume_outbound_echo(self, umo: str, content: str) -> bool:
+        """消费一条插件已发出的文本回声。"""
+        matched, _ = self.consume_outbound_echo_details(umo, content)
+        return matched
 
     # ---- MC → 外部 ----
 
@@ -512,7 +576,16 @@ class MessageBridge:
             if not components:
                 return False
             chain = MessageChain(chain=components)
-            await self.context.send_message(umo, chain)
+            echo_stamp = self.mark_outbound_message(umo, content)
+            try:
+                result = await self.context.send_message(umo, chain)
+            except Exception:
+                self.discard_outbound_message(umo, content, echo_stamp)
+                raise
+            if result is False:
+                self.discard_outbound_message(umo, content, echo_stamp)
+                logger.warning(f"[{PLUGIN_NAME}] 没有可用适配器发送消息到会话 {umo}")
+                return False
             return True
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] 发送消息到会话 {umo} 失败: {exc}")
@@ -598,13 +671,23 @@ class MessageBridge:
         return False
 
     async def _mark_text(self, event: Any) -> bool:
-        """回复一条 ✅ 文本作为转发回执。"""
+        """主动发送转发回执，避免将原消息事件标记为已响应。"""
         try:
             from astrbot.api.event import MessageChain
             from astrbot.api.message_components import Plain
 
             chain = MessageChain(chain=[Plain(text=MARK_TEXT_OK)])
-            await event.send(chain)
+            umo = event.unified_msg_origin
+            echo_stamp = self.mark_outbound_message(umo, MARK_TEXT_OK)
+            try:
+                result = await self.context.send_message(umo, chain)
+            except Exception:
+                self.discard_outbound_message(umo, MARK_TEXT_OK, echo_stamp)
+                raise
+            if result is False:
+                self.discard_outbound_message(umo, MARK_TEXT_OK, echo_stamp)
+                logger.debug(f"[{PLUGIN_NAME}] 没有可用适配器发送转发回执到 {umo}")
+                return False
             return True
         except Exception as exc:
             logger.debug(f"[{PLUGIN_NAME}] 转发回执发送失败: {exc}")

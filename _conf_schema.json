@@ -115,7 +115,7 @@
             "default": "ai"
           },
           "terminal_days": {
-            "type": "integer",
+            "type": "int",
             "description": "互通终端加载最近几天的日志分片",
             "hint": "互通终端展示最近几天的日志（0~30，0=全部保留分片，默认 2：今天+昨天）。每台服务器独立",
             "default": 2
@@ -145,7 +145,7 @@
             "default": "[{display_name}] 🔴 服务器连接失败"
           },
           "connect_fail_notify_delay": {
-            "type": "integer",
+            "type": "int",
             "description": "断连静默期（秒）",
             "hint": "断线超过该秒数仍未恢复才发「连接失败」通知，期间连回则完全不通知。0 到 3600，0 = 断线立即通知，默认 60",
             "default": 60
@@ -254,6 +254,12 @@
                 "hint": "外部会话中以此前缀开头的消息才被转发到MC服务器（例如: *）；默认留空 = 全部转发（仅对已绑定目标会话的会话生效）。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
                 "default": ""
               },
+              "forward_bot_self_messages": {
+                "type": "bool",
+                "description": "转发机器人自己的消息，不剥离唤醒词",
+                "hint": "默认关闭，保持之前版本的行为；开启后机器人唤醒消息按处理前原文转发（包括被 OneBot 从文本中省略的 @机器人），单独 @机器人也会转发；并一并转发消息管道回复和本插件监听到的机器人自身群消息。图片复用「转发图片到游戏内」及图床配置，上传/转发失败或未开启时才用 [图片] 占位；表情以 [表情:id] 记录；同时抑制插件自身发往群内的消息防止刷屏",
+                "default": false
+              },
               "broadcast_format": {
                 "type": "string",
                 "description": "外部消息转发到MC的格式",
@@ -294,7 +300,7 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话消息中的图片自动转发到 MC 游戏内。需要游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本。图片以广播消息携带 URL 的形式发送，玩家客户端自行加载，需保证图片 URL 对玩家客户端可达",
+                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。需要游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本。图片以广播消息携带 URL 的形式发送，玩家客户端自行加载，需保证图片 URL 对玩家客户端可达；无公开 URL 时可启用根级图床配置",
                 "default": false
               },
               "chatimage_name": {

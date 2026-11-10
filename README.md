@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.1-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.2-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
 <p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
 </div>
@@ -131,12 +131,13 @@
 | `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
 | `auto_forward_prefix` | string | 空 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| `forward_bot_self_messages` | bool | `false` | **转发机器人自己的消息，不剥离唤醒词**：开启后，唤醒消息按处理前原文转发（包括 OneBot 从文本中省略的 `@机器人`，单独 `@机器人` 也会转发）；同时转发消息管道回复和本插件监听到的机器人自身群消息（存在其他 aiocqhttp 适配器时按分段旁路转发，整条回复不再重复补发；仅有单个 aiocqhttp 适配器、无法旁路监听时，回退为转发整条回复），并使用可用的机器人群昵称；图片复用 `forward_image_to_mc` 和图床配置；只有未开启图片转发或图床无法提供可访问 URL 时才降级为 `[图片]` 占位，表情以 `[表情:id]` 记录；无需关闭 `ignore_bot_self_message`，也不会再次进入指令处理；仍受 `auto_forward_prefix` 过滤；本插件发群消息仍会回声抑制 |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，支持 `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | 平台名称映射：`原始平台名=显示名`，如 `aiocqhttp=QQ` |
 | `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
 | `mark_option` | string | `emoji` | 转发成功提醒：`text` 回复 ✅ / `emoji` 贴表情 / `none` 不提醒 |
 | `mark_emoji_id` | int | `124` | 回执表情 ID（QQ 表情 ID，默认 `124` = 👌） |
-| `forward_image_to_mc` | bool | `false` | 群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
+| `forward_image_to_mc` | bool | `false` | 群消息和已开启转发的 Bot 回复/自身群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
 | `chatimage_name` | string | `图片` | 图片在游戏聊天栏的显示名称 |
 | `forward_image_from_mc` | bool | `false` | 游戏内图片（CICode / 链接）自动下载后作为图片发回群 |
 
@@ -195,7 +196,7 @@
 
 ### 图片转发到游戏内（ChatImage）
 
-开启 `forward_image_to_mc` 后，群消息中的图片以携带 URL 的广播形式转发进游戏，由玩家客户端自行加载渲染：
+开启 `forward_image_to_mc` 后，群消息以及已开启机器人自身转发的管道回复/自身群消息中的图片，以携带 URL 的广播形式转发进游戏，由玩家客户端自行加载渲染：
 
 ```
 [QQ]群友A: [[CICode,url=https://example.com/images/example.png,name=图片]]

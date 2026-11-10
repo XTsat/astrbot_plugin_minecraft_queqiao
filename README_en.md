@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.1-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.2-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -126,12 +126,13 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
 | `auto_forward_prefix` | string | empty | Group messages starting with it are relayed into the game; empty relays all |
+| `forward_bot_self_messages` | bool | `false` | **Relay the bot's own messages without stripping wake prefixes**: wake messages use their original pre-processing text, including the self-mention omitted from OneBot's text (a standalone `@bot` is relayed too); bot replies produced by AstrBot's message pipeline and bot self-messages observed by this plugin are relayed with the available group nickname. Images reuse `forward_image_to_mc` and the image-host settings; `[图片]` is only used when image forwarding is disabled or no reachable URL can be obtained. Faces are recorded as `[表情:id]`. No need to disable `ignore_bot_self_message`, and replies are not fed back into command handling. `auto_forward_prefix` still applies; this plugin's own group messages remain echo-suppressed |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; supports `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | Platform name mapping: `raw=display`, e.g. `aiocqhttp=QQ` |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
 | `mark_option` | string | `emoji` | Acknowledgement after a successful relay: `text` replies ✅ / `emoji` reacts to the original message / `none` silent |
 | `mark_emoji_id` | int | `124` | Reaction emoji ID (QQ emoji ID; default `124` = 👌) |
-| `forward_image_to_mc` | bool | `false` | Relay group images into the game (requires ChatImage on the client to render; otherwise the CICode text is shown) |
+| `forward_image_to_mc` | bool | `false` | Relay group images and enabled bot reply/self-message images into the game (requires ChatImage on the client to render; otherwise the CICode text is shown) |
 | `chatimage_name` | string | `图片` | In-game display name for the image |
 | `forward_image_from_mc` | bool | `false` | In-game images (CICode / links) downloaded and sent back as images |
 
@@ -192,7 +193,7 @@ When you would rather not have the group pinged by game activity overnight, give
 
 ### Relaying images into the game (ChatImage)
 
-With `forward_image_to_mc` enabled, images in group messages are broadcast as messages carrying a URL, which each player's client downloads and renders:
+With `forward_image_to_mc` enabled, images in group messages and enabled bot pipeline/self-messages are broadcast as messages carrying a URL, which each player's client downloads and renders:
 
 ```
 [QQ]UserA: [[CICode,url=https://example.com/images/example.png,name=图片]]

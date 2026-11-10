@@ -76,7 +76,7 @@ function renderDesc(text) {
 
 function makeDefault(spec) {
   if (!spec || typeof spec !== 'object') return null;
-  // integer 与 int 同义（terminal_days 等），统一处理
+  // 兼容旧版 schema 的 integer 写法；当前 schema 使用 AstrBot 支持的 int。
   const type = spec.type === 'integer' ? 'int' : spec.type;
   switch (type) {
     case 'bool':
@@ -115,8 +115,7 @@ function displayPathValue(entry, path) {
 }
 
 /* ---------- 控件 ---------- */
-// schema 里整数同时存在 int / integer 两种写法（terminal_days 等），
-// 前端统一归一化为 int 再走控件分支
+// 兼容旧版 schema 的 integer 写法，统一归一化为 int 后走控件分支。
 function createControl(spec, onchange) {
   const type = spec.type === 'integer' ? 'int' : spec.type;
   switch (type) {

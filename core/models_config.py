@@ -248,6 +248,8 @@ class ServerConfig:
     target_sessions: list[str] = field(default_factory=list)
     # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
     auto_forward_prefix: str = ""
+    # 同时保留唤醒消息原文并转发机器人自己的群消息；插件自身发出的消息仍由回声标记拦截
+    forward_bot_self_messages: bool = False
     broadcast_format: str = DEFAULT_BROADCAST_FORMAT
     # 平台名称映射：{platform} 占位符按此把原始平台名替换为自定义展示名。
     # 默认自带 aiocqhttp=QQ 示例（开箱即用）；配置里删空该项则不改写
@@ -590,6 +592,10 @@ class ServerConfig:
             ),
             target_sessions=target_sessions,
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
+            forward_bot_self_messages=_to_bool(
+                message.get("forward_bot_self_messages"),
+                _to_bool(message.get("preserve_wake_prefix"), False),
+            ),
             broadcast_format=_to_str(
                 message.get("broadcast_format"), DEFAULT_BROADCAST_FORMAT
             )
