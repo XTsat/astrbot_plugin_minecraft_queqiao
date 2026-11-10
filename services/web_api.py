@@ -1323,6 +1323,7 @@ class WebApiController:
         msg = raw_msg if isinstance(raw_msg, dict) else {}
         return {
             "forward_chat_to_astrbot": _as_bool(msg.get("forward_chat_to_astrbot"), True),
+            "forward_chat_prefix": str(msg.get("forward_chat_prefix") or ""),
             "forward_chat_format": str(msg.get("forward_chat_format") or DEFAULT_CHAT_FORMAT),
             "forward_join_leave_to_astrbot": _as_bool(
                 msg.get("forward_join_leave_to_astrbot"), False
@@ -1337,6 +1338,12 @@ class WebApiController:
             "forward_image_to_mc": _as_bool(msg.get("forward_image_to_mc"), False),
             "forward_image_from_mc": _as_bool(msg.get("forward_image_from_mc"), False),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
+            "e33chat_media_dir": str(msg.get("e33chat_media_dir") or ""),
+            "mc_image_mode": (
+                "e33chat"
+                if str(msg.get("mc_image_mode") or "").strip().lower() == "e33chat"
+                else "chatimage"
+            ),
         }
 
     def _find_server_entry(
@@ -1550,6 +1557,7 @@ class WebApiController:
             for key in (
                 "enable_local_translation",
                 "forward_chat_to_astrbot",
+                "forward_chat_prefix",
                 "forward_chat_format",
                 "forward_join_leave_to_astrbot",
                 "forward_death_to_astrbot",
@@ -1557,6 +1565,8 @@ class WebApiController:
                 "forward_image_to_mc",
                 "forward_image_from_mc",
                 "auto_forward_prefix",
+                "e33chat_media_dir",
+                "mc_image_mode",
             ):
                 if key not in message_payload:
                     continue

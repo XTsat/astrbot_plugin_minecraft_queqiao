@@ -125,12 +125,13 @@
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `forward_chat_to_astrbot` | bool | `true` | 转发玩家聊天到指定会话 |
+| `forward_chat_to_astrbot` | bool | `true` | 全量转发游戏聊天到指定会话；关闭后仅转发命中 `forward_chat_prefix` 的聊天，图片转发不受此前缀限制 |
+| `forward_chat_prefix` | string | 空 | 游戏 → 群触发前缀；全量转发关闭后，只有以此前缀开头的游戏聊天才转发，转发时去掉前缀 |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | 聊天消息格式，支持 `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息（自动附带服务器显示名称，多服同群可区分来源） |
 | `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
-| `auto_forward_prefix` | string | 空 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| `auto_forward_prefix` | string | 空 | 群文本以此开头才转发到游戏；留空 = 全部转发；已开启的图片转发不受此前缀限制 |
 | `forward_bot_self_messages` | bool | `false` | **转发机器人自己的消息，不剥离唤醒词**：开启后，唤醒消息按处理前原文转发（包括 OneBot 从文本中省略的 `@机器人`，单独 `@机器人` 也会转发）；同时转发消息管道回复和本插件监听到的机器人自身群消息（存在其他 aiocqhttp 适配器时按分段旁路转发，整条回复不再重复补发；仅有单个 aiocqhttp 适配器、无法旁路监听时，回退为转发整条回复），并使用可用的机器人群昵称；图片复用 `forward_image_to_mc` 和图床配置；只有未开启图片转发或图床无法提供可访问 URL 时才降级为 `[图片]` 占位，表情以 `[表情:id]` 记录；无需关闭 `ignore_bot_self_message`，也不会再次进入指令处理；仍受 `auto_forward_prefix` 过滤；本插件发群消息仍会回声抑制 |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，支持 `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | 平台名称映射：`原始平台名=显示名`，如 `aiocqhttp=QQ` |
@@ -139,7 +140,9 @@
 | `mark_emoji_id` | int | `124` | 回执表情 ID（QQ 表情 ID，默认 `124` = 👌） |
 | `forward_image_to_mc` | bool | `false` | 群消息和已开启转发的 Bot 回复/自身群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
 | `chatimage_name` | string | `图片` | 图片在游戏聊天栏的显示名称 |
-| `forward_image_from_mc` | bool | `false` | 游戏内图片（CICode / 链接）自动下载后作为图片发回群 |
+| `forward_image_from_mc` | bool | `false` | 按「游戏图片模式」将游戏内图片下载后作为图片发回群；图片不受游戏 → 群触发前缀限制 |
+| `mc_image_mode` | string | `chatimage` | 游戏 → 群图片处理方式：`chatimage` 保留原有 ChatImage CICode / 可访问图片链接处理；`e33chat` 额外处理 E33Chat 服务端媒体 |
+| `e33chat_media_dir` | string | 空 | 仅 E33Chat 模式需要：填写 AstrBot 可读取的 E33Chat 服务端媒体目录（远程服务器需通过共享目录挂载） |
 
 > 目标会话可用 AstrBot 自带的 `/sid` 指令获取：在目标群聊/私聊发送 `/sid`，回复中的 `UMO` 就是要填的值（如 `aiocqhttp:GroupMessage:123456789`）。该列表同时决定：MC 消息转发到哪些会话、哪些会话的消息转发进 MC、以及该会话的 `mc` 指令归属哪台服务器。
 
@@ -204,13 +207,16 @@
 
 - 需为安装了 [ChatImage](https://github.com/kitUIN/ChatImage) 模组（Fabric / Forge / NeoForge）的服务器开启，否则只显示 `[[CICode,...]]` 文本
 - 图片 URL 必须对玩家客户端可达；若图片没有公开 URL（日志提示「图片均无可访问的公开 URL」），开启根级开关 `enable_image_upload` 并配置 `image_upload_services`（见下方）
-- 配置了 `auto_forward_prefix` 时，只有带前缀的消息里的图片才会被转发（裸图片消息不带文本，不会命中前缀）
+- 图片不受 `auto_forward_prefix` 限制；启用图片转发后，裸图片消息也可转发。附带的文字会随图片一起转发
 
 ### 游戏内图片转发到外部会话
 
-开启 `forward_image_from_mc` 后，游戏内聊天中的 ChatImage `[[CICode,url=...]]` 代码或图片链接会自动下载并作为图片发送到群：
+开启 `forward_image_from_mc` 后，游戏内图片会按 `mc_image_mode` 选择的方式下载并作为图片发送到群，且不受 `forward_chat_prefix` 限制：
 
+- `chatimage`（默认）：处理 ChatImage `[[CICode,url=...]]` 代码与可访问图片链接，保留原有行为
+- `e33chat`：额外处理 E33Chat `[[E33Emote,url=e33chat://media/<ID>]]` 媒体引用
 - `http(s)://` 链接直接下载；`file://` 本地文件仅在 AstrBot 与游戏端同机时才能读取
+- E33Chat 服务端媒体需选择 E33Chat 模式，并配置 `e33chat_media_dir`；AstrBot 必须能读取该路径（远程服务器可通过共享目录挂载）
 - 下载失败（链接失效、本地文件不可见等）时保留原始代码/链接文本
 - 单张图片上限 5 MB、下载超时 15 秒
 

@@ -237,6 +237,7 @@ class ServerConfig:
 
     # ---- 消息转发 ----
     forward_chat_to_astrbot: bool = True
+    forward_chat_prefix: str = ""
     forward_chat_format: str = DEFAULT_CHAT_FORMAT
     forward_join_leave_to_astrbot: bool = False
     forward_death_to_astrbot: bool = False
@@ -248,6 +249,10 @@ class ServerConfig:
     target_sessions: list[str] = field(default_factory=list)
     # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
     auto_forward_prefix: str = ""
+    # E33Chat 服务端媒体目录；仅当 AstrBot 可读取该目录时才能转发 e33chat://media 图片
+    e33chat_media_dir: str = ""
+    # 游戏 → 外部图片来源：默认保留 ChatImage / 图片链接处理，E33Chat 模式额外读取服务端媒体目录
+    mc_image_mode: str = "chatimage"
     # 同时保留唤醒消息原文并转发机器人自己的群消息；插件自身发出的消息仍由回声标记拦截
     forward_bot_self_messages: bool = False
     broadcast_format: str = DEFAULT_BROADCAST_FORMAT
@@ -400,20 +405,14 @@ class ServerConfig:
 
     @property
     def prefixes_conflict(self) -> bool:
-        """互通前缀与 AI 前缀是否冲突（互相包含即视为冲突）。
-
-        两个前缀作用在不同方向，但都必须能唯一判定消息归属：
-        - 群→MC 的互通前缀：外部会话消息以此开头才转发到游戏
-        - AI 前缀：游戏内聊天以此开头才触发 AI
-
-        若两者互相包含（例如同为 `*`，或一个是另一个的前缀），
-        同一条游戏内消息可能同时命中两个语义，因此在读取时告警。
-        """
-        if not self.auto_forward_prefix or not self.ai_chat_prefix:
-            return False
-        return (
-            self.auto_forward_prefix.startswith(self.ai_chat_prefix)
-            or self.ai_chat_prefix.startswith(self.auto_forward_prefix)
+        """游戏→群前缀与 AI 前缀互相包含时可能竞争同一条游戏聊天。"""
+        return bool(
+            self.forward_chat_prefix
+            and self.ai_chat_prefix
+            and (
+                self.forward_chat_prefix.startswith(self.ai_chat_prefix)
+                or self.ai_chat_prefix.startswith(self.forward_chat_prefix)
+            )
         )
 
     @property
@@ -574,6 +573,7 @@ class ServerConfig:
             or DEFAULT_QUIET_HOURS_END,
             quiet_hours_items=_to_quiet_items(data.get("quiet_hours_items")),
             forward_chat_to_astrbot=_to_bool(message.get("forward_chat_to_astrbot"), True),
+            forward_chat_prefix=_to_str(message.get("forward_chat_prefix"), "").strip(),
             forward_chat_format=_to_str(
                 message.get("forward_chat_format"), DEFAULT_CHAT_FORMAT
             )
@@ -592,6 +592,13 @@ class ServerConfig:
             ),
             target_sessions=target_sessions,
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
+            e33chat_media_dir=_to_str(message.get("e33chat_media_dir"), "").strip(),
+            mc_image_mode=(
+                "e33chat"
+                if _to_str(message.get("mc_image_mode"), "chatimage").strip().lower()
+                == "e33chat"
+                else "chatimage"
+            ),
             forward_bot_self_messages=_to_bool(
                 message.get("forward_bot_self_messages"),
                 _to_bool(message.get("preserve_wake_prefix"), False),

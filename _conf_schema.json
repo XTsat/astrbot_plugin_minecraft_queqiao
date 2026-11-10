@@ -214,9 +214,15 @@
             "items": {
               "forward_chat_to_astrbot": {
                 "type": "bool",
-                "description": "转发聊天消息到指定会话",
-                "hint": "将 Minecraft 玩家聊天消息转发到指定的外部会话",
+                "description": "全量转发游戏聊天到指定会话",
+                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后，只有以「游戏→群触发前缀」开头的聊天才转发。已开启的游戏图片转发不受该前缀限制",
                 "default": true
+              },
+              "forward_chat_prefix": {
+                "type": "string",
+                "description": "游戏→群触发前缀",
+                "hint": "关闭「全量转发游戏聊天」后，游戏聊天以此前缀开头才转发到外部会话；转发时会去掉前缀。留空时不转发普通聊天；已开启的图片转发不受此前缀限制",
+                "default": ""
               },
               "forward_chat_format": {
                 "type": "string",
@@ -251,7 +257,13 @@
               "auto_forward_prefix": {
                 "type": "string",
                 "description": "外部消息转发到MC的前缀",
-                "hint": "外部会话中以此前缀开头的消息才被转发到MC服务器（例如: *）；默认留空 = 全部转发（仅对已绑定目标会话的会话生效）。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
+                "hint": "外部会话中以此前缀开头的文本才被转发到MC服务器（例如: *）；默认留空 = 全部转发。已开启的图片转发不受此前缀限制",
+                "default": ""
+              },
+              "e33chat_media_dir": {
+                "type": "string",
+                "description": "E33Chat 服务端媒体目录",
+                "hint": "可选。将 E33Chat 的 e33chat://media/<ID> 图片转发到外部会话时，填写游戏世界目录下 serverconfig/e33chat-media 的路径；AstrBot 必须能读取该目录（远程服务器需挂载共享目录）。留空时无法解析该协议图片",
                 "default": ""
               },
               "forward_bot_self_messages": {
@@ -312,8 +324,18 @@
               "forward_image_from_mc": {
                 "type": "bool",
                 "description": "转发游戏内图片到外部会话",
-                "hint": "游戏内聊天消息中的图片（ChatImage 的 [[CICode,url=...]] 代码或直接贴出的图片链接）自动下载后作为图片发送到外部会话。默认关闭。下载失败（如 file:// 本地文件不在本机、链接失效）时保留原始文本（代码/链接），不静默丢失",
+                "hint": "游戏内聊天消息中的图片自动下载后作为图片发送到外部会话。图片不受游戏→群触发前缀限制。支持方式由「游戏图片模式」选择",
                 "default": false
+              },
+              "mc_image_mode": {
+                "type": "string",
+                "description": "游戏图片模式",
+                "hint": "ChatImage（默认）：保留原有 CICode / 可访问图片链接处理；E33Chat：额外解析 E33Chat 服务端媒体，需填写 e33chat_media_dir 并确保 AstrBot 可读取",
+                "options": [
+                  "chatimage",
+                  "e33chat"
+                ],
+                "default": "chatimage"
               }
             }
           },

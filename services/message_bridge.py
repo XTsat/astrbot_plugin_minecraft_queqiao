@@ -171,9 +171,14 @@ _IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|jfif|avif)$", re.IGNORECA
 
 # ChatImage 代码：[[CICode,url=...,name=...]]，group(1) 为 url（url 是第一个参数）
 _CICODE_RE = re.compile(r"\[\[CICode,url=([^\],\s]+)(?:,[^\]]*)?\]\]", re.IGNORECASE)
+_E33EMOTE_RE = re.compile(
+    r"\[\[E33Emote,url=(e33chat://media/[0-9a-f]{32})(?:,[^\]]*)?\]\]",
+    re.IGNORECASE,
+)
 
 # 裸链接：http(s) / file（file:// 一般只出现在 CICode 内，这里兼容裸写）
 _URL_RE = re.compile(r"(?:https?|file)://[^\s]+", re.IGNORECASE)
+_E33CHAT_MEDIA_RE = re.compile(r"e33chat://media/[0-9a-f]{32}", re.IGNORECASE)
 
 
 def _is_image_url(url: str) -> bool:
@@ -182,8 +187,8 @@ def _is_image_url(url: str) -> bool:
     return bool(_IMAGE_EXT_RE.search(path))
 
 
-def extract_image_refs(text: str) -> list[str]:
-    """从游戏内聊天文本中提取图片引用（CICode url 与裸图片链接），去重保持顺序。"""
+def extract_image_refs(text: str, *, include_e33chat: bool = False) -> list[str]:
+    """提取 ChatImage 与裸图片链接；按需包含 E33Emote/E33Chat 媒体。"""
     if not text:
         return []
     refs: list[str] = []
@@ -193,12 +198,24 @@ def extract_image_refs(text: str) -> list[str]:
         if url and url not in seen:
             seen.add(url)
             refs.append(url)
+    if include_e33chat:
+        for match in _E33EMOTE_RE.finditer(text):
+            url = match.group(1).strip()
+            if url and url not in seen:
+                seen.add(url)
+                refs.append(url)
     for match in _URL_RE.finditer(text):
         raw = match.group(0)
         url = raw.rstrip(".,;!?)]}'\"")
         if url and url not in seen and _is_image_url(url):
             seen.add(url)
             refs.append(url)
+    if include_e33chat:
+        for match in _E33CHAT_MEDIA_RE.finditer(text):
+            url = match.group(0)
+            if url not in seen:
+                seen.add(url)
+                refs.append(url)
     return refs
 
 
@@ -224,8 +241,14 @@ def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
             return raw
         return "" if _is_image_url(url) else raw
 
+    text = _E33EMOTE_RE.sub(
+        lambda match: match.group(0) if match.group(1).strip() in keep else "", text
+    )
     text = _CICODE_RE.sub(_cic, text)
     text = _URL_RE.sub(_url, text)
+    text = _E33CHAT_MEDIA_RE.sub(
+        lambda match: match.group(0) if match.group(0) in keep else "", text
+    )
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
 
@@ -248,12 +271,31 @@ async def download_image_bytes(
     url: str,
     timeout: float = IMAGE_DOWNLOAD_TIMEOUT,
     max_bytes: int = MAX_IMAGE_DOWNLOAD_BYTES,
+    e33chat_media_dir: str = "",
 ) -> bytes | None:
-    """把图片引用（http(s)/file 链接）取成本地字节；失败返回 None。
+    """把图片引用取成本地字节；失败返回 None。
 
     file:// 仅当文件存在于本机（AstrBot 与游戏同机、或文件可访问）时有效；
-    http(s) 用 aiohttp 下载并限制大小。任何异常都不外抛，由调用方决定降级。
+    http(s) 用 aiohttp 下载并限制大小。E33Chat 媒体通过其服务端媒体目录读取，
+    该目录必须对 AstrBot 可见。任何异常都不外抛，由调用方决定降级。
     """
+    e33chat_match = _E33CHAT_MEDIA_RE.fullmatch(url)
+    if e33chat_match:
+        if not e33chat_media_dir:
+            return None
+        media_id = url.rsplit("/", 1)[-1].lower()
+        try:
+            root = Path(e33chat_media_dir).expanduser().resolve()
+            path = (root / media_id).resolve()
+            if path.parent != root:
+                return None
+            with path.open("rb") as media_file:
+                data = media_file.read(max_bytes + 1)
+        except OSError as exc:
+            logger.debug(f"[{PLUGIN_NAME}] 读取 E33Chat 媒体失败 {media_id}: {exc}")
+            return None
+        return data if 0 < len(data) <= max_bytes else None
+
     if url.startswith(("file://", "file:/")):
         path = file_uri_to_local_path(url)
         if not path:
@@ -415,7 +457,19 @@ class MessageBridge:
     def should_forward(self, config: ServerConfig, event: QueQiaoEvent) -> bool:
         """依据事件类型与配置判断是否需要转发。"""
         if event.is_chat:
-            return config.forward_chat_to_astrbot
+            message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            image_enabled = config.forward_image_from_mc and bool(
+                extract_image_refs(
+                    message, include_e33chat=config.mc_image_mode == "e33chat"
+                )
+            )
+            return (
+                config.forward_chat_to_astrbot
+                or prefix_matches(config.forward_chat_prefix, message)
+                or image_enabled
+            )
         if event.is_join or event.is_quit:
             return config.forward_join_leave_to_astrbot
         if event.is_death:
@@ -424,13 +478,21 @@ class MessageBridge:
             return config.forward_achievement_to_astrbot
         return False
 
-    def format_event(self, config: ServerConfig, event: QueQiaoEvent) -> str:
+    def format_event(
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        message_override: str | None = None,
+    ) -> str:
         """把事件渲染为转发文本。"""
         player = event.player_name or "未知"
 
         if event.is_chat:
-            message = component_to_text(event.raw_message) or component_to_text(
-                event.message
+            message = (
+                message_override
+                if message_override is not None
+                else component_to_text(event.raw_message)
+                or component_to_text(event.message)
             )
             return self._format_chat(config, player, message)
 
@@ -480,7 +542,11 @@ class MessageBridge:
         )
 
     async def _resolve_forward_images(
-        self, config: ServerConfig, event: QueQiaoEvent, content: str
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        content: str,
+        message_override: str | None = None,
     ) -> tuple[str, list]:
         """开启 `forward_image_from_mc` 时，把聊天里的图片引用转为图片组件。
 
@@ -488,17 +554,24 @@ class MessageBridge:
         （下载失败的引用保留原文，避免信息静默丢失），images 为下载成功的
         Image 组件列表。
         """
-        message = component_to_text(event.raw_message) or component_to_text(
-            event.message
+        message = (
+            message_override
+            if message_override is not None
+            else component_to_text(event.raw_message)
+            or component_to_text(event.message)
         )
-        refs = extract_image_refs(message)
+        refs = extract_image_refs(
+            message, include_e33chat=config.mc_image_mode == "e33chat"
+        )
         if not refs:
             return content, []
 
         images: list = []
         converted: list[str] = []
         for ref in refs:
-            data = await download_image_bytes(ref)
+            data = await download_image_bytes(
+                ref, e33chat_media_dir=config.e33chat_media_dir
+            )
             if data is None:
                 continue
             try:
@@ -542,11 +615,24 @@ class MessageBridge:
             logger.debug(f"[{PLUGIN_NAME}][{server_name}] 抑制回声消息: {event.message}")
             return False
 
-        content = self.format_event(config, event)
+        message_override = None
+        if event.is_chat:
+            chat_message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            if prefix_matches(config.forward_chat_prefix, chat_message):
+                message_override = strip_prefix(
+                    config.forward_chat_prefix, chat_message
+                )
+            else:
+                message_override = chat_message
+        content = self.format_event(config, event, message_override)
         images: list = []
 
         if event.is_chat and config.forward_image_from_mc:
-            content, images = await self._resolve_forward_images(config, event, content)
+            content, images = await self._resolve_forward_images(
+                config, event, content, message_override
+            )
 
         if not content and not images:
             return False
@@ -593,7 +679,9 @@ class MessageBridge:
 
     # ---- 外部 → MC ----
 
-    def should_relay(self, config: ServerConfig, text: str) -> bool:
+    def should_relay(
+        self, config: ServerConfig, text: str, *, has_images: bool = False
+    ) -> bool:
         """判断外部消息是否应转发到 MC（按前缀过滤）。
 
         与 AI 前缀不同：转发前缀留空表示**全部转发**，
@@ -602,7 +690,9 @@ class MessageBridge:
         prefix = config.auto_forward_prefix
         if not prefix:
             return True
-        return prefix_matches(prefix, text)
+        return prefix_matches(prefix, text) or (
+            has_images and config.forward_image_to_mc
+        )
 
     def strip_relay_prefix(self, config: ServerConfig, text: str) -> str:
         """去掉转发前缀。"""

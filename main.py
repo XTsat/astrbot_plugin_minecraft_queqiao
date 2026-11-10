@@ -229,6 +229,7 @@ class MinecraftQueQiaoPlugin(Star):
         "ai_chat_prefix",
         "enable_local_translation",
         "forward_chat_to_astrbot",
+        "forward_chat_prefix",
         "forward_chat_format",
         "forward_join_leave_to_astrbot",
         "forward_death_to_astrbot",
@@ -236,6 +237,8 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_image_to_mc",
         "forward_image_from_mc",
         "auto_forward_prefix",
+        "e33chat_media_dir",
+        "mc_image_mode",
         "target_sessions",
         "terminal_days",
         "notify_on_connect",
@@ -680,11 +683,11 @@ class MinecraftQueQiaoPlugin(Star):
 
     @staticmethod
     def _warn_prefix_conflict(config: ServerConfig) -> None:
-        """两个前缀互相包含时告警，提示用户在配置中改开。"""
+        """转发前缀与 AI 前缀互相包含时告警，提示用户改开。"""
         if config.prefixes_conflict:
             logger.warning(
-                f"[{PLUGIN_NAME}][{config.server_name}] 互通前缀 "
-                f"`{config.auto_forward_prefix}` 与 AI 前缀 "
+                f"[{PLUGIN_NAME}][{config.server_name}] 游戏→群前缀 "
+                f"`{config.forward_chat_prefix}` 与 AI 前缀 "
                 f"`{config.ai_chat_prefix}` 相互包含，消息归属可能产生歧义，"
                 f"建议改为互不相同的两个前缀"
             )
@@ -1730,7 +1733,9 @@ class MinecraftQueQiaoPlugin(Star):
             )
             if not relay_text and not images and not self_mention:
                 continue
-            if not self.message_bridge.should_relay(config, relay_text):
+            if not self.message_bridge.should_relay(
+                config, relay_text, has_images=bool(images)
+            ):
                 continue
 
             instance = self.server_manager.get(server_name)

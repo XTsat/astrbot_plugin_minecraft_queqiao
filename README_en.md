@@ -120,12 +120,13 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `forward_chat_to_astrbot` | bool | `true` | Forward player chat to target sessions |
+| `forward_chat_to_astrbot` | bool | `true` | Relay all in-game chat to target sessions; when off, only chats matching `forward_chat_prefix` are relayed. Image forwarding ignores this text prefix |
+| `forward_chat_prefix` | string | empty | Game → group trigger prefix; when full chat forwarding is off, only game chat starting with this prefix is relayed, with the prefix removed |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | Chat format; supports `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages (server display name appended, so the source is clear when several servers share a group) |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
-| `auto_forward_prefix` | string | empty | Group messages starting with it are relayed into the game; empty relays all |
+| `auto_forward_prefix` | string | empty | Group text starting with it is relayed into the game; empty relays all. Enabled image forwarding ignores this prefix |
 | `forward_bot_self_messages` | bool | `false` | **Relay the bot's own messages without stripping wake prefixes**: wake messages use their original pre-processing text, including the self-mention omitted from OneBot's text (a standalone `@bot` is relayed too); bot replies produced by AstrBot's message pipeline and bot self-messages observed by this plugin are relayed with the available group nickname. Images reuse `forward_image_to_mc` and the image-host settings; `[图片]` is only used when image forwarding is disabled or no reachable URL can be obtained. Faces are recorded as `[表情:id]`. No need to disable `ignore_bot_self_message`, and replies are not fed back into command handling. `auto_forward_prefix` still applies; this plugin's own group messages remain echo-suppressed |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; supports `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | Platform name mapping: `raw=display`, e.g. `aiocqhttp=QQ` |
@@ -134,7 +135,9 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 | `mark_emoji_id` | int | `124` | Reaction emoji ID (QQ emoji ID; default `124` = 👌) |
 | `forward_image_to_mc` | bool | `false` | Relay group images and enabled bot reply/self-message images into the game (requires ChatImage on the client to render; otherwise the CICode text is shown) |
 | `chatimage_name` | string | `图片` | In-game display name for the image |
-| `forward_image_from_mc` | bool | `false` | In-game images (CICode / links) downloaded and sent back as images |
+| `forward_image_from_mc` | bool | `false` | Download in-game images according to the selected game image mode and send them as images; images ignore the game → group text prefix |
+| `mc_image_mode` | string | `chatimage` | Game → group image handling: `chatimage` keeps existing ChatImage CICode / reachable image URL support; `e33chat` additionally handles E33Chat server media |
+| `e33chat_media_dir` | string | empty | Required only for E33Chat mode: set to a server media directory readable by AstrBot (mount a shared directory for remote servers) |
 
 > Get a session's UMO with **AstrBot's built-in `/sid` command**: send `/sid` in the target group/DM, and the `UMO` field in the reply is the value to fill in (e.g. `aiocqhttp:GroupMessage:123456789`). This list drives three things at once: which sessions receive MC messages, which sessions' messages are relayed into MC, and which server the `mc` commands issued in that session belong to.
 
@@ -201,13 +204,16 @@ With `forward_image_to_mc` enabled, images in group messages and enabled bot pip
 
 - Only enable it on servers where players have the [ChatImage](https://github.com/kitUIN/ChatImage) mod (Fabric / Forge / NeoForge) installed — otherwise only the `[[CICode,...]]` text is shown
 - The image URL must be reachable from player clients; when an image has no public URL (the log says "图片均无可访问的公开 URL"), turn on the root-level `enable_image_upload` and configure `image_upload_services` (see below)
-- When `auto_forward_prefix` is set, only images in messages carrying the prefix are relayed (a bare image message has no text and never matches the prefix)
+- Images ignore `auto_forward_prefix`; with image forwarding enabled, bare image messages can be relayed. Any accompanying caption is relayed with the image
 
 ### Relaying in-game images to external sessions
 
-With `forward_image_from_mc` enabled, ChatImage `[[CICode,url=...]]` codes or image links in game chat are downloaded and sent to the group as images:
+With `forward_image_from_mc` enabled, in-game images are downloaded and sent to the group according to `mc_image_mode`. Images ignore `forward_chat_prefix`:
 
+- `chatimage` (default): handles ChatImage `[[CICode,url=...]]` codes and reachable image links, preserving the existing behavior
+- `e33chat`: additionally handles E33Chat `[[E33Emote,url=e33chat://media/<ID>]]` references
 - `http(s)://` links are downloaded directly; `file://` local files are only readable when AstrBot runs on the same machine as the game
+- E33Chat server media requires selecting E33Chat mode and configuring `e33chat_media_dir`; AstrBot must have read access (mount a shared directory for remote servers)
 - On download failure (dead link, invisible local file, etc.) the original code/link text is kept
 - 5 MB per image, 15 s download timeout
 

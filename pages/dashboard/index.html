@@ -194,7 +194,7 @@
             <span class="settings-row-control">
               <input type="text" id="st-ai-prefix" placeholder="ai" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「自动转发前缀」互相包含会在启动时告警</span>
+            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「游戏 → 群触发前缀」互相包含会在启动时告警</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-forward">
@@ -202,11 +202,18 @@
             <span class="settings-group-title">📡 消息转发</span>
           </div>
           <label class="settings-row">
-            <span class="settings-row-label">转发聊天到外部会话</span>
+            <span class="settings-row-label">全量转发游戏聊天到外部会话</span>
             <span class="settings-row-control">
               <input type="checkbox" id="st-fwd-chat" />
             </span>
-            <span class="settings-row-hint">玩家游戏内聊天转发到绑定的目标会话（群/私聊）</span>
+            <span class="settings-row-hint">开启后所有游戏聊天都会转发；关闭后仅转发带「游戏 → 群触发前缀」的聊天。图片转发由图片开关控制，不受前缀限制</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏 → 群触发前缀</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-chat-prefix" placeholder="关闭全量转发后生效" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">关闭全量转发后，游戏聊天以此前缀开头才发送到外部；转发时会去掉前缀。留空时不转发普通聊天；请勿与 AI 触发前缀互相包含</span>
           </label>
           <label class="settings-row">
             <span class="settings-row-label">聊天消息格式</span>
@@ -268,7 +275,24 @@
               <span class="settings-row-control">
                 <input type="checkbox" id="st-fwd-image-from-mc" />
               </span>
-              <span class="settings-row-hint">游戏内图片（ChatImage 的 [[CICode,url=...]] 代码或直贴链接）自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
+              <span class="settings-row-hint">按下方「游戏图片模式」解析游戏内图片并作为图片发送到外部会话</span>
+            </label>
+            <label class="settings-row">
+              <span class="settings-row-label">游戏图片模式</span>
+              <span class="settings-row-control">
+                <select id="st-fwd-mc-image-mode">
+                  <option value="chatimage">ChatImage / 图片链接（默认）</option>
+                  <option value="e33chat">E33Chat 服务端媒体</option>
+                </select>
+              </span>
+              <span class="settings-row-hint">默认保留 ChatImage CICode / 可访问图片链接处理；选择 E33Chat 后才解析 e33chat://media 图片</span>
+            </label>
+            <label class="settings-row">
+              <span class="settings-row-label">E33Chat 服务端媒体目录</span>
+              <span class="settings-row-control">
+                <input type="text" id="st-fwd-e33chat-media-dir" placeholder="游戏世界目录/serverconfig/e33chat-media" autocomplete="off" spellcheck="false" />
+              </span>
+              <span class="settings-row-hint">仅 E33Chat 模式需要填写；AstrBot 必须能读取此目录，远程游戏服务器需先挂载共享目录</span>
             </label>
           </div>
           <label class="settings-row">
@@ -276,7 +300,7 @@
             <span class="settings-row-control">
               <input type="text" id="st-fwd-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">外部消息以此开头才转发进游戏；留空 = 全部转发。与「AI 触发前缀」互相包含会在启动时告警</span>
+            <span class="settings-row-hint">外部文本以此开头才转发进游戏；留空 = 全部转发。已开启图片转发时，图片不受此前缀限制</span>
           </label>
           <label class="settings-row">
             <span class="settings-row-label">目标会话（每行一个）</span>
