@@ -20,6 +20,9 @@ from .constants import (
     DEFAULT_CONNECT_FAIL_NOTIFY_FORMAT,
     DEFAULT_CONNECT_NOTIFY_FORMAT,
     DEFAULT_DISPLAY_NAME,
+    DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_LOW_FREQUENCY_INTERVAL,
     DEFAULT_LOW_FREQUENCY_THRESHOLD,
     DEFAULT_MONITOR_INTERVAL,
@@ -251,6 +254,8 @@ class ServerConfig:
     auto_forward_prefix: str = ""
     # E33Chat 服务端媒体目录；仅当 AstrBot 可读取该目录时才能转发 e33chat://media 图片
     e33chat_media_dir: str = ""
+    # E33Chat 群图发往游戏前的最大像素边长；E33Chat 按原图像素尺寸渲染
+    e33chat_image_max_edge: int = DEFAULT_E33CHAT_IMAGE_MAX_EDGE
     e33chat_media_backend: str = "local"
     mcsm_panel_url: str = ""
     mcsm_api_key: str = ""
@@ -600,6 +605,12 @@ class ServerConfig:
             target_sessions=target_sessions,
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
             e33chat_media_dir=_to_str(message.get("e33chat_media_dir"), "").strip(),
+            e33chat_image_max_edge=_to_int_clamped(
+                message.get("e33chat_image_max_edge"),
+                DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                E33CHAT_IMAGE_MAX_EDGE_MIN,
+                E33CHAT_IMAGE_MAX_EDGE_MAX,
+            ),
             e33chat_media_backend=(
                 "mcsm"
                 if _to_str(message.get("e33chat_media_backend"), "local").strip().lower()

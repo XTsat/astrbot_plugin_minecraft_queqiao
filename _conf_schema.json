@@ -262,9 +262,15 @@
               },
               "e33chat_media_dir": {
                 "type": "string",
-                "description": "E33Chat 服务端媒体目录",
-                "hint": "仅本地/远程共享目录后端需要：填写 E33Chat 服务端媒体目录；推荐使用 MCSManager 面板 API；ChatImage 与 E33Chat 是不同模组链路，请按服务端安装的模组二选一",
+                "description": "E33Chat 服务端图片缓存目录",
+                "hint": "仅本地/远程共享目录后端需要：填写 E33Chat 服务端图片缓存目录；推荐使用 MCSManager 面板 API；ChatImage 与 E33Chat 是不同模组链路，请按服务端安装的模组二选一",
                 "default": ""
+              },
+              "e33chat_image_max_edge": {
+                "type": "int",
+                "description": "E33Chat 群图最大边长",
+                "hint": "仅 E33Chat 模式生效；发送到游戏前按比例缩小超过此像素边长的图片，默认 320；ChatImage 模式不受影响",
+                "default": 320
               },
               "e33chat_media_backend": {
                 "type": "string",
@@ -277,8 +283,8 @@
               "mcsm_api_key": {"type": "string", "description": "MCSManager API Key", "hint": "在面板用户/API 设置中创建；请勿公开分享", "default": ""},
               "mcsm_daemon_id": {"type": "string", "description": "MCSManager Daemon ID", "hint": "在面板节点信息中查看", "default": ""},
               "mcsm_instance_uuid": {"type": "string", "description": "MCSManager 实例 UUID", "hint": "在实例详情或实例链接中查看", "default": ""},
-              "mcsm_media_dir": {"type": "string", "description": "MCSManager 实例内媒体目录", "hint": "相对于实例根目录的路径，如 /world/serverconfig/e33chat-media；须用面板文件管理确认", "default": ""},
-              "mcsm_daemon_url": {"type": "string", "description": "Daemon 文件传输地址（高级，可选）", "hint": "通常留空，插件默认使用 MCSManager API 返回的 Daemon 地址。只有 AstrBot 无法访问该地址（如返回 localhost 或错误的内网地址）时，填写 AstrBot 可访问的 Daemon 地址和端口，如 http://10.x.x.x:24444。此项不是 MCSManager 面板地址", "default": ""},
+              "mcsm_media_dir": {"type": "string", "description": "MCSManager 实例内媒体目录", "hint": "相对于实例根目录的路径，如 world/serverconfig/e33chat-media；开头的 / 会自动去除，须用面板文件管理确认", "default": ""},
+              "mcsm_daemon_url": {"type": "string", "description": "Daemon 文件传输地址（高级，可选）", "hint": "通常留空，插件默认使用 MCSManager API 返回的 Daemon 地址。若 MCSManager 节点显示 localhost:24444，且 AstrBot 与 Daemon 不在同一台机器，请填写 AstrBot 可访问的 Daemon 地址和端口，如 http://服务器IP:24444，并确认该端口可从 AstrBot 主机访问。此项不是面板地址或 Minecraft 游戏端口", "default": ""},
               "forward_bot_self_messages": {
                 "type": "bool",
                 "description": "转发机器人自己的消息，不剥离唤醒词",
@@ -325,7 +331,7 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。ChatImage 模式广播可访问 URL；E33Chat 模式把图片写入 e33chat_media_dir 并广播服务端媒体引用。E33Chat 模式要求 AstrBot 对实际媒体目录可读写",
+                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。ChatImage 模式广播 CICode 图片 URL；E33Chat 模式把图片写入服务端图片缓存目录并转发。E33Chat 模式需要配置 MCSM 面板或图片缓存目录",
                 "default": false
               },
               "chatimage_name": {
@@ -343,7 +349,7 @@
               "mc_image_mode": {
                 "type": "string",
                 "description": "游戏图片模式",
-                "hint": "ChatImage（默认）：保留原有 ChatImage / 图片链接链路；E33Chat：群图写入 e33chat_media_dir 并广播 E33Chat 媒体 ID，游戏图读取该目录并兼容 E33Emote、ChatUpgrade 图片标记与 CICode 图片 URL。需启用 E33Chat 服务端媒体并确保 AstrBot 对实际目录可读写；写入失败时不回退 ChatImage",
+                "hint": "ChatImage（默认）： ChatImage 模组的图片链接模式；E33Chat： E33Chat 模组的图片转发模式，该模式会使群到游戏的消息变成 RCON 指令发送，请务必配置好 RCON",
                 "options": [
                   "chatimage",
                   "e33chat"

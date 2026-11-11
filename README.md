@@ -143,6 +143,7 @@
 | `forward_image_from_mc` | bool | `false` | 按「游戏图片模式」将游戏内图片下载后作为图片发回群；图片不受游戏 → 群触发前缀限制 |
 | `mc_image_mode` | string | `chatimage` | 双向图片链路：`chatimage` 保留原行为；`e33chat` 时群图片写入 E33Chat 媒体目录，游戏图片从该目录读取并识别 E33Emote / ChatUpgrade 标记 |
 | `e33chat_media_dir` | string | 空 | E33Chat 模式必填：E33Chat 服务端实际使用的媒体目录；AstrBot 运行账户必须可读写，远程服务器需挂载共享目录 |
+| `e33chat_image_max_edge` | int | `320` | E33Chat 模式下群图发往游戏前的最大边长（像素）；仅缩小超过上限的图片，保持比例。ChatImage 不受影响，可在 Dashboard 调整为 64–2048 |
 
 > 目标会话可用 AstrBot 自带的 `/sid` 指令获取：在目标群聊/私聊发送 `/sid`，回复中的 `UMO` 就是要填的值（如 `aiocqhttp:GroupMessage:123456789`）。该列表同时决定：MC 消息转发到哪些会话、哪些会话的消息转发进 MC、以及该会话的 `mc` 指令归属哪台服务器。
 
@@ -210,21 +211,23 @@ ChatImage 模式示例：
 E33Chat 模式示例：
 
 ```text
-[QQ]群友A: [[CICode,url=e33chat://media/0123456789abcdef0123456789abcdef,name=图片]]
+[QQ]群友A: [[E33Emote,url=e33chat://media/0123456789abcdef0123456789abcdef]]
 ```
 
 - `chatimage` 模式用于安装了 [ChatImage](https://github.com/kitUIN/ChatImage) 的服务端；AstrBot 转发可访问的图片 URL，没有可访问 URL 时可配置 `enable_image_upload` 与 `image_upload_services`
-- `e33chat` 模式用于安装了 E33Chat 的服务端，需要开启服务端媒体托管（`media_enabled`）。推荐使用下方的 MCSManager 面板 API，让 AstrBot 通过面板读写服务端媒体；游戏→群可读取 E33Chat 媒体 ID、`E33Emote` 与 `ChatUpgrade` 图片标记，并继续支持 CICode 图片 URL
+- `e33chat` 模式用于安装了 E33Chat 的服务端，需要开启服务端媒体托管（`media_enabled`）。群 → 游戏的 E33Chat 图片需要可用的服务器 RCON 通道（鹊桥 RCON 或插件里的直连 RCON），才能作为游戏聊天发送并由模组处理；推荐使用下方的 MCSManager 面板 API，让 AstrBot 通过面板读写服务端媒体。游戏→群可读取 E33Chat 媒体 ID、`E33Emote` 与 `ChatUpgrade` 图片标记，并继续支持 CICode 图片 URL
 - 群 → 游戏与游戏 → 群仍分别受 `forward_image_to_mc` / `forward_image_from_mc` 控制；模式选择决定开启方向使用哪条图片链路
 - 图片不受 `auto_forward_prefix` 限制；启用图片转发后，裸图片消息也可转发。附带的文字会随图片一起转发
+- E33Chat 不支持 GIF 动图上传；GIF 会记入后台日志并跳过，不发送失败提示或图片占位符，消息附带的普通文字仍可转发
+- E33Chat 按图片原始像素尺寸渲染群图；默认上传前将最长边缩到 320 像素。可在 Dashboard「E33Chat 群图最大边长」调整，较小值会显示更小；仅影响群 → 游戏的 E33Chat 图片
 
 #### E33Chat 媒体配置（推荐：MCSManager 面板 API）
 
 先确认服务端安装的是 E33Chat，并开启 `media_enabled`。然后在插件 Dashboard 的「转发功能」中选择「游戏图片模式：E33Chat 服务端媒体」，再选择「媒体存储方式：MCSManager 面板 API」，填写：
 
 - 面板地址、API Key、目标节点 Daemon ID、实例 UUID：可在 MCSManager 面板和节点/实例详情中找到。API Key 使用面板用户权限，请妥善保管。
-- 实例内媒体目录：在目标实例的文件管理器中找到 E33Chat 的 `e33chat-media` 目录，填写从实例根目录开始的路径，例如 `/world/serverconfig/e33chat-media`。不要填 Linux 主机上的 `/opt/...` 绝对路径。
-- Daemon 文件传输地址（高级，可选）：通常留空，插件会使用 MCSManager API 返回的地址。只有 AstrBot 无法访问该地址（例如返回 `localhost` 或错误的内网地址）时，才填写 AstrBot 可访问的 Daemon 地址和端口。这里填写的不是面板地址。
+- 实例内媒体目录：在目标实例的文件管理器中找到 E33Chat 的 `e33chat-media` 目录，填写相对于实例根目录的路径，例如 `world/serverconfig/e33chat-media`；开头的 `/` 会自动去除。不要填 Linux 主机上的 `/opt/...` 绝对路径。
+- Daemon 文件传输地址（高级，可选）：通常留空，插件会使用 MCSManager API 返回的地址。如果 MCSManager 节点显示 `localhost:24444`，且 AstrBot 与 Daemon 不在同一台机器，请填写 AstrBot 可访问的 Daemon 地址和端口，例如 `http://服务器IP:24444`，并确保该端口可从 AstrBot 主机访问。这里填写的不是面板地址，也不是 Minecraft 游戏端口。
 
 AstrBot 所在主机需要能访问 MCSManager 面板和 Daemon 文件传输端口。保存后分别测试群→游戏、游戏→群图片转发。MCSManager API 模式不需要挂载目录，也不需要填写上面的本地媒体目录。
 

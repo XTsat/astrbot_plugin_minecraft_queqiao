@@ -138,6 +138,7 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 | `forward_image_from_mc` | bool | `false` | Download in-game images according to the selected game image mode and send them as images; images ignore the game → group text prefix |
 | `mc_image_mode` | string | `chatimage` | Bidirectional image route: `chatimage` preserves the existing behavior; `e33chat` writes group images to E33Chat media storage and reads game images from it, including E33Emote / ChatUpgrade tags |
 | `e33chat_media_dir` | string | empty | Required for E33Chat mode: the actual E33Chat server media directory; the AstrBot process must have read and write access (mount a shared directory for remote servers) |
+| `e33chat_image_max_edge` | int | `320` | Maximum edge in pixels for group images sent through E33Chat. Oversized images are reduced proportionally before upload. Adjustable from 64 to 2048 in the Dashboard; ChatImage is unaffected |
 
 > Get a session's UMO with **AstrBot's built-in `/sid` command**: send `/sid` in the target group/DM, and the `UMO` field in the reply is the value to fill in (e.g. `aiocqhttp:GroupMessage:123456789`). This list drives three things at once: which sessions receive MC messages, which sessions' messages are relayed into MC, and which server the `mc` commands issued in that session belong to.
 
@@ -207,21 +208,23 @@ ChatImage mode example:
 E33Chat mode example:
 
 ```text
-[QQ]UserA: [[CICode,url=e33chat://media/0123456789abcdef0123456789abcdef,name=Image]]
+[QQ]UserA: [[E33Emote,url=e33chat://media/0123456789abcdef0123456789abcdef]]
 ```
 
 - `chatimage` mode is for servers using the [ChatImage](https://github.com/kitUIN/ChatImage) mod; it sends image URLs reachable by players. If AstrBot has no reachable URL, configure `enable_image_upload` and `image_upload_services` (see below)
-- `e33chat` mode is for servers using E33Chat and requires server media hosting (`media_enabled`). We recommend the MCSManager panel API described below. Game → group supports E33Chat media IDs, E33Emote, and ChatUpgrade image tags, as well as CICode image URLs
+- `e33chat` mode is for servers using E33Chat and requires server media hosting (`media_enabled`). Group → game E33Chat images require an available server RCON route (QueQiao RCON or the plugin's direct RCON fallback) so they can be sent as game chat for the mod to process. We recommend the MCSManager panel API described below. Game → group supports E33Chat media IDs, E33Emote, and ChatUpgrade image tags, as well as CICode image URLs
 - Group → game and game → group still have separate `forward_image_to_mc` / `forward_image_from_mc` switches; the mode controls the image route for each enabled direction
 - Images ignore `auto_forward_prefix`; with image forwarding enabled, bare image messages can be relayed. Any accompanying caption is relayed with the image
+- E33Chat does not support GIF uploads. GIFs are logged and skipped without a user-facing failure notice or image placeholder; accompanying text can still be forwarded
+- E33Chat renders images using their source pixel dimensions. The default upload limit reduces the longest edge to 320 pixels; adjust “E33Chat 群图最大边长” in the Dashboard to change the displayed size. This affects only group → game images in E33Chat mode
 
 #### E33Chat media setup (recommended: MCSManager panel API)
 
 Confirm that the server runs E33Chat and has `media_enabled` turned on. In the plugin Dashboard's “转发功能” settings, choose “游戏图片模式: E33Chat 服务端媒体”, then “媒体存储方式: MCSManager 面板 API”, and enter:
 
 - Panel URL, API key, target Daemon ID, and instance UUID. Find these in MCSManager and the node/instance details. The API key has its owner's permissions; keep it private.
-- Instance media directory. In the target instance's file manager, locate `e33chat-media` and enter its path relative to the instance root, for example `/world/serverconfig/e33chat-media`. Do not enter the Linux host's `/opt/...` absolute path.
-- Daemon file-transfer address (advanced, optional). Usually leave this blank; the plugin uses the address returned by the MCSManager API. Only enter a Daemon address and port reachable from AstrBot if that returned address cannot be reached (for example, it is `localhost` or an incorrect private address). This is not the MCSManager panel URL.
+- Instance media directory. In the target instance's file manager, locate `e33chat-media` and enter its path relative to the instance root, for example `world/serverconfig/e33chat-media`. A leading `/` is stripped automatically. Do not enter the Linux host's `/opt/...` absolute path.
+- Daemon file-transfer address (advanced, optional). Usually leave this blank; the plugin uses the address returned by the MCSManager API. If the MCSManager node shows `localhost:24444` while AstrBot runs on another machine, enter a Daemon address and port that AstrBot can reach, such as `http://server-ip:24444`, and make sure the port is reachable from the AstrBot host. This is neither the MCSManager panel URL nor the Minecraft game port.
 
 The AstrBot host must be able to reach both the MCSManager panel and the Daemon transfer port. Save the settings and test image forwarding in both directions. The MCSManager API backend needs no mounted directory and does not use the local media-directory field.
 

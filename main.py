@@ -24,6 +24,8 @@ from .core.constants import (
     DEFAULT_IMAGE_HTTP_HOST,
     DEFAULT_IMAGE_HTTP_PORT,
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_START,
     E33CHAT_MEDIA_MAX_FILE_BYTES,
@@ -47,14 +49,17 @@ from .services.image_bed import (
     ImageBedUploader,
     ImageBedUploaderGroup,
 )
+from .services.image_host import sniff_image_format
 from .services.message_bridge import (
     MessageBridge,
     acquire_image_bytes,
     build_chatimage_code,
     build_e33chat_media_code,
     resolve_image_url,
+    resize_e33chat_image,
     store_e33chat_media,
 )
+from .services.mcsmanager_media import MCSManagerMedia, describe_mcsmanager_error
 from .services.metrics import MetricsCollector
 from .services.monitor import MonitorCollector
 from .services.panel_prefs import PanelPrefsStore
@@ -243,6 +248,7 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_image_from_mc",
         "auto_forward_prefix",
         "e33chat_media_dir",
+        "e33chat_image_max_edge",
         "e33chat_media_backend",
         "mcsm_panel_url",
         "mcsm_api_key",
@@ -308,6 +314,14 @@ class MinecraftQueQiaoPlugin(Star):
                 # 互通终端加载天数（每台服务器独立）：0~30 钳制
                 config.terminal_days = max(
                     0, min(30, _to_int(fields.get(key), config.terminal_days))
+                )
+            elif key == "e33chat_image_max_edge":
+                config.e33chat_image_max_edge = max(
+                    E33CHAT_IMAGE_MAX_EDGE_MIN,
+                    min(
+                        E33CHAT_IMAGE_MAX_EDGE_MAX,
+                        _to_int(fields.get(key), config.e33chat_image_max_edge),
+                    ),
                 )
             elif key == "connect_fail_notify_delay":
                 # 断连静默期（秒，每台服务器独立）：0~3600 钳制
@@ -549,15 +563,22 @@ class MinecraftQueQiaoPlugin(Star):
         ):
             # 无旁路监听器时，框架逐段发送的回复分段由发送后钩子整条转发
             return
-        echo_matched, handled_image_count = (
-            self.message_bridge.consume_outbound_echo_details(umo, text)
-        )
+        echo_matched = self.message_bridge.consume_outbound_echo(umo, text)
         if echo_matched:
-            # 插件自身转发到 QQ 的内容（MC→QQ）或已由发送后钩子转发的内容，不再重复转发
-            if handled_image_count is None or len(images) <= handled_image_count:
-                return
-            images = images[handled_image_count:]
+            # 文本回声只抑制文本；图片由内容指纹逐张识别，保留非回声图片。
             text = ""
+        original_text = getattr(event.message_obj, "message_str", None)
+        if (
+            not echo_matched
+            and isinstance(original_text, str)
+            and original_text.strip() != text
+        ):
+            echo_matched = self.message_bridge.consume_outbound_echo(
+                umo, original_text.strip()
+            )
+            if echo_matched:
+                text = ""
+        images = await self.message_bridge.filter_outbound_image_echoes(umo, images)
         if not text and not images:
             return
         if not self._claim_bot_forward(
@@ -1444,9 +1465,7 @@ class MinecraftQueQiaoPlugin(Star):
         ):
             logger.debug(f"[{PLUGIN_NAME}] Bot 回复已由 message_sent 路径转发，跳过重复转发")
             return
-        echo_stamp = self.message_bridge.mark_outbound_message(
-            umo, text, image_count=len(images)
-        )
+        echo_stamp = self.message_bridge.mark_outbound_message(umo, text)
         relayed = False
         try:
             relayed = await self._relay_to_minecraft(
@@ -1521,28 +1540,17 @@ class MinecraftQueQiaoPlugin(Star):
                 f"图片组件={len(images)}，文本非空={bool(text)}，"
                 f"绑定服务器={len(targets)}，启用自身转发={enabled_targets}"
             )
-            echo_matched, handled_image_count = (
-                self.message_bridge.consume_outbound_echo_details(umo, text)
-            )
+            echo_matched = self.message_bridge.consume_outbound_echo(umo, text)
             original_text = getattr(event.message_obj, "message_str", None)
             if (
                 not echo_matched
                 and isinstance(original_text, str)
                 and original_text.strip() != text
             ):
-                echo_matched, handled_image_count = (
-                    self.message_bridge.consume_outbound_echo_details(
-                        umo, original_text.strip()
-                    )
+                echo_matched = self.message_bridge.consume_outbound_echo(
+                    umo, original_text.strip()
                 )
             if echo_matched:
-                if handled_image_count is None or len(images) <= handled_image_count:
-                    logger.info(
-                        f"[{PLUGIN_NAME}] Bot 自身消息命中回声抑制并跳过："
-                        f"事件图片={len(images)}，已由发送管道处理图片={handled_image_count}"
-                    )
-                    return
-                images = images[handled_image_count:]
                 text = ""
             if not any(
                 config.forward_bot_self_messages for _, config in targets
@@ -1552,6 +1560,8 @@ class MinecraftQueQiaoPlugin(Star):
                     "目标会话未启用「转发机器人自己的消息，不剥离唤醒词」"
                 )
                 return
+
+        images = await self.message_bridge.filter_outbound_image_echoes(umo, images)
 
         # 图片不参与文本匹配，但可随消息一起转发到 MC
         if not text and not images:
@@ -1774,12 +1784,24 @@ class MinecraftQueQiaoPlugin(Star):
                         data, reason = await acquire_image_bytes(
                             comp, max_bytes=E33CHAT_MEDIA_MAX_FILE_BYTES
                         )
+                        if data and sniff_image_format(data) == "gif":
+                            data = None
+                            reason = "E33Chat 不支持 GIF 动图，已拦截"
+                        elif data:
+                            data, _, resize_error = await asyncio.to_thread(
+                                resize_e33chat_image,
+                                data,
+                                config.e33chat_image_max_edge,
+                            )
+                            if resize_error:
+                                logger.warning(
+                                    f"[{PLUGIN_NAME}][{server_name}] "
+                                    f"E33Chat 图片缩小失败，保留原图上传: {resize_error}"
+                                )
                         media_id = None
                         if data:
                             if config.e33chat_media_backend == "mcsm":
                                 try:
-                                    from services.mcsmanager_media import MCSManagerMedia
-
                                     media_id = uuid.uuid4().hex
                                     await MCSManagerMedia(
                                         config.mcsm_panel_url,
@@ -1794,7 +1816,7 @@ class MinecraftQueQiaoPlugin(Star):
                                     media_id = None
                                     reason = (
                                         "MCSManager 媒体上传失败（"
-                                        f"{type(exc).__name__}；详情可能含敏感凭据，已隐藏）"
+                                        f"{describe_mcsmanager_error(exc)}）"
                                     )
                             else:
                                 media_id, reason = await store_e33chat_media(
@@ -1802,9 +1824,7 @@ class MinecraftQueQiaoPlugin(Star):
                                 )
                         if media_id:
                             image_codes.append(
-                                build_e33chat_media_code(
-                                    media_id, config.chatimage_name
-                                )
+                                build_e33chat_media_code(media_id)
                             )
                         else:
                             skipped_images += 1
@@ -1830,7 +1850,11 @@ class MinecraftQueQiaoPlugin(Star):
                     "但未开启 forward_image_to_mc，图片未转发"
                 )
 
-            if image_fallback_placeholders and images:
+            if (
+                image_fallback_placeholders
+                and images
+                and config.mc_image_mode != "e33chat"
+            ):
                 unforwarded_images = len(images) - len(image_codes)
                 if unforwarded_images:
                     placeholders = " ".join(
@@ -1838,20 +1862,21 @@ class MinecraftQueQiaoPlugin(Star):
                     )
                     content = f"{content} {placeholders}".strip()
 
+            if skipped_images:
+                image_service_status = (
+                    f"图床状态: {self.image_bed.status_text}；"
+                    if config.mc_image_mode == "chatimage"
+                    else ""
+                )
+                logger.warning(
+                    f"[{PLUGIN_NAME}][{server_name}] 消息中的图片未能按"
+                    f"{config.mc_image_mode} 模式转发（{skipped_images} 张），已跳过。"
+                    f"图片组件: {self._describe_image(skipped_sample)}；"
+                    f"{image_service_status}"
+                    f"原因: {skip_reason or '未知'}"
+                )
+
             if not content and not image_codes:
-                if skipped_images:
-                    image_service_status = (
-                        f"图床状态: {self.image_bed.status_text}；"
-                        if config.mc_image_mode == "chatimage"
-                        else ""
-                    )
-                    logger.warning(
-                        f"[{PLUGIN_NAME}][{server_name}] 消息中的图片未能按"
-                        f"{config.mc_image_mode} 模式转发（{skipped_images} 张），已跳过。"
-                        f"图片组件: {self._describe_image(skipped_sample)}；"
-                        f"{image_service_status}"
-                        f"原因: {skip_reason or '未知'}"
-                    )
                 continue
 
             message = content
@@ -1873,7 +1898,29 @@ class MinecraftQueQiaoPlugin(Star):
                 display_name=config.server_label,
                 server_name=server_name,
             )
-            sent = await instance.client.broadcast(formatted, config.broadcast_color)
+            if config.mc_image_mode == "e33chat":
+                command_text = formatted.replace("\r", " ").replace("\n", " ")
+                try:
+                    command_output, _ = await instance.execute_command_with_channel(
+                        f"say {command_text}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{server_name}] E33Chat 消息无法通过"
+                        f"服务器 SAY 发送（{type(exc).__name__}），已跳过"
+                    )
+                    continue
+                if command_output is None:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{server_name}] E33Chat 消息无法通过"
+                        "服务器 SAY 发送，已跳过；请启用鹊桥 RCON 或配置直连 RCON"
+                    )
+                    continue
+                sent = True
+            else:
+                sent = await instance.client.broadcast(
+                    formatted, config.broadcast_color
+                )
             if not sent:
                 logger.warning(
                     f"[{PLUGIN_NAME}][{server_name}] 群消息转发到游戏失败: "

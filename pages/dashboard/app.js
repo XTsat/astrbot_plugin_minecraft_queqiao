@@ -3427,6 +3427,7 @@ class DashboardApp {
       prefix: document.getElementById('st-fwd-prefix'),
       chatPrefix: document.getElementById('st-fwd-chat-prefix'),
       e33chatMediaDir: document.getElementById('st-fwd-e33chat-media-dir'),
+      e33chatImageMaxEdge: document.getElementById('st-fwd-e33chat-image-max-edge'),
       e33chatBackend: document.getElementById('st-fwd-e33chat-backend'),
       mcsmUrl: document.getElementById('st-fwd-mcsm-url'),
       mcsmKey: document.getElementById('st-fwd-mcsm-key'),
@@ -3456,6 +3457,9 @@ class DashboardApp {
         fwdBoxes.e33chatMediaDir.value = typeof msg.e33chat_media_dir === 'string'
           ? msg.e33chat_media_dir
           : '';
+      }
+      if (fwdBoxes.e33chatImageMaxEdge) {
+        fwdBoxes.e33chatImageMaxEdge.value = msg.e33chat_image_max_edge || 320;
       }
       if (fwdBoxes.e33chatBackend) fwdBoxes.e33chatBackend.value = msg.e33chat_media_backend === 'mcsm' ? 'mcsm' : 'local';
       if (fwdBoxes.mcsmUrl) fwdBoxes.mcsmUrl.value = msg.mcsm_panel_url || '';
@@ -3592,6 +3596,7 @@ class DashboardApp {
         const fwdPrefix = document.getElementById('st-fwd-prefix');
         const fwdChatPrefix = document.getElementById('st-fwd-chat-prefix');
         const fwdE33chatMediaDir = document.getElementById('st-fwd-e33chat-media-dir');
+        const fwdE33chatImageMaxEdge = document.getElementById('st-fwd-e33chat-image-max-edge');
         const fwdMcImageMode = document.getElementById('st-fwd-mc-image-mode');
         const fwdSessions = document.getElementById('st-fwd-sessions');
         if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdImage && fwdPrefix && fwdSessions) {
@@ -3610,6 +3615,12 @@ class DashboardApp {
           msg.auto_forward_prefix = fwdPrefix.value.trim();
           if (fwdE33chatMediaDir) {
             msg.e33chat_media_dir = fwdE33chatMediaDir.value.trim();
+          }
+          if (fwdE33chatImageMaxEdge) {
+            const value = Number.parseInt(fwdE33chatImageMaxEdge.value, 10);
+            msg.e33chat_image_max_edge = Number.isFinite(value)
+              ? Math.max(64, Math.min(2048, value))
+              : 320;
           }
           msg.e33chat_media_backend = document.getElementById('st-fwd-e33chat-backend')?.value === 'mcsm' ? 'mcsm' : 'local';
           msg.mcsm_panel_url = document.getElementById('st-fwd-mcsm-url')?.value.trim() || '';

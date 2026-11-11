@@ -166,6 +166,18 @@ assert br.should_forward(cfg, chat) is True
 assert br.should_forward(cfg, join) is False
 br.mark_forwarded("S","hello")
 assert asyncio.run(br.forward_event("S", cfg, chat)) is False
+br.mark_outbound_message(
+    "umo:GroupMessage:1", "[整合包服]CrazyLeaf: "
+)
+assert br.consume_outbound_echo(
+    "umo:GroupMessage:1", "[整合包服]CrazyLeaf:"
+), "适配器裁掉格式化尾随空格后，图片播报文字回声仍应被抑制"
+br.mark_outbound_message(
+    "umo:GroupMessage:1", "text with  internal spacing"
+)
+assert not br.consume_outbound_echo(
+    "umo:GroupMessage:1", "text with internal spacing"
+), "回声匹配只规范化首尾空白，不折叠正文内部空白"
 print("OK  前缀过滤/事件开关/回声抑制 均正确")
 
 print("=== 9. 绑定服务持久化（原子写） ===")
@@ -1206,6 +1218,9 @@ _cfg_e33_26 = SC.from_dict({"message": {
     "mc_image_mode": "e33chat", "e33chat_media_dir": "D:/mc/e33chat-media"}})
 assert _cfg_e33_26.mc_image_mode == "e33chat"
 assert _cfg_e33_26.e33chat_media_dir == "D:/mc/e33chat-media"
+assert _cfg_e33_26.e33chat_image_max_edge == 320
+assert SC.from_dict({"message": {"e33chat_image_max_edge": "48"}}).e33chat_image_max_edge == 64
+assert SC.from_dict({"message": {"e33chat_image_max_edge": 5000}}).e33chat_image_max_edge == 2048
 
 # (d) 端到端：外部图片消息 → 转发为 ChatImage 代码广播进游戏
 from astrbot_plugin_minecraft_queqiao.main import MinecraftQueQiaoPlugin as _P26
@@ -1219,7 +1234,13 @@ class _Cli26:
         self.sent.append((text, color)); return True
 
 class _Inst26:
-    def __init__(self): self.client = _Cli26(); self.connected = True
+    def __init__(self):
+        self.client = _Cli26()
+        self.connected = True
+        self.commands = []
+    async def execute_command_with_channel(self, command):
+        self.commands.append(command)
+        return "", "queqiao"
 
 class _Ev26:
     """模拟外部会话消息事件（aiocqhttp 形态：message_str 只含文本）。"""
@@ -1308,6 +1329,56 @@ assert _instI26e.client.sent == [
     ("[QQ]群友A: 带图消息", "white"),
 ], "base64 图片无法访问时应跳过图片、保留文本"
 
+# d5b) MCSManager 上传失败时，即使消息有说明文字也记录可诊断原因
+import astrbot_plugin_minecraft_queqiao.main as _main_module26
+_original_acquire26 = _main_module26.acquire_image_bytes
+_original_mcsm26 = _main_module26.MCSManagerMedia
+_original_warning26 = _main_module26.logger.warning
+_warnings26 = []
+
+async def _fake_acquire_image_bytes26(comp, *, max_bytes=None):
+    return b"image bytes", ""
+
+class _FailedMCSUpload26:
+    def __init__(self, *args):
+        pass
+
+    async def upload(self, media_id, data):
+        raise ModuleNotFoundError("missing runtime dependency", name="aiohttp")
+
+try:
+    _main_module26.acquire_image_bytes = _fake_acquire_image_bytes26
+    _main_module26.MCSManagerMedia = _FailedMCSUpload26
+    _main_module26.logger.warning = _warnings26.append
+    _cfg_mcsm26 = SC.from_dict({
+        "server": {"server_name": "MCSMIMG"},
+        "message": {
+            "target_sessions": ["umo:GroupMessage:9"],
+            "forward_image_to_mc": True,
+            "mc_image_mode": "e33chat",
+            "e33chat_media_backend": "mcsm",
+            "mcsm_panel_url": "http://panel.example",
+            "mcsm_api_key": "key",
+            "mcsm_daemon_id": "daemon",
+            "mcsm_instance_uuid": "instance",
+            "mcsm_media_dir": "/world/serverconfig/e33chat-media",
+        },
+    })
+    _pi_mcsm26 = _P26(_Ctx26(), {})
+    _pi_mcsm26.message_bridge.register_server(_cfg_mcsm26)
+    _inst_mcsm26 = _Inst26()
+    _pi_mcsm26.server_manager._servers["MCSMIMG"] = _inst_mcsm26
+    _img_mcsm26 = _Img26(url="https://qq.example/image.png")
+    assert _run26(_pi_mcsm26._relay_to_minecraft(
+        _Ev26(text="看看这张图", images=[_img_mcsm26]),
+        "umo:GroupMessage:9", "看看这张图", [_img_mcsm26])) is True
+    assert any("MCSManager" in warning and "aiohttp" in warning
+               for warning in _warnings26), _warnings26
+finally:
+    _main_module26.acquire_image_bytes = _original_acquire26
+    _main_module26.MCSManagerMedia = _original_mcsm26
+    _main_module26.logger.warning = _original_warning26
+
 # d6) _extract_images 只挑图片段，忽略文本
 _ev_mixed = _Ev26(text="x", images=[_Img26(url="https://a/b.png"), "not-image"])
 assert len(_P26._extract_images(_ev_mixed)) == 1
@@ -1321,9 +1392,12 @@ assert _mi26["forward_image_to_mc"]["default"] is False
 assert _mi26["chatimage_name"]["default"] == "图片"
 assert "ChatImage" in _mi26["forward_image_to_mc"]["hint"], \
     "forward_image_to_mc 的 hint 必须说明依赖 ChatImage 模组"
-assert "e33chat_media_dir" in _mi26["mc_image_mode"]["hint"]
-assert "写入失败" in _mi26["mc_image_mode"]["hint"]
-assert "读取和写入" in _mi26["e33chat_media_dir"]["hint"]
+assert "RCON" in _mi26["mc_image_mode"]["hint"]
+assert "RCON 指令" in _mi26["mc_image_mode"]["hint"]
+assert "仅本地/远程共享目录后端需要" in _mi26["e33chat_media_dir"]["hint"]
+assert "MCSManager 面板 API" in _mi26["e33chat_media_dir"]["hint"]
+assert _mi26["e33chat_image_max_edge"]["default"] == 320
+assert "ChatImage 模式不受影响" in _mi26["e33chat_image_max_edge"]["hint"]
 _mk26 = list(_mi26.keys())
 assert _mk26.index("forward_image_to_mc") == _mk26.index("mark_emoji_id") + 1, \
     f"forward_image_to_mc 必须紧跟 mark_emoji_id，实际顺序: {_mk26}"
@@ -1348,6 +1422,7 @@ from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
     build_e33chat_media_code as _bec28,
     download_image_bytes as _dib28,
     resolve_image_url as _riu28,
+    resize_e33chat_image as _rei28,
     store_e33chat_media as _sem28,
 )
 import astrbot_plugin_minecraft_queqiao.services.message_bridge as _mb28
@@ -1370,6 +1445,25 @@ assert _gct28(b"RIFF\x00\x00\x00\x00WEBP") == "image/webp"
 assert _gct28(b"BM\x00\x00") == "image/bmp"
 assert _gct28(b"unknown-bytes") == "application/octet-stream"
 assert _TTL28 >= 300 and _MAX28 >= 100, "缓存 TTL 与上限常量应合理"
+
+from io import BytesIO as _BytesIO28
+from PIL import Image as _PILImage28
+
+_large_e33_image28 = _BytesIO28()
+_PILImage28.new("RGB", (640, 320), (255, 0, 0)).save(
+    _large_e33_image28, format="PNG"
+)
+_small_e33_bytes28, _e33_was_resized28, _e33_resize_error28 = _rei28(
+    _large_e33_image28.getvalue(), 320
+)
+assert _e33_was_resized28 and _e33_resize_error28 is None
+with _PILImage28.open(_BytesIO28(_small_e33_bytes28)) as _small_e33_image28:
+    assert _small_e33_image28.size == (320, 160), _small_e33_image28.size
+_same_e33_bytes28, _same_e33_resized28, _same_e33_error28 = _rei28(
+    _small_e33_bytes28, 320
+)
+assert _same_e33_bytes28 == _small_e33_bytes28
+assert not _same_e33_resized28 and _same_e33_error28 is None
 
 # (b) register / enabled 语义
 _host28 = _IH28()
@@ -1410,6 +1504,46 @@ assert asyncio.run(_aib28(_ib28))[0] == _ib28.data
 assert asyncio.run(_aib28(_ib28))[0] == _ib28.data, "可重复读取（同路径）"
 assert asyncio.run(_aib28(_ib28))[1] == "", "成功时原因应为空"
 
+# Echo suppression matches image bytes even when the platform assigns a new file ID.
+_echo_bridge28 = _mb28.MessageBridge(_Ctx26())
+_out_image28 = _ImgBytes28(data=b"same image", file="outbound-file-id")
+_echoed_image28 = _ImgBytes28(data=b"same image", file="echo-file-id")
+_new_image28 = _ImgBytes28(data=b"different image", file="new-file-id")
+_echo_marks28 = asyncio.run(_echo_bridge28.mark_outbound_image_echoes(
+    "umo:GroupMessage:9", [_out_image28]
+))
+assert _echo_marks28, "发送图片时应登记回声指纹"
+_filtered_echo28 = asyncio.run(_echo_bridge28.filter_outbound_image_echoes(
+    "umo:GroupMessage:9", [_echoed_image28, _new_image28]
+))
+assert _filtered_echo28 == [_new_image28], "回传同图应过滤，Bot 新图应保留"
+assert asyncio.run(_echo_bridge28.filter_outbound_image_echoes(
+    "umo:GroupMessage:9", [_echoed_image28]
+)) == [], "多个监听路径收到同一回声时都应抑制"
+_expire_bridge28 = _mb28.MessageBridge(_Ctx26())
+_expire_marks28 = asyncio.run(_expire_bridge28.mark_outbound_image_echoes(
+    "umo:GroupMessage:9", [_out_image28]
+))
+import time as _echo_time28
+_echo_now28 = _echo_time28.time()
+_expire_bridge28._recent_outbound_images = {
+    key: [(token, _echo_now28 - 31.0)] for key, token in _expire_marks28
+}
+assert asyncio.run(_expire_bridge28.filter_outbound_image_echoes(
+    "umo:GroupMessage:9", [_echoed_image28]
+)) == [_echoed_image28], "过期的图片指纹不得误拦新消息"
+_pixel_png28 = _BytesIO28()
+_PILImage28.new("RGB", (4, 4), (12, 34, 56)).save(_pixel_png28, format="PNG")
+_pixel_bmp28 = _BytesIO28()
+_PILImage28.new("RGB", (4, 4), (12, 34, 56)).save(_pixel_bmp28, format="BMP")
+_pixel_echo_bridge28 = _mb28.MessageBridge(_Ctx26())
+asyncio.run(_pixel_echo_bridge28.mark_outbound_image_echoes(
+    "umo:GroupMessage:9", [_ImgBytes28(_pixel_png28.getvalue(), "png-id")]
+))
+assert asyncio.run(_pixel_echo_bridge28.filter_outbound_image_echoes(
+    "umo:GroupMessage:9", [_ImgBytes28(_pixel_bmp28.getvalue(), "bmp-id")]
+)) == [], "无损格式变化后仍应匹配相同像素内容"
+
 # E33Chat media storage writes the exact bytes under a protocol-valid ID.
 with tempfile.TemporaryDirectory(prefix="e33chat-media-test-") as _e33dir28:
     _e33data28 = b"E33Chat test image bytes"
@@ -1418,8 +1552,8 @@ with tempfile.TemporaryDirectory(prefix="e33chat-media-test-") as _e33dir28:
     assert (_pathlib.Path(_e33dir28) / _e33id28).read_bytes() == _e33data28
     assert asyncio.run(_dib28(
         f"e33chat://media/{_e33id28}", e33chat_media_dir=_e33dir28)) == _e33data28
-    assert _bec28(_e33id28, "群图") == (
-        f"[[CICode,url=e33chat://media/{_e33id28},name=群图]]")
+    assert _bec28(_e33id28) == (
+        f"[[E33Emote,url=e33chat://media/{_e33id28}]]")
     _old_quota28 = _mb28.E33CHAT_MEDIA_QUOTA_BYTES
     _mb28.E33CHAT_MEDIA_QUOTA_BYTES = len(_e33data28)
     _e33id_quota28, _e33err_quota28 = asyncio.run(
@@ -1427,7 +1561,7 @@ with tempfile.TemporaryDirectory(prefix="e33chat-media-test-") as _e33dir28:
     _mb28.E33CHAT_MEDIA_QUOTA_BYTES = _old_quota28
     assert _e33id_quota28 is None and "quota" in _e33err_quota28.lower()
 
-    # With a readable shared directory, group -> game broadcasts an E33Chat ID.
+    # With readable shared media, E33Chat tags use the server SAY chat path.
     _cfg_e33_28 = SC.from_dict({
         "server": {"server_name": "E33IMG"},
         "message": {
@@ -1435,19 +1569,84 @@ with tempfile.TemporaryDirectory(prefix="e33chat-media-test-") as _e33dir28:
             "forward_image_to_mc": True,
             "mc_image_mode": "e33chat",
             "e33chat_media_dir": _e33dir28,
+            "e33chat_image_max_edge": 128,
         },
     })
     _pi_e33_28 = _P28(_Ctx26(), {})
     _pi_e33_28.message_bridge.register_server(_cfg_e33_28)
     _inst_e33_28 = _Inst26()
     _pi_e33_28.server_manager._servers["E33IMG"] = _inst_e33_28
-    _img_e33_28 = _ImgBytes28(data=b"group image bytes")
+    _large_e33_for_relay28 = _BytesIO28()
+    _PILImage28.new("RGB", (640, 320), (255, 0, 0)).save(
+        _large_e33_for_relay28, format="PNG"
+    )
+    _img_e33_28 = _ImgBytes28(data=_large_e33_for_relay28.getvalue())
     assert asyncio.run(_pi_e33_28._relay_to_minecraft(
         _Ev26(images=[_img_e33_28]), "umo:GroupMessage:9", "", [_img_e33_28]))
-    _sent_e33_28 = _inst_e33_28.client.sent[0][0]
+    assert _inst_e33_28.client.sent == []
+    assert len(_inst_e33_28.commands) == 1
+    _sent_e33_28 = _inst_e33_28.commands[0]
+    assert _sent_e33_28.startswith("say [QQ]群友A:")
     _sent_id_e33_28 = _re.search(r"e33chat://media/([0-9a-f]{32})", _sent_e33_28)
     assert _sent_id_e33_28, _sent_e33_28
-    assert (_pathlib.Path(_e33dir28) / _sent_id_e33_28.group(1)).read_bytes() == b"group image bytes"
+    assert f"[[E33Emote,url=e33chat://media/{_sent_id_e33_28.group(1)}]]" in _sent_e33_28
+    with _PILImage28.open(
+        _pathlib.Path(_e33dir28) / _sent_id_e33_28.group(1)
+    ) as _stored_e33_image28:
+        assert _stored_e33_image28.size == (128, 64), _stored_e33_image28.size
+
+    # GIF is silently dropped; pure-media bot messages do not leave a placeholder.
+    _gif_warnings28 = []
+    _main_module28 = sys.modules["astrbot_plugin_minecraft_queqiao.main"]
+    _original_warning28 = _main_module28.logger.warning
+    _main_module28.logger.warning = _gif_warnings28.append
+    try:
+        _gif_inst28 = _Inst26()
+        _pi_e33_28.server_manager._servers["E33IMG"] = _gif_inst28
+        _gif_image28 = _ImgBytes28(data=b"GIF89a animated image")
+        assert not asyncio.run(_pi_e33_28._relay_to_minecraft(
+            _Ev26(images=[_gif_image28]), "umo:GroupMessage:9", "",
+            [_gif_image28], image_fallback_placeholders=True,
+        ))
+        assert _gif_inst28.client.sent == []
+        assert _gif_inst28.commands == []
+        assert any("GIF" in warning and "已跳过" in warning
+                   for warning in _gif_warnings28), _gif_warnings28
+
+        # A caption remains useful and E33Chat sends text through the same SAY path.
+        _caption_gif28 = _ImgBytes28(data=b"GIF89a animated image")
+        assert asyncio.run(_pi_e33_28._relay_to_minecraft(
+            _Ev26(text="动图说明", images=[_caption_gif28]),
+            "umo:GroupMessage:9", "动图说明", [_caption_gif28],
+        ))
+        assert _gif_inst28.client.sent == []
+        assert _gif_inst28.commands == ["say [QQ]群友A: 动图说明"]
+
+        # E33Chat text-only messages also use SAY; filtering still runs first.
+        _text_inst28 = _Inst26()
+        _pi_e33_28.server_manager._servers["E33IMG"] = _text_inst28
+        assert asyncio.run(_pi_e33_28._relay_to_minecraft(
+            _Ev26(text="普通文字"), "umo:GroupMessage:9", "普通文字"
+        ))
+        assert _text_inst28.client.sent == []
+        assert _text_inst28.commands == ["say [QQ]群友A: 普通文字"]
+    finally:
+        _main_module28.logger.warning = _original_warning28
+
+    # If SAY/RCON is unavailable, an E33Chat tag is never sent as a system broadcast.
+    _no_rcon_inst28 = _Inst26()
+    async def _no_rcon28(command):
+        _no_rcon_inst28.commands.append(command)
+        return None, ""
+    _no_rcon_inst28.execute_command_with_channel = _no_rcon28
+    _pi_e33_28.server_manager._servers["E33IMG"] = _no_rcon_inst28
+    _no_rcon_image28 = _ImgBytes28(data=b"valid image bytes")
+    assert not asyncio.run(_pi_e33_28._relay_to_minecraft(
+        _Ev26(images=[_no_rcon_image28]), "umo:GroupMessage:9", "",
+        [_no_rcon_image28],
+    ))
+    assert _no_rcon_inst28.client.sent == []
+    assert len(_no_rcon_inst28.commands) == 1
 
     # Missing E33Chat storage skips the image instead of falling back to a public ChatImage URL.
     _cfg_e33_missing28 = SC.from_dict({
@@ -2360,6 +2559,33 @@ assert asyncio.run(_dib29("https://img.example/ok.png")) == b"\x89PNG\r\n\x1a\no
 assert asyncio.run(_dib29("https://img.example/missing.png")) is None, "404 应返回 None"
 assert asyncio.run(_dib29("https://img.example/ok.png", max_bytes=3)) is None
 
+# MCSManager-backed E33Chat media reads through the package-imported service.
+_original_mcsm_reader28 = _mb28.MCSManagerMedia
+_mcsm_ids28 = []
+class _FakeMCSReader28:
+    def __init__(self, *args):
+        pass
+
+    async def download(self, media_id):
+        _mcsm_ids28.append(media_id)
+        return b"MCSManager E33Chat image"
+
+try:
+    _mb28.MCSManagerMedia = _FakeMCSReader28
+    _mcsm_read_id28 = "0123456789abcdef0123456789abcdef"
+    assert asyncio.run(_dib29(
+        f"e33chat://media/{_mcsm_read_id28}",
+        e33chat_media_backend="mcsm",
+        mcsm_panel_url="http://panel.example",
+        mcsm_api_key="key",
+        mcsm_daemon_id="daemon",
+        mcsm_instance_uuid="instance",
+        mcsm_media_dir="/world/serverconfig/e33chat-media",
+    )) == b"MCSManager E33Chat image"
+    assert _mcsm_ids28 == [_mcsm_read_id28]
+finally:
+    _mb28.MCSManagerMedia = _original_mcsm_reader28
+
 # (e) 配置解析：默认关闭、可开启、字符串 true 兼容
 assert ServerConfig.from_dict({}).forward_image_from_mc is False
 assert ServerConfig.from_dict(
@@ -2384,14 +2610,136 @@ assert _mcsm_cfg.mcsm_media_dir == "/world/serverconfig/e33chat-media/"
 assert _mcsm_cfg.mcsm_daemon_url == "http://10.0.0.8:24444"
 assert ServerConfig.from_dict({}).e33chat_media_backend == "local"
 from astrbot_plugin_minecraft_queqiao.services.mcsmanager_media import MCSManagerMedia as _MCSMMedia
+from astrbot_plugin_minecraft_queqiao.services.mcsmanager_media import (
+    MCSManagerMediaError as _MCSMMediaError,
+    describe_mcsmanager_error as _describe_mcsm_error,
+)
 _mcsm_media = _MCSMMedia("http://10.0.0.5:23333", "key", "daemon", "uuid",
                          "/world/serverconfig/e33chat-media", "http://10.0.0.8:24444")
+assert _mcsm_media.media_dir == "world/serverconfig/e33chat-media"
 assert _mcsm_media._transfer_url({"addr": "localhost:24444"}, "upload/token") == "http://10.0.0.8:24444/upload/token"
 _mcsm_default = _MCSMMedia("http://10.0.0.5:23333", "key", "daemon", "uuid", "/media")
 assert _mcsm_default._transfer_url({"addr": "localhost:24444"}, "download/token/file") == "http://localhost:24444/download/token/file"
+assert _mcsm_default._transfer_url(
+    {"addr": "localhost:24444", "remoteMappings": []}, "upload/token"
+) == "http://localhost:24444/upload/token"
+_mcsm_mapped = _MCSMMedia("http://panel.example:23333/mcsm", "key", "daemon", "uuid", "/media")
+assert _mcsm_mapped._transfer_url({
+    "addr": "localhost:24444",
+    "remoteMappings": [{
+        "from": {"addr": "panel.example:23333", "prefix": "/mcsm/"},
+        "to": {"addr": "10.0.0.8:24444", "prefix": "/proxy/"},
+    }],
+}, "upload/token") == "http://10.0.0.8:24444/proxy/upload/token"
+assert _mcsm_mapped._transfer_url({
+    "addr": "localhost:24444",
+    "remoteMappings": [{
+        "from": {"addr": "other.example:23333", "prefix": "/mcsm"},
+        "to": {"addr": "10.0.0.8:24444", "prefix": "/proxy"},
+    }],
+}, "download/token/file") == "http://localhost:24444/download/token/file"
+try:
+    _mcsm_mapped._transfer_url({
+        "addr": "localhost:24444",
+        "remoteMappings": [{"from": {}, "to": {}}],
+    }, "upload/token")
+except _MCSMMediaError as _mcsm_shape_error:
+    assert "remoteMappings" in str(_mcsm_shape_error)
+else:
+    raise AssertionError("无效 remoteMappings 条目应给出可诊断错误")
+
+# MCSManager's upload/download ticket endpoints use POST; file-list remains GET.
+_mcsm_request_calls = []
+_mcsm_transfer_calls = []
+class _MCSMTicketResponse:
+    status = 200
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): return False
+    async def json(self, content_type=None):
+        return {"status": 200, "data": {
+            "addr": "localhost:24444", "password": "token", "remoteMappings": [],
+            "items": [], "total": 0,
+        }}
+class _MCSMTransferContent:
+    def __init__(self): self.data = b"image-data"
+    async def read(self, size=-1): return self.data[:size]
+    async def iter_chunked(self, size):
+        for offset in range(0, len(self.data), size):
+            yield self.data[offset:offset + size]
+class _MCSMTransferResponse:
+    status = 200
+    content = _MCSMTransferContent()
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): return False
+    async def text(self): return "OK"
+class _MCSMFormData:
+    def add_field(self, *args, **kwargs): pass
+class _MCSMTicketSession:
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): return False
+    def request(self, method, url, **kwargs):
+        _mcsm_request_calls.append((method, url, kwargs.get("params", {})))
+        return _MCSMTicketResponse()
+    def post(self, url, data=None):
+        _mcsm_transfer_calls.append(("POST", url))
+        return _MCSMTransferResponse()
+    def get(self, url):
+        _mcsm_transfer_calls.append(("GET", url))
+        return _MCSMTransferResponse()
+_mcsm_old_aiohttp = sys.modules.get("aiohttp")
+_mcsm_fake_aiohttp = types.ModuleType("aiohttp")
+_mcsm_fake_aiohttp.ClientTimeout = lambda total=None: total
+_mcsm_fake_aiohttp.ClientSession = lambda timeout=None: _MCSMTicketSession()
+_mcsm_fake_aiohttp.FormData = _MCSMFormData
+sys.modules["aiohttp"] = _mcsm_fake_aiohttp
+_mcsm_probe = _MCSMMedia(
+    "http://panel.example:23333", "key", "daemon", "uuid",
+    "/world/serverconfig/e33chat-media/"
+)
+try:
+    asyncio.run(_mcsm_probe.upload("0123456789abcdef0123456789abcdef", b"image-data"))
+    assert asyncio.run(_mcsm_probe.download("0123456789abcdef0123456789abcdef")) == b"image-data"
+    _mcsm_full_payload = bytes(range(256)) * 2048
+    _MCSMTransferResponse.content.data = _mcsm_full_payload
+    assert asyncio.run(_mcsm_probe.download(
+        "0123456789abcdef0123456789abcdef"
+    )) == _mcsm_full_payload, "MCSManager 分块响应必须完整读取"
+    _MCSMTransferResponse.content.data = b"image-data"
+    _MCSMTransferResponse.status = 404
+    try:
+        asyncio.run(_mcsm_probe.download("0123456789abcdef0123456789abcdef"))
+    except _MCSMMediaError as _mcsm_missing_media_error:
+        assert "404" in str(_mcsm_missing_media_error)
+    else:
+        raise AssertionError("MCSManager 媒体文件不存在时应给出可诊断错误")
+    finally:
+        _MCSMTransferResponse.status = 200
+finally:
+    if _mcsm_old_aiohttp is None:
+        sys.modules.pop("aiohttp", None)
+    else:
+        sys.modules["aiohttp"] = _mcsm_old_aiohttp
+assert [call[0] for call in _mcsm_request_calls] == [
+    "GET", "POST", "POST", "POST", "POST"
+], _mcsm_request_calls
+assert _mcsm_request_calls[0][2]["target"] == "world/serverconfig/e33chat-media", _mcsm_request_calls
+assert _mcsm_request_calls[1][2]["upload_dir"] == "world/serverconfig/e33chat-media", _mcsm_request_calls
+assert _mcsm_request_calls[2][2]["file_name"] == \
+    "world/serverconfig/e33chat-media/0123456789abcdef0123456789abcdef", _mcsm_request_calls
+assert [call[0] for call in _mcsm_transfer_calls] == [
+    "POST", "GET", "GET", "GET"
+], _mcsm_transfer_calls
+assert _mcsm_transfer_calls[1][1].endswith(
+    "/download/token/0123456789abcdef0123456789abcdef"
+), _mcsm_transfer_calls
+assert _describe_mcsm_error(_MCSMMediaError("Daemon 上传接口返回 HTTP 403")) == \
+    "Daemon 上传接口返回 HTTP 403"
+assert "缺少模块 aiohttp" in _describe_mcsm_error(
+    ModuleNotFoundError("missing dependency", name="aiohttp")
+)
 try:
     _MCSMMedia("", "", "", "", "")._validate()
-except ValueError:
+except _MCSMMediaError:
     pass
 else:
     raise AssertionError("MCSManager 配置缺失时必须拒绝请求")
@@ -5191,6 +5539,7 @@ for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"'
                 'id="st-fwd-chat"', 'id="st-fwd-chat-format"', 'id="st-fwd-joinleave"',
                 'id="st-fwd-death"', 'id="st-fwd-achievement"', 'id="st-fwd-image"',
                 'id="st-fwd-image-to-mc"', 'id="st-fwd-image-from-mc"',
+                'id="st-fwd-e33chat-image-max-edge"',
                 'id="st-fwd-image-toggle"', 'id="st-fwd-image-subgroup"',
                 'id="st-fwd-prefix"',
                 'id="st-fwd-sessions"',
@@ -5217,6 +5566,7 @@ assert "forward_chat_to_astrbot" in _js44 and "target_sessions" in _js44, (
 assert "forward_image_to_mc" in _js44 and "forward_image_from_mc" in _js44, (
     "前端必须读写双向图片转发字段（转发图片总开关同时控制两个方向）"
 )
+assert "e33chat_image_max_edge" in _js44, "Dashboard 必须回显并保存 E33Chat 图片边长"
 assert "terminalDaysFor" in _js44, "前端必须按当前服务器读取 terminal_days"
 assert "queqiao_terminal_days" not in _js44, "terminal_days 已迁 conf，不得再写 localStorage"
 assert ".settings-panel" in _css44, "缺少设置面板样式"

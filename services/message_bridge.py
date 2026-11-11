@@ -9,6 +9,8 @@
 """
 
 import asyncio
+import hashlib
+import io
 import json
 import os
 import re
@@ -42,6 +44,7 @@ from ..core.constants import (
 )
 from ..core.models import QueQiaoEvent
 from ..core.models_config import ServerConfig
+from .mcsmanager_media import MCSManagerMedia, describe_mcsmanager_error
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -182,6 +185,39 @@ async def acquire_image_bytes(
         return None, f"读取本地文件失败: {path}: {exc}"
 
 
+def resize_e33chat_image(
+    data: bytes, max_edge: int
+) -> tuple[bytes, bool, str | None]:
+    """按 E33Chat 客户端的原图像素渲染方式缩小群图，保持长宽比。"""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(io.BytesIO(data)) as source:
+            source_format = (source.format or "").upper()
+            image = ImageOps.exif_transpose(source)
+            if max(image.size) <= max_edge:
+                return data, False, None
+            image.thumbnail(
+                (max_edge, max_edge), Image.Resampling.LANCZOS
+            )
+            output = io.BytesIO()
+            if source_format in ("JPEG", "JPG"):
+                image.convert("RGB").save(
+                    output, format="JPEG", quality=88, optimize=True
+                )
+            elif source_format == "PNG":
+                image.save(output, format="PNG", optimize=True)
+            else:
+                if image.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+                    image = image.convert(
+                        "RGBA" if "A" in image.getbands() else "RGB"
+                    )
+                image.save(output, format="PNG", optimize=True)
+            return output.getvalue(), True, None
+    except Exception as exc:
+        return data, False, str(exc)
+
+
 # ---- MC → 外部：游戏内图片识别与下载 ----
 
 # 常见图片扩展名（用于判定「裸链接」是否按图片处理；忽略 query/fragment）
@@ -201,10 +237,9 @@ _E33CHAT_MEDIA_RE = re.compile(r"e33chat://media/[0-9a-f]{32}", re.IGNORECASE)
 _E33CHAT_MEDIA_WRITE_LOCK = threading.Lock()
 
 
-def build_e33chat_media_code(media_id: str, name: str = "") -> str:
-    """Build a CICode media reference that E33Chat can load."""
-    display = (name or DEFAULT_CHATIMAGE_NAME).strip() or DEFAULT_CHATIMAGE_NAME
-    return f"[[CICode,url=e33chat://media/{media_id},name={display}]]"
+def build_e33chat_media_code(media_id: str) -> str:
+    """Build the E33Chat media marker used by the server's chat parser."""
+    return f"[[E33Emote,url=e33chat://media/{media_id}]]"
 
 
 def _store_e33chat_media_sync(data: bytes, media_dir: str) -> tuple[str | None, str]:
@@ -423,8 +458,6 @@ async def download_image_bytes(
         media_id = url.rsplit("/", 1)[-1].lower()
         if e33chat_media_backend == "mcsm":
             try:
-                from services.mcsmanager_media import MCSManagerMedia
-
                 return await MCSManagerMedia(
                     mcsm_panel_url, mcsm_api_key, mcsm_daemon_id,
                     mcsm_instance_uuid, mcsm_media_dir, mcsm_daemon_url,
@@ -432,7 +465,7 @@ async def download_image_bytes(
             except Exception as exc:
                 logger.warning(
                     f"[{PLUGIN_NAME}] 从 MCSManager 读取 E33Chat 媒体失败 "
-                    f"{media_id}（{type(exc).__name__}；详情可能含敏感凭据，已隐藏）"
+                    f"{media_id}（{describe_mcsmanager_error(exc)}）"
                 )
                 return None
         if not e33chat_media_dir:
@@ -498,8 +531,10 @@ class MessageBridge:
         # (server_name, content) -> 转发时间，用于回声抑制
         self._recently_forwarded: dict[tuple[str, str], float] = {}
         # (umo, content) -> 发送时间列表，用于识别插件自己发出的群消息回声
-        self._recent_outbound: dict[
-            tuple[str, str], list[tuple[float, int | None]]
+        self._recent_outbound: dict[tuple[str, str], list[float]] = {}
+        # (umo, image fingerprint) -> send timestamps for per-image echo suppression.
+        self._recent_outbound_images: dict[
+            tuple[str, str], list[tuple[str, float]]
         ] = {}
 
     def register_server(self, config: ServerConfig) -> None:
@@ -516,6 +551,7 @@ class MessageBridge:
         self._session_to_servers.clear()
         self._recently_forwarded.clear()
         self._recent_outbound.clear()
+        self._recent_outbound_images.clear()
 
     def servers_for_session(self, umo: str) -> list[tuple[str, ServerConfig]]:
         """查询某会话绑定的服务器列表。"""
@@ -538,35 +574,119 @@ class MessageBridge:
 
     def _purge_outbound_echoes(self, now: float) -> None:
         for key, stamps in list(self._recent_outbound.items()):
-            active = [
-                (stamp, image_count)
-                for stamp, image_count in stamps
-                if now - stamp < ECHO_SUPPRESS_WINDOW
-            ]
+            active = [stamp for stamp in stamps if now - stamp < ECHO_SUPPRESS_WINDOW]
             if active:
                 self._recent_outbound[key] = active
             else:
                 del self._recent_outbound[key]
+        for key, stamps in list(self._recent_outbound_images.items()):
+            active = [
+                (token, stamp)
+                for token, stamp in stamps
+                if now - stamp < ECHO_SUPPRESS_WINDOW
+            ]
+            if active:
+                self._recent_outbound_images[key] = active
+            else:
+                del self._recent_outbound_images[key]
 
-    def mark_outbound_message(
-        self, umo: str, content: str, image_count: int | None = None
-    ) -> float:
+    @staticmethod
+    async def _image_echo_fingerprints(image: Any) -> set[str]:
+        """Build stable identities for an image from platform IDs and its bytes."""
+        data, _ = await acquire_image_bytes(image)
+        if data:
+            fingerprints = {f"sha256:{hashlib.sha256(data).hexdigest()}"}
+            try:
+                from PIL import Image, ImageOps
+
+                with Image.open(io.BytesIO(data)) as source:
+                    normalized = ImageOps.exif_transpose(source).convert("RGBA")
+                    pixel_hash = hashlib.sha256()
+                    pixel_hash.update(f"{normalized.width}x{normalized.height}:".encode())
+                    pixel_hash.update(normalized.tobytes())
+                fingerprints.add(f"pixels:{pixel_hash.hexdigest()}")
+            except Exception:
+                pass
+            return fingerprints
+        fingerprints: set[str] = set()
+        for attr in ("file_id", "id", "url", "file"):
+            value = getattr(image, attr, None)
+            if isinstance(value, (str, int)) and str(value).strip():
+                fingerprints.add(f"{attr}:{str(value).strip()}")
+        return fingerprints
+
+    async def mark_outbound_image_echoes(
+        self, umo: str, images: list
+    ) -> list[tuple[str, str]]:
+        """Record image identities before sending so an immediate adapter echo is caught."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        marks: list[tuple[str, str]] = []
+        for image in images:
+            token = uuid.uuid4().hex
+            for fingerprint in await self._image_echo_fingerprints(image):
+                key = (umo, fingerprint)
+                self._recent_outbound_images.setdefault(key, []).append((token, now))
+                marks.append((fingerprint, token))
+        return marks
+
+    def discard_outbound_image_echoes(
+        self, umo: str, marks: list[tuple[str, str]]
+    ) -> None:
+        """Remove image marks when the outbound message failed."""
+        for fingerprint, token in marks:
+            key = (umo, fingerprint)
+            stamps = self._recent_outbound_images.get(key)
+            if not stamps:
+                continue
+            filtered = [entry for entry in stamps if entry[0] != token]
+            if len(filtered) == len(stamps):
+                continue
+            if filtered:
+                self._recent_outbound_images[key] = filtered
+            else:
+                del self._recent_outbound_images[key]
+
+    async def filter_outbound_image_echoes(self, umo: str, images: list) -> list:
+        """Remove images matching recently sent content for the full echo window."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        if not any(key[0] == umo for key in self._recent_outbound_images):
+            return images
+        remaining: list = []
+        for image in images:
+            fingerprints = await self._image_echo_fingerprints(image)
+            matched_key = next(
+                (
+                    (umo, fingerprint)
+                    for fingerprint in fingerprints
+                    if self._recent_outbound_images.get((umo, fingerprint))
+                ),
+                None,
+            )
+            if matched_key is None:
+                remaining.append(image)
+                continue
+            logger.debug(f"[{PLUGIN_NAME}] 抑制已转发图片回声: umo={umo}")
+        return remaining
+
+    def mark_outbound_message(self, umo: str, content: str) -> float:
         """记录插件刚发往会话的文本，以便忽略适配器回传的机器人自身消息。"""
         now = time.time()
         self._purge_outbound_echoes(now)
-        self._recent_outbound.setdefault((umo, content), []).append(
-            (now, image_count)
-        )
+        # Image-only formatted chat messages can end with a space after the player prefix,
+        # while adapters trim that whitespace from echoed events.
+        self._recent_outbound.setdefault((umo, content.strip()), []).append(now)
         return now
 
     def discard_outbound_message(self, umo: str, content: str, stamp: float) -> None:
         """发送失败时移除对应的回声标记。"""
-        key = (umo, content)
+        key = (umo, content.strip())
         stamps = self._recent_outbound.get(key)
         if not stamps:
             return
         index = next(
-            (i for i, (saved_stamp, _) in enumerate(stamps) if saved_stamp == stamp),
+            (i for i, saved_stamp in enumerate(stamps) if saved_stamp == stamp),
             None,
         )
         if index is None:
@@ -575,25 +695,18 @@ class MessageBridge:
         if not stamps:
             del self._recent_outbound[key]
 
-    def consume_outbound_echo_details(
-        self, umo: str, content: str
-    ) -> tuple[bool, int | None]:
-        """Consume an outbound echo and return how many images were already handled."""
+    def consume_outbound_echo(self, umo: str, content: str) -> bool:
+        """Consume a text echo from a message the plugin recently sent."""
         now = time.time()
         self._purge_outbound_echoes(now)
-        key = (umo, content)
+        key = (umo, content.strip())
         stamps = self._recent_outbound.get(key)
         if not stamps:
-            return False, None
-        _, image_count = stamps.pop(0)
+            return False
+        stamps.pop(0)
         if not stamps:
             del self._recent_outbound[key]
-        return True, image_count
-
-    def consume_outbound_echo(self, umo: str, content: str) -> bool:
-        """消费一条插件已发出的文本回声。"""
-        matched, _ = self.consume_outbound_echo_details(umo, content)
-        return matched
+        return True
 
     # ---- MC → 外部 ----
 
@@ -825,14 +938,17 @@ class MessageBridge:
             if not components:
                 return False
             chain = MessageChain(chain=components)
+            image_marks = await self.mark_outbound_image_echoes(umo, images or [])
             echo_stamp = self.mark_outbound_message(umo, content)
             try:
                 result = await self.context.send_message(umo, chain)
             except Exception:
                 self.discard_outbound_message(umo, content, echo_stamp)
+                self.discard_outbound_image_echoes(umo, image_marks)
                 raise
             if result is False:
                 self.discard_outbound_message(umo, content, echo_stamp)
+                self.discard_outbound_image_echoes(umo, image_marks)
                 logger.warning(f"[{PLUGIN_NAME}] 没有可用适配器发送消息到会话 {umo}")
                 return False
             return True
