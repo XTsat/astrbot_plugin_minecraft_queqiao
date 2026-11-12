@@ -8,9 +8,16 @@
   模组渲染（https://github.com/kitUIN/ChatImage）
 """
 
+import asyncio
+import hashlib
+import io
 import json
+import os
 import re
+import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
@@ -20,6 +27,8 @@ from astrbot.api import logger
 from ..core.constants import (
     API_SET_MSG_EMOJI_LIKE,
     DEFAULT_CHATIMAGE_NAME,
+    E33CHAT_MEDIA_MAX_FILE_BYTES,
+    E33CHAT_MEDIA_QUOTA_BYTES,
     ECHO_SUPPRESS_WINDOW,
     EMOJI_OK_GESTURE,
     IMAGE_DOWNLOAD_TIMEOUT,
@@ -35,6 +44,7 @@ from ..core.constants import (
 )
 from ..core.models import QueQiaoEvent
 from ..core.models_config import ServerConfig
+from .mcsmanager_media import MCSManagerMedia, describe_mcsmanager_error
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -143,7 +153,9 @@ async def resolve_image_url(
     return None, reason
 
 
-async def acquire_image_bytes(comp: Any) -> tuple[bytes | None, str]:
+async def acquire_image_bytes(
+    comp: Any, *, max_bytes: int | None = None
+) -> tuple[bytes | None, str]:
     """把图片组件解析为本地字节，返回 `(bytes, fail_reason)`。
 
     借助 AstrBot 的 `Image.convert_to_file_path()` 统一处理 http(s) URL、
@@ -159,9 +171,51 @@ async def acquire_image_bytes(comp: Any) -> tuple[bytes | None, str]:
     if not path:
         return None, "convert_to_file_path 返回空"
     try:
-        return Path(path).read_bytes(), ""
+        local_path = Path(path)
+        if max_bytes is not None:
+            if local_path.stat().st_size > max_bytes:
+                return None, f"图片超过大小上限 {max_bytes} 字节"
+            with local_path.open("rb") as image_file:
+                data = image_file.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                return None, f"图片超过大小上限 {max_bytes} 字节"
+            return data, ""
+        return local_path.read_bytes(), ""
     except OSError as exc:
         return None, f"读取本地文件失败: {path}: {exc}"
+
+
+def resize_e33chat_image(
+    data: bytes, max_edge: int
+) -> tuple[bytes, bool, str | None]:
+    """按 E33Chat 客户端的原图像素渲染方式缩小群图，保持长宽比。"""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(io.BytesIO(data)) as source:
+            source_format = (source.format or "").upper()
+            image = ImageOps.exif_transpose(source)
+            if max(image.size) <= max_edge:
+                return data, False, None
+            image.thumbnail(
+                (max_edge, max_edge), Image.Resampling.LANCZOS
+            )
+            output = io.BytesIO()
+            if source_format in ("JPEG", "JPG"):
+                image.convert("RGB").save(
+                    output, format="JPEG", quality=88, optimize=True
+                )
+            elif source_format == "PNG":
+                image.save(output, format="PNG", optimize=True)
+            else:
+                if image.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+                    image = image.convert(
+                        "RGBA" if "A" in image.getbands() else "RGB"
+                    )
+                image.save(output, format="PNG", optimize=True)
+            return output.getvalue(), True, None
+    except Exception as exc:
+        return data, False, str(exc)
 
 
 # ---- MC → 外部：游戏内图片识别与下载 ----
@@ -171,9 +225,69 @@ _IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|jfif|avif)$", re.IGNORECA
 
 # ChatImage 代码：[[CICode,url=...,name=...]]，group(1) 为 url（url 是第一个参数）
 _CICODE_RE = re.compile(r"\[\[CICode,url=([^\],\s]+)(?:,[^\]]*)?\]\]", re.IGNORECASE)
+_E33EMOTE_RE = re.compile(
+    r"\[\[E33Emote,url=([^\],\s]+)(?:,[^\]]*)?\]\]",
+    re.IGNORECASE,
+)
+_CHATUPGRADE_RE = re.compile(r"\[\[ChatUpgrade,([^\]]+)\]\]", re.IGNORECASE)
 
 # 裸链接：http(s) / file（file:// 一般只出现在 CICode 内，这里兼容裸写）
 _URL_RE = re.compile(r"(?:https?|file)://[^\s]+", re.IGNORECASE)
+_E33CHAT_MEDIA_RE = re.compile(r"e33chat://media/[0-9a-f]{32}", re.IGNORECASE)
+_E33CHAT_MEDIA_WRITE_LOCK = threading.Lock()
+
+
+def build_e33chat_media_code(media_id: str) -> str:
+    """Build the E33Chat media marker used by the server's chat parser."""
+    return f"[[E33Emote,url=e33chat://media/{media_id}]]"
+
+
+def _store_e33chat_media_sync(data: bytes, media_dir: str) -> tuple[str | None, str]:
+    if not media_dir:
+        return None, "E33Chat media directory is not configured"
+    if not data:
+        return None, "image content is empty"
+    if len(data) > E33CHAT_MEDIA_MAX_FILE_BYTES:
+        return None, f"image exceeds E33Chat per-file limit ({E33CHAT_MEDIA_MAX_FILE_BYTES} bytes)"
+
+    temporary_path: Path | None = None
+    with _E33CHAT_MEDIA_WRITE_LOCK:
+        try:
+            root = Path(media_dir).expanduser().resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            used_bytes = sum(
+                item.stat().st_size
+                for item in root.rglob("*")
+                if item.is_file()
+            )
+            if used_bytes + len(data) > E33CHAT_MEDIA_QUOTA_BYTES:
+                return None, f"E33Chat media directory exceeds quota ({E33CHAT_MEDIA_QUOTA_BYTES} bytes)"
+
+            media_id = uuid.uuid4().hex
+            final_path = root / media_id
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".astrbot-upload-", dir=root, delete=False
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(data)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary_path, final_path)
+            temporary_path = None
+            return media_id, ""
+        except OSError as exc:
+            return None, f"failed to write E33Chat media directory: {exc}"
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
+async def store_e33chat_media(data: bytes, media_dir: str) -> tuple[str | None, str]:
+    """Write an image atomically to E33Chat media storage."""
+    return await asyncio.to_thread(_store_e33chat_media_sync, data, media_dir)
 
 
 def _is_image_url(url: str) -> bool:
@@ -182,18 +296,45 @@ def _is_image_url(url: str) -> bool:
     return bool(_IMAGE_EXT_RE.search(path))
 
 
-def extract_image_refs(text: str) -> list[str]:
-    """从游戏内聊天文本中提取图片引用（CICode url 与裸图片链接），去重保持顺序。"""
+def extract_image_refs(text: str, *, include_e33chat: bool = False) -> list[str]:
+    """提取 ChatImage 图片引用，并按需识别 E33Chat 图片标记。"""
     if not text:
         return []
     refs: list[str] = []
     seen: set[str] = set()
+    if include_e33chat:
+        for match in _E33EMOTE_RE.finditer(text):
+            url = match.group(1).strip()
+            if url and url not in seen:
+                seen.add(url)
+                refs.append(url)
+        for match in _CHATUPGRADE_RE.finditer(text):
+            url = _chatupgrade_image_url(match.group(1))
+            if url and url not in seen:
+                seen.add(url)
+                refs.append(url)
+        for match in _E33CHAT_MEDIA_RE.finditer(text):
+            url = match.group(0)
+            if url not in seen:
+                seen.add(url)
+                refs.append(url)
+
     for match in _CICODE_RE.finditer(text):
         url = match.group(1).strip()
-        if url and url not in seen:
+        if (
+            url
+            and (include_e33chat or not _E33CHAT_MEDIA_RE.fullmatch(url))
+            and url not in seen
+        ):
             seen.add(url)
             refs.append(url)
-    for match in _URL_RE.finditer(text):
+
+    # Marker URLs are extracted above; exclude wrappers from naked-link parsing
+    # so optional name parameters cannot become part of a second malformed URL.
+    url_text = _CICODE_RE.sub("", _E33EMOTE_RE.sub("", text))
+    if include_e33chat:
+        url_text = _CHATUPGRADE_RE.sub("", url_text)
+    for match in _URL_RE.finditer(url_text):
         raw = match.group(0)
         url = raw.rstrip(".,;!?)]}'\"")
         if url and url not in seen and _is_image_url(url):
@@ -202,7 +343,26 @@ def extract_image_refs(text: str) -> list[str]:
     return refs
 
 
-def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
+def _chatupgrade_image_url(attrs: str) -> str | None:
+    """Parse E33Chat's ChatUpgrade attributes, accepting image tags only."""
+    values: dict[str, str] = {}
+    for item in attrs.split(","):
+        key, separator, value = item.partition("=")
+        if separator and value.strip():
+            values[key.strip().lower()] = value.strip()
+    url = values.get("url")
+    image_type = values.get("type", "").lower()
+    if not url or (image_type and image_type != "image"):
+        return None
+    return url
+
+
+def strip_image_refs(
+    text: str,
+    keep: set[str] | None = None,
+    *,
+    remove: set[str] | None = None,
+) -> str:
     """移除已成功转成图片的引用；`keep` 中的引用（下载失败）保留原文。
 
     只有被成功下载的引用才会被剥离成图片；失败的引用不能凭空消失，
@@ -215,17 +375,47 @@ def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
 
     def _cic(match: re.Match) -> str:
         url = match.group(1).strip()
+        if remove is not None:
+            return "" if url in remove else match.group(0)
         return match.group(0) if url in keep else ""
 
     def _url(match: re.Match) -> str:
         raw = match.group(0)
         url = raw.rstrip(".,;!?)]}'\"")
+        if remove is not None:
+            return "" if url in remove and _is_image_url(url) else raw
         if url in keep:
             return raw
         return "" if _is_image_url(url) else raw
 
+    text = _E33EMOTE_RE.sub(
+        lambda match: (
+            "" if match.group(1).strip() in remove else match.group(0)
+        ) if remove is not None else (
+            match.group(0) if match.group(1).strip() in keep else ""
+        ),
+        text,
+    )
+
+    def _chatupgrade(match: re.Match[str]) -> str:
+        url = _chatupgrade_image_url(match.group(1))
+        if not url:
+            return match.group(0)
+        if remove is not None:
+            return "" if url in remove else match.group(0)
+        return match.group(0) if url in keep else ""
+
+    text = _CHATUPGRADE_RE.sub(_chatupgrade, text)
     text = _CICODE_RE.sub(_cic, text)
     text = _URL_RE.sub(_url, text)
+    text = _E33CHAT_MEDIA_RE.sub(
+        lambda match: (
+            "" if match.group(0) in remove else match.group(0)
+        ) if remove is not None else (
+            match.group(0) if match.group(0) in keep else ""
+        ),
+        text,
+    )
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
 
@@ -248,12 +438,53 @@ async def download_image_bytes(
     url: str,
     timeout: float = IMAGE_DOWNLOAD_TIMEOUT,
     max_bytes: int = MAX_IMAGE_DOWNLOAD_BYTES,
+    e33chat_media_dir: str = "",
+    e33chat_media_backend: str = "local",
+    mcsm_panel_url: str = "",
+    mcsm_api_key: str = "",
+    mcsm_daemon_id: str = "",
+    mcsm_instance_uuid: str = "",
+    mcsm_media_dir: str = "",
+    mcsm_daemon_url: str = "",
 ) -> bytes | None:
-    """把图片引用（http(s)/file 链接）取成本地字节；失败返回 None。
+    """把图片引用取成本地字节；失败返回 None。
 
     file:// 仅当文件存在于本机（AstrBot 与游戏同机、或文件可访问）时有效；
-    http(s) 用 aiohttp 下载并限制大小。任何异常都不外抛，由调用方决定降级。
+    http(s) 用 aiohttp 下载并限制大小。E33Chat 媒体通过其服务端媒体目录读取，
+    该目录必须对 AstrBot 可见。任何异常都不外抛，由调用方决定降级。
     """
+    e33chat_match = _E33CHAT_MEDIA_RE.fullmatch(url)
+    if e33chat_match:
+        media_id = url.rsplit("/", 1)[-1].lower()
+        if e33chat_media_backend == "mcsm":
+            try:
+                return await MCSManagerMedia(
+                    mcsm_panel_url, mcsm_api_key, mcsm_daemon_id,
+                    mcsm_instance_uuid, mcsm_media_dir, mcsm_daemon_url,
+                ).download(media_id)
+            except Exception as exc:
+                logger.warning(
+                    f"[{PLUGIN_NAME}] 从 MCSManager 读取 E33Chat 媒体失败 "
+                    f"{media_id}（{describe_mcsmanager_error(exc)}）"
+                )
+                return None
+        if not e33chat_media_dir:
+            return None
+        media_max_bytes = E33CHAT_MEDIA_MAX_FILE_BYTES
+        try:
+            root = Path(e33chat_media_dir).expanduser().resolve()
+            path = (root / media_id).resolve()
+            if path.parent != root:
+                return None
+            if path.stat().st_size > media_max_bytes:
+                return None
+            with path.open("rb") as media_file:
+                data = media_file.read(media_max_bytes + 1)
+        except OSError as exc:
+            logger.debug(f"[{PLUGIN_NAME}] 读取 E33Chat 媒体失败 {media_id}: {exc}")
+            return None
+        return data if 0 < len(data) <= media_max_bytes else None
+
     if url.startswith(("file://", "file:/")):
         path = file_uri_to_local_path(url)
         if not path:
@@ -299,6 +530,12 @@ class MessageBridge:
         self._session_to_servers: dict[str, list[tuple[str, ServerConfig]]] = {}
         # (server_name, content) -> 转发时间，用于回声抑制
         self._recently_forwarded: dict[tuple[str, str], float] = {}
+        # (umo, content) -> 发送时间列表，用于识别插件自己发出的群消息回声
+        self._recent_outbound: dict[tuple[str, str], list[float]] = {}
+        # (umo, image fingerprint) -> send timestamps for per-image echo suppression.
+        self._recent_outbound_images: dict[
+            tuple[str, str], list[tuple[str, float]]
+        ] = {}
 
     def register_server(self, config: ServerConfig) -> None:
         """注册服务器并建立目标会话的反向索引。"""
@@ -313,6 +550,8 @@ class MessageBridge:
         self._configs.clear()
         self._session_to_servers.clear()
         self._recently_forwarded.clear()
+        self._recent_outbound.clear()
+        self._recent_outbound_images.clear()
 
     def servers_for_session(self, umo: str) -> list[tuple[str, ServerConfig]]:
         """查询某会话绑定的服务器列表。"""
@@ -333,6 +572,142 @@ class MessageBridge:
         del self._recently_forwarded[key]
         return (time.time() - stamp) < ECHO_SUPPRESS_WINDOW
 
+    def _purge_outbound_echoes(self, now: float) -> None:
+        for key, stamps in list(self._recent_outbound.items()):
+            active = [stamp for stamp in stamps if now - stamp < ECHO_SUPPRESS_WINDOW]
+            if active:
+                self._recent_outbound[key] = active
+            else:
+                del self._recent_outbound[key]
+        for key, stamps in list(self._recent_outbound_images.items()):
+            active = [
+                (token, stamp)
+                for token, stamp in stamps
+                if now - stamp < ECHO_SUPPRESS_WINDOW
+            ]
+            if active:
+                self._recent_outbound_images[key] = active
+            else:
+                del self._recent_outbound_images[key]
+
+    @staticmethod
+    async def _image_echo_fingerprints(image: Any) -> set[str]:
+        """Build stable identities for an image from platform IDs and its bytes."""
+        data, _ = await acquire_image_bytes(image)
+        if data:
+            fingerprints = {f"sha256:{hashlib.sha256(data).hexdigest()}"}
+            try:
+                from PIL import Image, ImageOps
+
+                with Image.open(io.BytesIO(data)) as source:
+                    normalized = ImageOps.exif_transpose(source).convert("RGBA")
+                    pixel_hash = hashlib.sha256()
+                    pixel_hash.update(f"{normalized.width}x{normalized.height}:".encode())
+                    pixel_hash.update(normalized.tobytes())
+                fingerprints.add(f"pixels:{pixel_hash.hexdigest()}")
+            except Exception:
+                pass
+            return fingerprints
+        fingerprints: set[str] = set()
+        for attr in ("file_id", "id", "url", "file"):
+            value = getattr(image, attr, None)
+            if isinstance(value, (str, int)) and str(value).strip():
+                fingerprints.add(f"{attr}:{str(value).strip()}")
+        return fingerprints
+
+    async def mark_outbound_image_echoes(
+        self, umo: str, images: list
+    ) -> list[tuple[str, str]]:
+        """Record image identities before sending so an immediate adapter echo is caught."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        marks: list[tuple[str, str]] = []
+        for image in images:
+            token = uuid.uuid4().hex
+            for fingerprint in await self._image_echo_fingerprints(image):
+                key = (umo, fingerprint)
+                self._recent_outbound_images.setdefault(key, []).append((token, now))
+                marks.append((fingerprint, token))
+        return marks
+
+    def discard_outbound_image_echoes(
+        self, umo: str, marks: list[tuple[str, str]]
+    ) -> None:
+        """Remove image marks when the outbound message failed."""
+        for fingerprint, token in marks:
+            key = (umo, fingerprint)
+            stamps = self._recent_outbound_images.get(key)
+            if not stamps:
+                continue
+            filtered = [entry for entry in stamps if entry[0] != token]
+            if len(filtered) == len(stamps):
+                continue
+            if filtered:
+                self._recent_outbound_images[key] = filtered
+            else:
+                del self._recent_outbound_images[key]
+
+    async def filter_outbound_image_echoes(self, umo: str, images: list) -> list:
+        """Remove images matching recently sent content for the full echo window."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        if not any(key[0] == umo for key in self._recent_outbound_images):
+            return images
+        remaining: list = []
+        for image in images:
+            fingerprints = await self._image_echo_fingerprints(image)
+            matched_key = next(
+                (
+                    (umo, fingerprint)
+                    for fingerprint in fingerprints
+                    if self._recent_outbound_images.get((umo, fingerprint))
+                ),
+                None,
+            )
+            if matched_key is None:
+                remaining.append(image)
+                continue
+            logger.debug(f"[{PLUGIN_NAME}] 抑制已转发图片回声: umo={umo}")
+        return remaining
+
+    def mark_outbound_message(self, umo: str, content: str) -> float:
+        """记录插件刚发往会话的文本，以便忽略适配器回传的机器人自身消息。"""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        # Image-only formatted chat messages can end with a space after the player prefix,
+        # while adapters trim that whitespace from echoed events.
+        self._recent_outbound.setdefault((umo, content.strip()), []).append(now)
+        return now
+
+    def discard_outbound_message(self, umo: str, content: str, stamp: float) -> None:
+        """发送失败时移除对应的回声标记。"""
+        key = (umo, content.strip())
+        stamps = self._recent_outbound.get(key)
+        if not stamps:
+            return
+        index = next(
+            (i for i, saved_stamp in enumerate(stamps) if saved_stamp == stamp),
+            None,
+        )
+        if index is None:
+            return
+        stamps.pop(index)
+        if not stamps:
+            del self._recent_outbound[key]
+
+    def consume_outbound_echo(self, umo: str, content: str) -> bool:
+        """Consume a text echo from a message the plugin recently sent."""
+        now = time.time()
+        self._purge_outbound_echoes(now)
+        key = (umo, content.strip())
+        stamps = self._recent_outbound.get(key)
+        if not stamps:
+            return False
+        stamps.pop(0)
+        if not stamps:
+            del self._recent_outbound[key]
+        return True
+
     # ---- MC → 外部 ----
 
     @staticmethod
@@ -351,7 +726,19 @@ class MessageBridge:
     def should_forward(self, config: ServerConfig, event: QueQiaoEvent) -> bool:
         """依据事件类型与配置判断是否需要转发。"""
         if event.is_chat:
-            return config.forward_chat_to_astrbot
+            message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            image_enabled = config.forward_image_from_mc and bool(
+                extract_image_refs(
+                    message, include_e33chat=config.mc_image_mode == "e33chat"
+                )
+            )
+            return (
+                config.forward_chat_to_astrbot
+                or prefix_matches(config.forward_chat_prefix, message)
+                or image_enabled
+            )
         if event.is_join or event.is_quit:
             return config.forward_join_leave_to_astrbot
         if event.is_death:
@@ -360,13 +747,21 @@ class MessageBridge:
             return config.forward_achievement_to_astrbot
         return False
 
-    def format_event(self, config: ServerConfig, event: QueQiaoEvent) -> str:
+    def format_event(
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        message_override: str | None = None,
+    ) -> str:
         """把事件渲染为转发文本。"""
         player = event.player_name or "未知"
 
         if event.is_chat:
-            message = component_to_text(event.raw_message) or component_to_text(
-                event.message
+            message = (
+                message_override
+                if message_override is not None
+                else component_to_text(event.raw_message)
+                or component_to_text(event.message)
             )
             return self._format_chat(config, player, message)
 
@@ -416,7 +811,11 @@ class MessageBridge:
         )
 
     async def _resolve_forward_images(
-        self, config: ServerConfig, event: QueQiaoEvent, content: str
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        content: str,
+        message_override: str | None = None,
     ) -> tuple[str, list]:
         """开启 `forward_image_from_mc` 时，把聊天里的图片引用转为图片组件。
 
@@ -424,17 +823,32 @@ class MessageBridge:
         （下载失败的引用保留原文，避免信息静默丢失），images 为下载成功的
         Image 组件列表。
         """
-        message = component_to_text(event.raw_message) or component_to_text(
-            event.message
+        message = (
+            message_override
+            if message_override is not None
+            else component_to_text(event.raw_message)
+            or component_to_text(event.message)
         )
-        refs = extract_image_refs(message)
+        refs = extract_image_refs(
+            message, include_e33chat=config.mc_image_mode == "e33chat"
+        )
         if not refs:
             return content, []
 
         images: list = []
         converted: list[str] = []
         for ref in refs:
-            data = await download_image_bytes(ref)
+            data = await download_image_bytes(
+                ref,
+                e33chat_media_dir=config.e33chat_media_dir,
+                e33chat_media_backend=config.e33chat_media_backend,
+                mcsm_panel_url=config.mcsm_panel_url,
+                mcsm_api_key=config.mcsm_api_key,
+                mcsm_daemon_id=config.mcsm_daemon_id,
+                mcsm_instance_uuid=config.mcsm_instance_uuid,
+                mcsm_media_dir=config.mcsm_media_dir,
+                mcsm_daemon_url=config.mcsm_daemon_url,
+            )
             if data is None:
                 continue
             try:
@@ -448,8 +862,7 @@ class MessageBridge:
         if not images:
             return content, []
 
-        keep = {ref for ref in refs if ref not in converted}
-        clean = strip_image_refs(message, keep=keep)
+        clean = strip_image_refs(message, remove=set(converted))
         player = event.player_name or "未知"
         return self._format_chat(config, player, clean), images
 
@@ -478,11 +891,24 @@ class MessageBridge:
             logger.debug(f"[{PLUGIN_NAME}][{server_name}] 抑制回声消息: {event.message}")
             return False
 
-        content = self.format_event(config, event)
+        message_override = None
+        if event.is_chat:
+            chat_message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            if prefix_matches(config.forward_chat_prefix, chat_message):
+                message_override = strip_prefix(
+                    config.forward_chat_prefix, chat_message
+                )
+            else:
+                message_override = chat_message
+        content = self.format_event(config, event, message_override)
         images: list = []
 
         if event.is_chat and config.forward_image_from_mc:
-            content, images = await self._resolve_forward_images(config, event, content)
+            content, images = await self._resolve_forward_images(
+                config, event, content, message_override
+            )
 
         if not content and not images:
             return False
@@ -512,7 +938,19 @@ class MessageBridge:
             if not components:
                 return False
             chain = MessageChain(chain=components)
-            await self.context.send_message(umo, chain)
+            image_marks = await self.mark_outbound_image_echoes(umo, images or [])
+            echo_stamp = self.mark_outbound_message(umo, content)
+            try:
+                result = await self.context.send_message(umo, chain)
+            except Exception:
+                self.discard_outbound_message(umo, content, echo_stamp)
+                self.discard_outbound_image_echoes(umo, image_marks)
+                raise
+            if result is False:
+                self.discard_outbound_message(umo, content, echo_stamp)
+                self.discard_outbound_image_echoes(umo, image_marks)
+                logger.warning(f"[{PLUGIN_NAME}] 没有可用适配器发送消息到会话 {umo}")
+                return False
             return True
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] 发送消息到会话 {umo} 失败: {exc}")
@@ -520,7 +958,9 @@ class MessageBridge:
 
     # ---- 外部 → MC ----
 
-    def should_relay(self, config: ServerConfig, text: str) -> bool:
+    def should_relay(
+        self, config: ServerConfig, text: str, *, has_images: bool = False
+    ) -> bool:
         """判断外部消息是否应转发到 MC（按前缀过滤）。
 
         与 AI 前缀不同：转发前缀留空表示**全部转发**，
@@ -529,7 +969,9 @@ class MessageBridge:
         prefix = config.auto_forward_prefix
         if not prefix:
             return True
-        return prefix_matches(prefix, text)
+        return prefix_matches(prefix, text) or (
+            has_images and config.forward_image_to_mc
+        )
 
     def strip_relay_prefix(self, config: ServerConfig, text: str) -> str:
         """去掉转发前缀。"""
@@ -598,13 +1040,23 @@ class MessageBridge:
         return False
 
     async def _mark_text(self, event: Any) -> bool:
-        """回复一条 ✅ 文本作为转发回执。"""
+        """主动发送转发回执，避免将原消息事件标记为已响应。"""
         try:
             from astrbot.api.event import MessageChain
             from astrbot.api.message_components import Plain
 
             chain = MessageChain(chain=[Plain(text=MARK_TEXT_OK)])
-            await event.send(chain)
+            umo = event.unified_msg_origin
+            echo_stamp = self.mark_outbound_message(umo, MARK_TEXT_OK)
+            try:
+                result = await self.context.send_message(umo, chain)
+            except Exception:
+                self.discard_outbound_message(umo, MARK_TEXT_OK, echo_stamp)
+                raise
+            if result is False:
+                self.discard_outbound_message(umo, MARK_TEXT_OK, echo_stamp)
+                logger.debug(f"[{PLUGIN_NAME}] 没有可用适配器发送转发回执到 {umo}")
+                return False
             return True
         except Exception as exc:
             logger.debug(f"[{PLUGIN_NAME}] 转发回执发送失败: {exc}")

@@ -34,7 +34,7 @@
         <span>🔄 刷新</span>
       </button>
       <button class="btn" id="btn-config-link" title="总设置（自动刷新间隔等全局偏好）">
-        <span>⚙️ 设置</span>
+        <span>⚙️ 刷新设置</span>
       </button>
       <button class="btn" id="btn-config-view"
         title="配置管理：完整配置编辑（可视化表单 / JSON 直改），更底层的设置，保存后热重载。
@@ -194,7 +194,7 @@
             <span class="settings-row-control">
               <input type="text" id="st-ai-prefix" placeholder="ai" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「自动转发前缀」互相包含会在启动时告警</span>
+            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「游戏 → 群触发前缀」互相包含会在启动时告警</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-forward">
@@ -202,11 +202,18 @@
             <span class="settings-group-title">📡 消息转发</span>
           </div>
           <label class="settings-row">
-            <span class="settings-row-label">转发聊天到外部会话</span>
+            <span class="settings-row-label">全量转发游戏聊天到外部会话</span>
             <span class="settings-row-control">
               <input type="checkbox" id="st-fwd-chat" />
             </span>
-            <span class="settings-row-hint">玩家游戏内聊天转发到绑定的目标会话（群/私聊）</span>
+            <span class="settings-row-hint">开启后所有游戏聊天都会转发；关闭后仅转发带「游戏 → 群触发前缀」的聊天。图片转发由图片开关控制，不受前缀限制</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏 → 群触发前缀</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-chat-prefix" placeholder="关闭全量转发后生效" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">关闭全量转发后，游戏聊天以此前缀开头才发送到外部；转发时会去掉前缀。留空时不转发普通聊天；请勿与 AI 触发前缀互相包含</span>
           </label>
           <label class="settings-row">
             <span class="settings-row-label">聊天消息格式</span>
@@ -261,14 +268,39 @@
               <span class="settings-row-control">
                 <input type="checkbox" id="st-fwd-image-to-mc" />
               </span>
-              <span class="settings-row-hint">外部会话图片转发到游戏内，需游戏端装 ChatImage 模组（https://github.com/kitUIN/ChatImage），否则显示为 [[CICode,...]] 文本</span>
+              <span class="settings-row-hint">ChatImage URL 链路与 E33Chat 服务端媒体链路二选一；请按 Minecraft 服务端安装的模组选择「游戏图片模式」</span>
             </label>
             <label class="settings-row">
               <span class="settings-row-label">MC → 外部 图片转发</span>
               <span class="settings-row-control">
                 <input type="checkbox" id="st-fwd-image-from-mc" />
               </span>
-              <span class="settings-row-hint">游戏内图片（ChatImage 的 [[CICode,url=...]] 代码或直贴链接）自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
+              <span class="settings-row-hint">按下方「游戏图片模式」解析游戏内图片并作为图片发送到外部会话</span>
+            </label>
+            <label class="settings-row">
+              <span class="settings-row-label">游戏图片模式</span>
+              <span class="settings-row-control">
+                <select id="st-fwd-mc-image-mode">
+                  <option value="chatimage">ChatImage 模组（图片 URL 链路）</option>
+                  <option value="e33chat">E33Chat 服务端媒体</option>
+                </select>
+              </span>
+              <span class="settings-row-hint">两种模组链路任选其一：ChatImage 使用图片 URL；E33Chat 使用服务端媒体 ID，并兼容 E33Emote / ChatUpgrade 图片标记</span>
+            </label>
+            <label class="settings-row"><span class="settings-row-label">E33Chat 群图最大边长</span><span class="settings-row-control"><input id="st-fwd-e33chat-image-max-edge" type="number" min="64" max="2048" step="1" /></span><span class="settings-row-hint">仅 E33Chat 模式生效；发送到游戏前按比例缩小超过此像素边长的图片。默认 320 像素；ChatImage 不受影响</span></label>
+            <label class="settings-row"><span class="settings-row-label">E33Chat 媒体存储方式</span><span class="settings-row-control"><select id="st-fwd-e33chat-backend"><option value="mcsm">MCSManager 面板 API（推荐）</option><option value="local">本地/共享目录</option></select></span><span class="settings-row-hint">推荐 MCSManager API，可直接读写实例文件；共享目录方式需先让 AstrBot 能访问媒体目录</span></label>
+            <label class="settings-row"><span class="settings-row-label">MCSManager 面板地址</span><span class="settings-row-control"><input id="st-fwd-mcsm-url" type="text" placeholder="http://10.x.x.x:23333" autocomplete="off" /></span><span class="settings-row-hint">从 AstrBot 主机可访问的面板地址</span></label>
+            <label class="settings-row"><span class="settings-row-label">MCSManager API Key</span><span class="settings-row-control"><input id="st-fwd-mcsm-key" type="password" autocomplete="new-password" /></span><span class="settings-row-hint">保存在 AstrBot 插件配置中；请使用有目标实例文件管理权限的 Key</span></label>
+            <label class="settings-row"><span class="settings-row-label">Daemon ID</span><span class="settings-row-control"><input id="st-fwd-mcsm-daemon" type="text" autocomplete="off" /></span><span class="settings-row-hint">目标 Minecraft 实例所在节点的 ID</span></label>
+            <label class="settings-row"><span class="settings-row-label">实例 UUID</span><span class="settings-row-control"><input id="st-fwd-mcsm-uuid" type="text" autocomplete="off" /></span><span class="settings-row-hint">MCSManager 实例唯一 ID</span></label>
+            <label class="settings-row"><span class="settings-row-label">实例内媒体目录</span><span class="settings-row-control"><input id="st-fwd-mcsm-dir" type="text" placeholder="world/serverconfig/e33chat-media" autocomplete="off" /></span><span class="settings-row-hint">从实例根目录起的相对路径；用面板文件列表确认</span></label>
+            <label class="settings-row"><span class="settings-row-label">Daemon 文件传输地址（高级，可选）</span><span class="settings-row-control"><input id="st-fwd-mcsm-daemon-url" type="text" placeholder="http://10.x.x.x:24444" autocomplete="off" /></span><span class="settings-row-hint">通常留空，插件会使用 MCSManager 返回的 Daemon 地址。只有 AstrBot 无法访问该地址（例如返回 localhost 或错误的内网地址）时，才填写 AstrBot 可访问的 Daemon 地址和端口。这里不是面板地址</span></label>
+            <label class="settings-row">
+              <span class="settings-row-label">备选媒体目录（本地/共享）</span>
+              <span class="settings-row-control">
+                <input type="text" id="st-fwd-e33chat-media-dir" placeholder="AstrBot 可访问的 E33Chat 媒体目录" autocomplete="off" spellcheck="false" />
+              </span>
+              <span class="settings-row-hint">仅选择「本地/共享目录」时填写；AstrBot 进程必须能直接读取和写入此目录</span>
             </label>
           </div>
           <label class="settings-row">
@@ -276,7 +308,7 @@
             <span class="settings-row-control">
               <input type="text" id="st-fwd-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">外部消息以此开头才转发进游戏；留空 = 全部转发。与「AI 触发前缀」互相包含会在启动时告警</span>
+            <span class="settings-row-hint">外部文本以此开头才转发进游戏；留空 = 全部转发。已开启图片转发时，图片不受此前缀限制</span>
           </label>
           <label class="settings-row">
             <span class="settings-row-label">目标会话（每行一个）</span>

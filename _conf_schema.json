@@ -7,6 +7,7 @@
   "mc_servers": {
     "type": "template_list",
     "description": "MC服务器列表",
+    "default": [],
     "templates": {
       "server": {
         "name": "MC服务器",
@@ -100,6 +101,13 @@
             "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
             "default": true
           },
+          "ai_persona_id": {
+            "type": "string",
+            "description": "AI 对话人格 ID",
+            "hint": "可选，选择 AstrBot 中已有的人格，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
+            "default": "",
+            "render_type": "persona_select"
+          },
           "ai_chat_prefix": {
             "type": "string",
             "description": "AI 对话触发前缀",
@@ -107,7 +115,7 @@
             "default": "ai"
           },
           "terminal_days": {
-            "type": "integer",
+            "type": "int",
             "description": "互通终端加载最近几天的日志分片",
             "hint": "互通终端展示最近几天的日志（0~30，0=全部保留分片，默认 2：今天+昨天）。每台服务器独立",
             "default": 2
@@ -137,7 +145,7 @@
             "default": "[{display_name}] 🔴 服务器连接失败"
           },
           "connect_fail_notify_delay": {
-            "type": "integer",
+            "type": "int",
             "description": "断连静默期（秒）",
             "hint": "断线超过该秒数仍未恢复才发「连接失败」通知，期间连回则完全不通知。0 到 3600，0 = 断线立即通知，默认 60",
             "default": 60
@@ -206,9 +214,15 @@
             "items": {
               "forward_chat_to_astrbot": {
                 "type": "bool",
-                "description": "转发聊天消息到指定会话",
-                "hint": "将 Minecraft 玩家聊天消息转发到指定的外部会话",
+                "description": "全量转发游戏聊天到指定会话",
+                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后，只有以「游戏→群触发前缀」开头的聊天才转发。已开启的游戏图片转发不受该前缀限制",
                 "default": true
+              },
+              "forward_chat_prefix": {
+                "type": "string",
+                "description": "游戏→群触发前缀",
+                "hint": "关闭「全量转发游戏聊天」后，游戏聊天以此前缀开头才转发到外部会话；转发时会去掉前缀。留空时不转发普通聊天；已开启的图片转发不受此前缀限制",
+                "default": ""
               },
               "forward_chat_format": {
                 "type": "string",
@@ -243,8 +257,39 @@
               "auto_forward_prefix": {
                 "type": "string",
                 "description": "外部消息转发到MC的前缀",
-                "hint": "外部会话中以此前缀开头的消息才被转发到MC服务器（例如: *）；默认留空 = 全部转发（仅对已绑定目标会话的会话生效）。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
+                "hint": "外部会话中以此前缀开头的文本才被转发到MC服务器（例如: *）；默认留空 = 全部转发。已开启的图片转发不受此前缀限制",
                 "default": ""
+              },
+              "e33chat_media_dir": {
+                "type": "string",
+                "description": "E33Chat 服务端图片缓存目录",
+                "hint": "仅本地/远程共享目录后端需要：填写 E33Chat 服务端图片缓存目录；推荐使用 MCSManager 面板 API；ChatImage 与 E33Chat 是不同模组链路，请按服务端安装的模组二选一",
+                "default": ""
+              },
+              "e33chat_image_max_edge": {
+                "type": "int",
+                "description": "E33Chat 群图最大边长",
+                "hint": "仅 E33Chat 模式生效；发送到游戏前按比例缩小超过此像素边长的图片，默认 320；ChatImage 模式不受影响",
+                "default": 320
+              },
+              "e33chat_media_backend": {
+                "type": "string",
+                "description": "E33Chat 媒体存储方式",
+                "hint": "推荐 MCSManager 面板 API；本地/共享目录仅适用于 AstrBot 已能直接访问服务端媒体目录的情况",
+                "options": ["local", "mcsm"],
+                "default": "local"
+              },
+              "mcsm_panel_url": {"type": "string", "description": "MCSManager 面板地址", "hint": "如 http://服务器IP:23333/；运行 AstrBot 的主机需能访问", "default": ""},
+              "mcsm_api_key": {"type": "string", "description": "MCSManager API Key", "hint": "在面板用户/API 设置中创建；请勿公开分享", "default": ""},
+              "mcsm_daemon_id": {"type": "string", "description": "MCSManager Daemon ID", "hint": "在面板节点信息中查看", "default": ""},
+              "mcsm_instance_uuid": {"type": "string", "description": "MCSManager 实例 UUID", "hint": "在实例详情或实例链接中查看", "default": ""},
+              "mcsm_media_dir": {"type": "string", "description": "MCSManager 实例内媒体目录", "hint": "相对于实例根目录的路径，如 world/serverconfig/e33chat-media；开头的 / 会自动去除，须用面板文件管理确认", "default": ""},
+              "mcsm_daemon_url": {"type": "string", "description": "Daemon 文件传输地址（高级，可选）", "hint": "通常留空，插件默认使用 MCSManager API 返回的 Daemon 地址。若 MCSManager 节点显示 localhost:24444，且 AstrBot 与 Daemon 不在同一台机器，请填写 AstrBot 可访问的 Daemon 地址和端口，如 http://服务器IP:24444，并确认该端口可从 AstrBot 主机访问。此项不是面板地址或 Minecraft 游戏端口", "default": ""},
+              "forward_bot_self_messages": {
+                "type": "bool",
+                "description": "转发机器人自己的消息，不剥离唤醒词",
+                "hint": "默认关闭，保持之前版本的行为；开启后机器人唤醒消息按处理前原文转发（包括被 OneBot 从文本中省略的 @机器人），单独 @机器人也会转发；并一并转发消息管道回复和本插件监听到的机器人自身群消息。图片复用「转发图片到游戏内」及图床配置，上传/转发失败或未开启时才用 [图片] 占位；表情以 [表情:id] 记录；同时抑制插件自身发往群内的消息防止刷屏",
+                "default": false
               },
               "broadcast_format": {
                 "type": "string",
@@ -286,7 +331,7 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话消息中的图片自动转发到 MC 游戏内。需要游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本。图片以广播消息携带 URL 的形式发送，玩家客户端自行加载，需保证图片 URL 对玩家客户端可达",
+                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。ChatImage 模式广播 CICode 图片 URL；E33Chat 模式把图片写入服务端图片缓存目录并转发。E33Chat 模式需要配置 MCSM 面板或图片缓存目录",
                 "default": false
               },
               "chatimage_name": {
@@ -298,8 +343,18 @@
               "forward_image_from_mc": {
                 "type": "bool",
                 "description": "转发游戏内图片到外部会话",
-                "hint": "游戏内聊天消息中的图片（ChatImage 的 [[CICode,url=...]] 代码或直接贴出的图片链接）自动下载后作为图片发送到外部会话。默认关闭。下载失败（如 file:// 本地文件不在本机、链接失效）时保留原始文本（代码/链接），不静默丢失",
+                "hint": "游戏内聊天中的 E33Emote、ChatUpgrade 图片标记、E33Chat 媒体 ID、CICode 和图片链接会按「游戏图片模式」下载并作为图片发送到外部会话。图片不受游戏→群触发前缀限制",
                 "default": false
+              },
+              "mc_image_mode": {
+                "type": "string",
+                "description": "游戏图片模式",
+                "hint": "ChatImage（默认）： ChatImage 模组的图片链接模式；E33Chat： E33Chat 模组的图片转发模式，该模式会使群到游戏的消息变成 RCON 指令发送，请务必配置好 RCON",
+                "options": [
+                  "chatimage",
+                  "e33chat"
+                ],
+                "default": "chatimage"
               }
             }
           },

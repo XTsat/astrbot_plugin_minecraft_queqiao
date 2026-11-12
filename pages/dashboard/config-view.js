@@ -28,6 +28,7 @@ const state = {
   jsonTouched: false,
   loading: true,
   loaded: false,
+  personas: [],
 };
 
 /* ---------- API ---------- */
@@ -75,7 +76,7 @@ function renderDesc(text) {
 
 function makeDefault(spec) {
   if (!spec || typeof spec !== 'object') return null;
-  // integer 与 int 同义（terminal_days 等），统一处理
+  // 兼容旧版 schema 的 integer 写法；当前 schema 使用 AstrBot 支持的 int。
   const type = spec.type === 'integer' ? 'int' : spec.type;
   switch (type) {
     case 'bool':
@@ -114,8 +115,7 @@ function displayPathValue(entry, path) {
 }
 
 /* ---------- 控件 ---------- */
-// schema 里整数同时存在 int / integer 两种写法（terminal_days 等），
-// 前端统一归一化为 int 再走控件分支
+// 兼容旧版 schema 的 integer 写法，统一归一化为 int 后走控件分支。
 function createControl(spec, onchange) {
   const type = spec.type === 'integer' ? 'int' : spec.type;
   switch (type) {
@@ -142,6 +142,27 @@ function createControl(spec, onchange) {
       };
     }
     case 'string': {
+      // persona_select：从后端获取人格列表并渲染下拉框
+      if (spec.render_type === 'persona_select') {
+        const el = document.createElement('select');
+        el.className = 'cfg-select';
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '(使用会话默认人格)';
+        el.appendChild(emptyOpt);
+        for (const p of (state.personas || [])) {
+          const o = document.createElement('option');
+          o.value = p.name;
+          o.textContent = p.name;
+          el.appendChild(o);
+        }
+        el.addEventListener('change', () => onchange());
+        return {
+          el,
+          set: (v) => (el.value = v || ''),
+          get: () => el.value,
+        };
+      }
       if (Array.isArray(spec.options) && spec.options.length) {
         const el = document.createElement('select');
         el.className = 'cfg-select';
@@ -196,6 +217,17 @@ function createControl(spec, onchange) {
         },
       };
     }
+    case 'text': {
+      const el = document.createElement('input');
+      el.type = 'text';
+      el.className = 'cfg-input';
+      el.addEventListener('input', () => onchange());
+      return {
+        el,
+        set: (v) => (el.value = v === undefined || v === null ? '' : String(v)),
+        get: () => el.value,
+      };
+    }
     default:
       return null;
   }
@@ -235,11 +267,16 @@ function buildFieldRow(key, spec, target, onchange, opts = {}) {
   row.className = 'settings-row';
   const label = document.createElement('span');
   label.className = 'settings-row-label';
-  label.textContent = key;
+  // 显示中文名称：优先使用 spec.description（schema 中的中文描述），其次 spec.label，最后回退到 key
+  label.textContent = spec.description || spec.label || key;
   row.appendChild(label);
   const ctrl = document.createElement('span');
   ctrl.className = 'settings-row-control';
   const control = createControl(spec, onchange);
+  if (!control) {
+    // 未知类型：不渲染控件，仅显示字段名和描述
+    return row;
+  }
   control.set(target[key]);
   control.el.dataset.fieldKey = key;
   // 控件变更时写回 target，保持 conf 与界面同步
@@ -284,9 +321,10 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
       const tmpl = spec.templates[tk];
       if (!tmpl) return;
 
-      const card = document.createElement('div');
+const card = document.createElement('div');
       card.className = 'entry-card';
       if (entryIdPrefix) card.id = `${entryIdPrefix}-${idx}`;
+      let collapsed = entry.__collapsed !== false;
 
       const hdr = document.createElement('div');
       hdr.className = 'entry-card-header';
@@ -305,14 +343,26 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
       badge.textContent = tmpl.name || tk;
       hdr.appendChild(badge);
 
-      const en = document.createElement('span');
-      en.className = entry.enabled === false ? 'entry-disabled' : 'entry-enabled';
-      en.textContent = entry.enabled === false ? '已停用' : '已启用';
-      hdr.appendChild(en);
+      const enWrap = document.createElement('span');
+      enWrap.className = 'entry-toggle-wrap';
+      const en = document.createElement('input');
+      en.type = 'checkbox';
+      en.className = 'entry-toggle-enable';
+      en.checked = entry.enabled !== false;
+      en.addEventListener('change', () => {
+        entry.enabled = en.checked;
+        onchange();
+      });
+      enWrap.appendChild(en);
+      const enLabel = document.createElement('span');
+      enLabel.className = entry.enabled === false ? 'entry-disabled' : 'entry-enabled';
+      enLabel.textContent = entry.enabled === false ? '已停用' : '已启用';
+      enWrap.appendChild(enLabel);
+      hdr.appendChild(enWrap);
 
       const del = document.createElement('button');
       del.type = 'button';
-      del.className = 'btn btn-sm btn-danger';
+      del.className = 'entry-card-del';
       del.textContent = '🗑';
       del.title = '删除该条目（保存后生效）';
       del.addEventListener('click', () => {
@@ -322,11 +372,28 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
       });
       hdr.appendChild(del);
 
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'entry-card-toggle';
+      toggle.textContent = collapsed ? '▸ 展开' : '▽ 收起';
+      toggle.addEventListener('click', () => {
+        collapsed = !collapsed;
+        entry.__collapsed = collapsed;
+        body.style.display = collapsed ? 'none' : '';
+        toggle.textContent = collapsed ? '▸ 展开' : '▽ 收起';
+      });
+      hdr.appendChild(toggle);
+
       card.appendChild(hdr);
 
       const body = document.createElement('div');
       body.className = 'entry-card-body';
-      buildObjectFields(body, tmpl.items || {}, entry, () => {
+      body.style.display = collapsed ? 'none' : '';
+      // 过滤掉已在标题栏显示的 enabled 字段，避免重复
+      const itemsSpec = Object.fromEntries(
+        Object.entries(tmpl.items || {}).filter(([k]) => k !== 'enabled')
+      );
+      buildObjectFields(body, itemsSpec, entry, () => {
         refreshTitle();
         onchange();
       });
@@ -334,47 +401,10 @@ function buildTemplateList(spec, arr, onchange, entryIdPrefix = '') {
 
       wrap.appendChild(card);
     });
-
-    // 添加行：多模板时先选模板
-    if (tks.length) {
-      const addRow = document.createElement('div');
-      addRow.className = 'entry-add-row';
-      const sel = document.createElement('select');
-      sel.className = 'cfg-select';
-      sel.style.width = 'auto';
-      tks.forEach((tk) => {
-        const o = document.createElement('option');
-        o.value = tk;
-        o.textContent = spec.templates[tk].name || tk;
-        sel.appendChild(o);
-      });
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'entry-add';
-      btn.textContent = '＋ 添加条目';
-      btn.addEventListener('click', () => {
-        const tk = sel.value;
-        const tmpl = spec.templates[tk];
-        const fresh = { __template_key: tk };
-        for (const [k, sub] of Object.entries(tmpl.items || {})) {
-          fresh[k] = makeDefault(sub);
-        }
-        if (fresh.enabled === undefined) fresh.enabled = true;
-        arr.push(fresh);
-        renderEntries();
-        onchange();
-        if (entryIdPrefix) {
-          const cardEl = document.getElementById(`${entryIdPrefix}-${arr.length - 1}`);
-          cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      });
-      addRow.appendChild(sel);
-      addRow.appendChild(btn);
-      wrap.appendChild(addRow);
-    }
   };
 
   renderEntries();
+  wrap.refresh = renderEntries;
   return wrap;
 }
 
@@ -441,37 +471,7 @@ function buildViewForm() {
     return;
   }
 
-  // 服务器视图：只渲染该服务器条目（server_name 位于条目的 server 子对象）
-  if (view !== 'all' && schema.mc_servers) {
-    const servers = Array.isArray(conf.mc_servers) ? conf.mc_servers : [];
-    const entry = servers.find(
-      (s) => (s.server && s.server.server_name) === view || s.server_name === view
-    );
-    const tks = Object.keys(schema.mc_servers.templates || {});
-    const tk = entry && entry.__template_key && schema.mc_servers.templates[entry.__template_key]
-      ? entry.__template_key
-      : tks[0];
-    const tmpl = entry && schema.mc_servers.templates[tk];
-    if (entry && tmpl) {
-      const sec = sectionTitle(
-        displayPathValue(entry, 'server.display_name')
-        || displayPathValue(entry, 'server.server_name')
-        || tmpl.name || tk
-      );
-      sec.id = 'sec-server-current';
-      const card = document.createElement('div');
-      card.className = 'entry-card';
-      const body = document.createElement('div');
-      body.className = 'entry-card-body';
-      buildObjectFields(body, tmpl.items || {}, entry, () => setDirty(true));
-      card.appendChild(body);
-      sec.appendChild(card);
-      form.appendChild(sec);
-    }
-    return;
-  }
-
-  // 全局视图（默认 / 其它）：基本设置 = 非列表类顶层字段
+  // 基础设置（非列表类顶层字段）
   const rootKeys = Object.keys(schema).filter(
     (k) => !['mc_servers', 'image_upload_services'].includes(k)
   );
@@ -479,6 +479,56 @@ function buildViewForm() {
     const sec = sectionTitle('基本设置');
     sec.id = 'sec-root';
     buildObjectFields(sec, Object.fromEntries(rootKeys.map((k) => [k, schema[k]])), conf, () => setDirty(true));
+    form.appendChild(sec);
+  }
+
+  // MC 服务器列表（始终渲染全部服务器卡片；卡片可收起）
+  if (schema.mc_servers) {
+    const sec = sectionTitle('MC 服务器');
+    sec.id = 'sec-mc-servers';
+    const servers = Array.isArray(conf.mc_servers) ? conf.mc_servers : [];
+    // 在标题栏右侧添加「＋ 添加条目」按钮（多模板时带选择框）
+    const tks = Object.keys(schema.mc_servers.templates || {});
+    if (tks.length) {
+      const titleEl = sec.querySelector('.cfg-section-title');
+      const addRow = document.createElement('div');
+      addRow.className = 'entry-add-row';
+      let sel = null;
+      if (tks.length > 1) {
+        sel = document.createElement('select');
+        sel.className = 'cfg-select';
+        sel.style.width = 'auto';
+        tks.forEach((tk) => {
+          const o = document.createElement('option');
+          o.value = tk;
+          o.textContent = schema.mc_servers.templates[tk].name || tk;
+          sel.appendChild(o);
+        });
+        addRow.appendChild(sel);
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'entry-add';
+      btn.textContent = '＋ 添加条目';
+      btn.addEventListener('click', () => {
+        const tk = tks.length > 1 ? sel.value : tks[0];
+        const tmpl = schema.mc_servers.templates[tk];
+        const fresh = { __template_key: tk };
+        for (const [k, sub] of Object.entries(tmpl.items || {})) {
+          fresh[k] = makeDefault(sub);
+        }
+        if (fresh.enabled === undefined) fresh.enabled = true;
+        conf.mc_servers.push(fresh);
+        const listEl = sec.querySelector('.entry-list');
+        if (listEl && listEl.refresh) listEl.refresh();
+        onchange();
+        const cardEl = document.getElementById(`mc-servers-${conf.mc_servers.length - 1}`);
+        cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      addRow.appendChild(btn);
+      titleEl.appendChild(addRow);
+    }
+    sec.appendChild(buildTemplateList(schema.mc_servers, servers, () => setDirty(true), 'mc-servers'));
     form.appendChild(sec);
   }
 }
@@ -516,6 +566,7 @@ function switchMode(toJson) {
     formPanel.classList.remove('hidden');
     btn.textContent = '📝 JSON 模式';
     state.jsonMode = false;
+    state.currentView = 'all';
     buildViewForm();
   }
 }
@@ -533,6 +584,14 @@ async function load() {
     // 保证列表字段存在
     if (!Array.isArray(state.conf.mc_servers)) state.conf.mc_servers = [];
     if (!Array.isArray(state.conf.image_upload_services)) state.conf.image_upload_services = [];
+    // 获取人格列表
+    try {
+      const personasResp = await apiGet('personas');
+      state.personas = personasResp.personas || [];
+    } catch (e) {
+      console.warn('Failed to load personas:', e);
+      state.personas = [];
+    }
     updateSubtitle();
     buildViewForm();
     el('cfg-loading').classList.add('hidden');
@@ -591,8 +650,8 @@ async function save() {
 // 本模块据此只渲染对应部分的表单，同时重新拉取配置
 // （首次与每次打开都拉，配置可能被其它入口改动）
 function onConfigViewOpen(e) {
-  const view = (e && e.detail && e.detail.view) || 'all';
-  state.currentView = view || 'all';
+  // 进入配置视图时始终渲染全部服务器，不论进入前所在视图
+  state.currentView = 'all';
   // 每次进入配置视图都从表单态开始（三态循环第①步），即使上次离开时
   // 停留在 JSON 模式：复位面板显隐与切换按钮文案
   state.jsonMode = false;

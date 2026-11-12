@@ -3425,6 +3425,17 @@ class DashboardApp {
       imageToMc: document.getElementById('st-fwd-image-to-mc'),
       imageFromMc: document.getElementById('st-fwd-image-from-mc'),
       prefix: document.getElementById('st-fwd-prefix'),
+      chatPrefix: document.getElementById('st-fwd-chat-prefix'),
+      e33chatMediaDir: document.getElementById('st-fwd-e33chat-media-dir'),
+      e33chatImageMaxEdge: document.getElementById('st-fwd-e33chat-image-max-edge'),
+      e33chatBackend: document.getElementById('st-fwd-e33chat-backend'),
+      mcsmUrl: document.getElementById('st-fwd-mcsm-url'),
+      mcsmKey: document.getElementById('st-fwd-mcsm-key'),
+      mcsmDaemon: document.getElementById('st-fwd-mcsm-daemon'),
+      mcsmUuid: document.getElementById('st-fwd-mcsm-uuid'),
+      mcsmDir: document.getElementById('st-fwd-mcsm-dir'),
+      mcsmDaemonUrl: document.getElementById('st-fwd-mcsm-daemon-url'),
+      mcImageMode: document.getElementById('st-fwd-mc-image-mode'),
       sessions: document.getElementById('st-fwd-sessions'),
     };
     const fwdFocused = Object.values(fwdBoxes)
@@ -3436,6 +3447,31 @@ class DashboardApp {
         fwdBoxes.format.value = typeof msg.forward_chat_format === 'string'
           ? msg.forward_chat_format
           : '';
+      }
+      if (fwdBoxes.chatPrefix) {
+        fwdBoxes.chatPrefix.value = typeof msg.forward_chat_prefix === 'string'
+          ? msg.forward_chat_prefix
+          : '';
+      }
+      if (fwdBoxes.e33chatMediaDir) {
+        fwdBoxes.e33chatMediaDir.value = typeof msg.e33chat_media_dir === 'string'
+          ? msg.e33chat_media_dir
+          : '';
+      }
+      if (fwdBoxes.e33chatImageMaxEdge) {
+        fwdBoxes.e33chatImageMaxEdge.value = msg.e33chat_image_max_edge || 320;
+      }
+      if (fwdBoxes.e33chatBackend) fwdBoxes.e33chatBackend.value = msg.e33chat_media_backend === 'mcsm' ? 'mcsm' : 'local';
+      if (fwdBoxes.mcsmUrl) fwdBoxes.mcsmUrl.value = msg.mcsm_panel_url || '';
+      if (fwdBoxes.mcsmKey) fwdBoxes.mcsmKey.value = msg.mcsm_api_key || '';
+      if (fwdBoxes.mcsmDaemon) fwdBoxes.mcsmDaemon.value = msg.mcsm_daemon_id || '';
+      if (fwdBoxes.mcsmUuid) fwdBoxes.mcsmUuid.value = msg.mcsm_instance_uuid || '';
+      if (fwdBoxes.mcsmDir) fwdBoxes.mcsmDir.value = msg.mcsm_media_dir || '';
+      if (fwdBoxes.mcsmDaemonUrl) fwdBoxes.mcsmDaemonUrl.value = msg.mcsm_daemon_url || '';
+      if (fwdBoxes.mcImageMode) {
+        fwdBoxes.mcImageMode.value = msg.mc_image_mode === 'e33chat'
+          ? 'e33chat'
+          : 'chatimage';
       }
       if (fwdBoxes.join) fwdBoxes.join.checked = !!msg.forward_join_leave_to_astrbot;
       if (fwdBoxes.death) fwdBoxes.death.checked = !!msg.forward_death_to_astrbot;
@@ -3488,15 +3524,13 @@ class DashboardApp {
     const confItem = server
       ? (this.configServers || []).find((s) => s.server_name === server.server_name) || null
       : null;
-    // 前缀冲突预检：AI 前缀与自动转发前缀互相包含时，同一条消息会命中两条
-    // 路径（启动时后端也会告警），这里提前拦截
+    // 前缀冲突预检：游戏→群前缀与 AI 前缀互相包含时，同一条游戏消息会命中两条路径。
     const fwdMsg = (confItem && confItem.message) || {};
-    const forwardPrefix = (typeof fwdMsg.auto_forward_prefix === 'string' && fwdMsg.auto_forward_prefix)
-      || (confItem && confItem.auto_forward_prefix)
-      || (server && server.auto_forward_prefix) || '';
-    if (server && aiEnabled && aiPrefix && forwardPrefix &&
-        (aiPrefix.startsWith(forwardPrefix) || forwardPrefix.startsWith(aiPrefix))) {
-      this.showToast('AI 触发前缀与自动转发前缀互相包含，请改成互不包含的前缀', 'error');
+    const gameForwardPrefix = document.getElementById('st-fwd-chat-prefix');
+    const gamePrefix = gameForwardPrefix ? gameForwardPrefix.value.trim() : '';
+    if (server && aiEnabled && aiPrefix && gamePrefix &&
+        (aiPrefix.startsWith(gamePrefix) || gamePrefix.startsWith(aiPrefix))) {
+      this.showToast('游戏转发前缀与 AI 触发前缀互相包含，请改成互不包含的前缀', 'error');
       return;
     }
     if (saveBtn) saveBtn.disabled = true;
@@ -3560,9 +3594,14 @@ class DashboardApp {
         const fwdImageToMc = document.getElementById('st-fwd-image-to-mc');
         const fwdImageFromMc = document.getElementById('st-fwd-image-from-mc');
         const fwdPrefix = document.getElementById('st-fwd-prefix');
+        const fwdChatPrefix = document.getElementById('st-fwd-chat-prefix');
+        const fwdE33chatMediaDir = document.getElementById('st-fwd-e33chat-media-dir');
+        const fwdE33chatImageMaxEdge = document.getElementById('st-fwd-e33chat-image-max-edge');
+        const fwdMcImageMode = document.getElementById('st-fwd-mc-image-mode');
         const fwdSessions = document.getElementById('st-fwd-sessions');
         if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdImage && fwdPrefix && fwdSessions) {
           msg.forward_chat_to_astrbot = !!fwdChat.checked;
+          if (fwdChatPrefix) msg.forward_chat_prefix = fwdChatPrefix.value.trim();
           msg.forward_chat_format = fwdFormat.value.trim();
           msg.forward_join_leave_to_astrbot = !!fwdJoin.checked;
           msg.forward_death_to_astrbot = !!fwdDeath.checked;
@@ -3574,6 +3613,23 @@ class DashboardApp {
           msg.forward_image_to_mc = !!(fwdImageToMc && fwdImageToMc.checked);
           msg.forward_image_from_mc = !!(fwdImageFromMc && fwdImageFromMc.checked);
           msg.auto_forward_prefix = fwdPrefix.value.trim();
+          if (fwdE33chatMediaDir) {
+            msg.e33chat_media_dir = fwdE33chatMediaDir.value.trim();
+          }
+          if (fwdE33chatImageMaxEdge) {
+            const value = Number.parseInt(fwdE33chatImageMaxEdge.value, 10);
+            msg.e33chat_image_max_edge = Number.isFinite(value)
+              ? Math.max(64, Math.min(2048, value))
+              : 320;
+          }
+          msg.e33chat_media_backend = document.getElementById('st-fwd-e33chat-backend')?.value === 'mcsm' ? 'mcsm' : 'local';
+          msg.mcsm_panel_url = document.getElementById('st-fwd-mcsm-url')?.value.trim() || '';
+          msg.mcsm_api_key = document.getElementById('st-fwd-mcsm-key')?.value.trim() || '';
+          msg.mcsm_daemon_id = document.getElementById('st-fwd-mcsm-daemon')?.value.trim() || '';
+          msg.mcsm_instance_uuid = document.getElementById('st-fwd-mcsm-uuid')?.value.trim() || '';
+          msg.mcsm_media_dir = document.getElementById('st-fwd-mcsm-dir')?.value.trim() || '';
+          msg.mcsm_daemon_url = document.getElementById('st-fwd-mcsm-daemon-url')?.value.trim() || '';
+          if (fwdMcImageMode) msg.mc_image_mode = fwdMcImageMode.value;
           payload.message = msg;
           // 目标会话：每行一个 UMO（同服务器表单解析规则）
           payload.target_sessions = fwdSessions.value

@@ -1,7 +1,7 @@
 <div align="center">
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.1-blue"></p>
+<p><img alt="version" src="https://img.shields.io/badge/version-v0.7.2-blue"></p>
 <p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
 <p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
 </div>
@@ -120,20 +120,25 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `forward_chat_to_astrbot` | bool | `true` | Forward player chat to target sessions |
+| `forward_chat_to_astrbot` | bool | `true` | Relay all in-game chat to target sessions; when off, only chats matching `forward_chat_prefix` are relayed. Image forwarding ignores this text prefix |
+| `forward_chat_prefix` | string | empty | Game → group trigger prefix; when full chat forwarding is off, only game chat starting with this prefix is relayed, with the prefix removed |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | Chat format; supports `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages (server display name appended, so the source is clear when several servers share a group) |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
-| `auto_forward_prefix` | string | empty | Group messages starting with it are relayed into the game; empty relays all |
+| `auto_forward_prefix` | string | empty | Group text starting with it is relayed into the game; empty relays all. Enabled image forwarding ignores this prefix |
+| `forward_bot_self_messages` | bool | `false` | **Relay the bot's own messages without stripping wake prefixes**: wake messages use their original pre-processing text, including the self-mention omitted from OneBot's text (a standalone `@bot` is relayed too); bot replies produced by AstrBot's message pipeline and bot self-messages observed by this plugin are relayed with the available group nickname. Images reuse `forward_image_to_mc` and the image-host settings; `[图片]` is only used when image forwarding is disabled or no reachable URL can be obtained. Faces are recorded as `[表情:id]`. No need to disable `ignore_bot_self_message`, and replies are not fed back into command handling. `auto_forward_prefix` still applies; this plugin's own group messages remain echo-suppressed |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; supports `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | Platform name mapping: `raw=display`, e.g. `aiocqhttp=QQ` |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
 | `mark_option` | string | `emoji` | Acknowledgement after a successful relay: `text` replies ✅ / `emoji` reacts to the original message / `none` silent |
 | `mark_emoji_id` | int | `124` | Reaction emoji ID (QQ emoji ID; default `124` = 👌) |
-| `forward_image_to_mc` | bool | `false` | Relay group images into the game (requires ChatImage on the client to render; otherwise the CICode text is shown) |
+| `forward_image_to_mc` | bool | `false` | Relay group images and enabled bot reply/self-message images into the game using the selected game image mode |
 | `chatimage_name` | string | `图片` | In-game display name for the image |
-| `forward_image_from_mc` | bool | `false` | In-game images (CICode / links) downloaded and sent back as images |
+| `forward_image_from_mc` | bool | `false` | Download in-game images according to the selected game image mode and send them as images; images ignore the game → group text prefix |
+| `mc_image_mode` | string | `chatimage` | Bidirectional image route: `chatimage` preserves the existing behavior; `e33chat` writes group images to E33Chat media storage and reads game images from it, including E33Emote / ChatUpgrade tags |
+| `e33chat_media_dir` | string | empty | Required for E33Chat mode: the actual E33Chat server media directory; the AstrBot process must have read and write access (mount a shared directory for remote servers) |
+| `e33chat_image_max_edge` | int | `320` | Maximum edge in pixels for group images sent through E33Chat. Oversized images are reduced proportionally before upload. Adjustable from 64 to 2048 in the Dashboard; ChatImage is unaffected |
 
 > Get a session's UMO with **AstrBot's built-in `/sid` command**: send `/sid` in the target group/DM, and the `UMO` field in the reply is the value to fill in (e.g. `aiocqhttp:GroupMessage:123456789`). This list drives three things at once: which sessions receive MC messages, which sessions' messages are relayed into MC, and which server the `mc` commands issued in that session belong to.
 
@@ -190,25 +195,65 @@ When you would rather not have the group pinged by game activity overnight, give
 
 - Both the dashboard's “功能设置 → 🌙 免打扰” panel and the AstrBot plugin config page let you toggle it, pick the window and tick the types; saving takes effect immediately without reconnecting
 
-### Relaying images into the game (ChatImage)
+### Relaying images into the game
 
-With `forward_image_to_mc` enabled, images in group messages are broadcast as messages carrying a URL, which each player's client downloads and renders:
+With `forward_image_to_mc` enabled, images in group messages and enabled bot pipeline/self-messages use the selected game image mode. **ChatImage and E33Chat are separate routes; choose one according to the mod installed on the server.** ChatImage is the URL route for the ChatImage mod. E33Chat uses server-hosted media IDs for the E33Chat mod.
 
+ChatImage mode example:
+
+```text
+[QQ]UserA: [[CICode,url=https://example.com/images/example.png,name=Image]]
 ```
-[QQ]UserA: [[CICode,url=https://example.com/images/example.png,name=图片]]
+
+E33Chat mode example:
+
+```text
+[QQ]UserA: [[E33Emote,url=e33chat://media/0123456789abcdef0123456789abcdef]]
 ```
 
-- Only enable it on servers where players have the [ChatImage](https://github.com/kitUIN/ChatImage) mod (Fabric / Forge / NeoForge) installed — otherwise only the `[[CICode,...]]` text is shown
-- The image URL must be reachable from player clients; when an image has no public URL (the log says "图片均无可访问的公开 URL"), turn on the root-level `enable_image_upload` and configure `image_upload_services` (see below)
-- When `auto_forward_prefix` is set, only images in messages carrying the prefix are relayed (a bare image message has no text and never matches the prefix)
+- `chatimage` mode is for servers using the [ChatImage](https://github.com/kitUIN/ChatImage) mod; it sends image URLs reachable by players. If AstrBot has no reachable URL, configure `enable_image_upload` and `image_upload_services` (see below)
+- `e33chat` mode is for servers using E33Chat and requires server media hosting (`media_enabled`). Group → game E33Chat images require an available server RCON route (QueQiao RCON or the plugin's direct RCON fallback) so they can be sent as game chat for the mod to process. We recommend the MCSManager panel API described below. Game → group supports E33Chat media IDs, E33Emote, and ChatUpgrade image tags, as well as CICode image URLs
+- Group → game and game → group still have separate `forward_image_to_mc` / `forward_image_from_mc` switches; the mode controls the image route for each enabled direction
+- Images ignore `auto_forward_prefix`; with image forwarding enabled, bare image messages can be relayed. Any accompanying caption is relayed with the image
+- E33Chat does not support GIF uploads. GIFs are logged and skipped without a user-facing failure notice or image placeholder; accompanying text can still be forwarded
+- E33Chat renders images using their source pixel dimensions. The default upload limit reduces the longest edge to 320 pixels; adjust “E33Chat 群图最大边长” in the Dashboard to change the displayed size. This affects only group → game images in E33Chat mode
+
+#### E33Chat media setup (recommended: MCSManager panel API)
+
+Confirm that the server runs E33Chat and has `media_enabled` turned on. In the plugin Dashboard's “转发功能” settings, choose “游戏图片模式: E33Chat 服务端媒体”, then “媒体存储方式: MCSManager 面板 API”, and enter:
+
+- Panel URL, API key, target Daemon ID, and instance UUID. Find these in MCSManager and the node/instance details. The API key has its owner's permissions; keep it private.
+- Instance media directory. In the target instance's file manager, locate `e33chat-media` and enter its path relative to the instance root, for example `world/serverconfig/e33chat-media`. A leading `/` is stripped automatically. Do not enter the Linux host's `/opt/...` absolute path.
+- Daemon file-transfer address (advanced, optional). Usually leave this blank; the plugin uses the address returned by the MCSManager API. If the MCSManager node shows `localhost:24444` while AstrBot runs on another machine, enter a Daemon address and port that AstrBot can reach, such as `http://server-ip:24444`, and make sure the port is reachable from the AstrBot host. This is neither the MCSManager panel URL nor the Minecraft game port.
+
+The AstrBot host must be able to reach both the MCSManager panel and the Daemon transfer port. Save the settings and test image forwarding in both directions. The MCSManager API backend needs no mounted directory and does not use the local media-directory field.
+
+**Alternative: local/shared directory.** Share or mount E33Chat's media directory somewhere AstrBot can access, select “本地/共享目录”, and enter that local path in “E33Chat 服务端媒体目录”. On Windows, use a UNC path such as `\\10.x.x.x\e33chat-media`; on Linux, use the mounted path such as `/mnt/e33chat-media`.
+
+<details><summary>Detailed shared-directory instructions (optional)</summary>
+
+1. Confirm the Minecraft server has an E33Chat version with server media hosting. The server setting `media_enabled` must be `true` (the default). `media_auto_clean` is also enabled by default and removes files older than 7 days; disabling it keeps files, but the 512 MiB total quota still applies.
+2. In MCSM, select the correct instance, check `level-name` in `server.properties` (default `world`), then open `serverconfig/e33chat-media` under that world directory. E33Chat stores extensionless files named with 32 lowercase hexadecimal characters there. If the directory/files do not exist yet, send an image from the game client and refresh the file list. Do not enter the MCSM web address, the instance root, `serverconfig`, or the media directory's parent.
+3. Locate the **media directory itself** on the MCSM host filesystem and share it over SMB/NFS on a private network. On a Windows MCSM host, enable Advanced Sharing on that folder, name the share `e33chat-media`, grant a dedicated account Change permission on the share and Modify permission on the Security tab, then restrict the SMB firewall rule to trusted clients. Do not expose SMB to the public internet. On a Linux MCSM host, export the actual directory with Samba/NFS and ensure both the share account and Minecraft server account can read and write it. Windows AstrBot can use a UNC path such as `\\10.x.x.x\e33chat-media`; Linux can mount it at `/mnt/e33chat-media`.
+4. If AstrBot runs in Docker/a container, mount SMB/NFS on the container host first, then bind-mount that host directory into the container, for example at `/mnt/e33chat-media`. The plugin path must be the path visible inside the container, not the MCSM Linux path, host path, or Windows drive letter unless that path is actually mounted in the container.
+5. As the same account/container that runs AstrBot, verify that the share can list ID files, read an existing image, and create then delete a temporary file. If AstrBot runs as a Windows service, check its “Log On” identity in `services.msc` and grant that identity share access; mapped drive letters may be invisible to the service. Seeing files in MCSM's web file manager does not prove AstrBot has filesystem access. Example paths are `\\10.0.0.2\e33chat-media` on Windows and `/mnt/e33chat-media` after a Linux mount.
+6. Open the QueQiao plugin Dashboard in AstrBot, select the target Minecraft server, and expand image forwarding under “转发功能”. Set “游戏图片模式” to `E33Chat 服务端媒体` and enter the verified **directory path** in “E33Chat 服务端媒体目录” (`e33chat_media_dir`). Do not enter a filename, MCSM URL, or parent directory. Enable “外部 → MC 图片转发” and/or “MC → 外部 图片转发”, then save.
+7. Test each enabled direction with an image under 8 MiB. A group image should render in game and create a new extensionless ID file in the share; an in-game image should arrive in the target group as an image component. If group → game fails, inspect AstrBot logs for directory write errors. If game → group fails, confirm the event contains a media ID/image tag and that its ID file remains in the shared directory.
+
+If MCSM shows a Linux path while AstrBot runs on Windows, do not paste that host path as the local directory. Use a Windows UNC share path or a path mounted where AstrBot runs.
+
+</details>
 
 ### Relaying in-game images to external sessions
 
-With `forward_image_from_mc` enabled, ChatImage `[[CICode,url=...]]` codes or image links in game chat are downloaded and sent to the group as images:
+With `forward_image_from_mc` enabled, in-game images are downloaded and sent to the group according to `mc_image_mode`. Images ignore `forward_chat_prefix`:
 
+- `chatimage` (default): handles ChatImage `[[CICode,url=...]]` codes and reachable image links for the ChatImage mod
+- `e33chat`: handles E33Chat `[[E33Emote,url=...]]`, `[[ChatUpgrade,url=...,type=image]]`, and server-hosted media IDs, while retaining CICode image URLs and existing image-link downloads
 - `http(s)://` links are downloaded directly; `file://` local files are only readable when AstrBot runs on the same machine as the game
+- E33Chat server media requires selecting E33Chat mode. With the MCSManager API backend, use the panel settings above; `e33chat_media_dir` is only needed for the local/shared-directory backend
 - On download failure (dead link, invisible local file, etc.) the original code/link text is kept
-- 5 MB per image, 15 s download timeout
+- ChatImage / ordinary links are limited to 5 MB per image; E33Chat media is limited to 8 MiB; HTTP downloads time out after 15 seconds. E33Chat media shares the server's 512 MiB quota and auto-cleanup policy
 
 #### Built-in image HTTP service
 

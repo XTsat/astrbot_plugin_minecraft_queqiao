@@ -5,8 +5,12 @@
 """
 
 import asyncio
+import uuid
 import contextlib
+import functools
 import re
+import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -20,8 +24,11 @@ from .core.constants import (
     DEFAULT_IMAGE_HTTP_HOST,
     DEFAULT_IMAGE_HTTP_PORT,
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_START,
+    E33CHAT_MEDIA_MAX_FILE_BYTES,
     PLUGIN_DATA_DIR,
     PLUGIN_NAME,
     QUIET_HOURS_ITEM_KEYS,
@@ -42,11 +49,17 @@ from .services.image_bed import (
     ImageBedUploader,
     ImageBedUploaderGroup,
 )
+from .services.image_host import sniff_image_format
 from .services.message_bridge import (
     MessageBridge,
+    acquire_image_bytes,
     build_chatimage_code,
+    build_e33chat_media_code,
     resolve_image_url,
+    resize_e33chat_image,
+    store_e33chat_media,
 )
+from .services.mcsmanager_media import MCSManagerMedia, describe_mcsmanager_error
 from .services.metrics import MetricsCollector
 from .services.monitor import MonitorCollector
 from .services.panel_prefs import PanelPrefsStore
@@ -58,6 +71,9 @@ from .services.web_api import WebApiController
 
 DEFAULT_TIMEOUT = 30
 
+# 机器人回复记录的有效期（秒）：覆盖框架逐段发送的时间窗口
+BOT_REPLY_RECORD_TTL = 60.0
+
 # 图床条目模板 key（AstrBot 会在每个条目上写入 __template_key 持久化）
 TEMPLATE_KEY_BUILTIN_HTTP = "builtin_http"
 
@@ -66,8 +82,7 @@ TEMPLATE_KEY_BUILTIN_HTTP = "builtin_http"
     PLUGIN_NAME,
     "XTsat",
     "通过鹊桥模组连接 Minecraft 服务器，实现消息互通、服务器管理与 AI 聊天",
-    "v0.7.1",
-    "https://github.com/XTsat/astrbot_plugin_minecraft_queqiao",
+    "v0.7.2",
 )
 class MinecraftQueQiaoPlugin(Star):
     """Minecraft 鹊桥互通主插件类。"""
@@ -97,6 +112,7 @@ class MinecraftQueQiaoPlugin(Star):
         self.command_handler.attach_monitor(self.monitor)
 
         self._configs: dict[str, ServerConfig] = {}
+        self._bot_display_names: dict[tuple[str, str], str] = {}
         # 连通通知的「真启动」判定：断线期间探测服务端端口，区分重启与抖动
         self.connect_watch = ConnectWatch()
         self.web_api = WebApiController(
@@ -113,6 +129,13 @@ class MinecraftQueQiaoPlugin(Star):
         )
         self.web_api.register_routes()
         self._init_task: asyncio.Task | None = None
+        self._sent_forward_active = False
+        # 最近已转发的机器人账号消息，用于合并 message_sent 与发送后钩子的重复事件
+        self._bot_forward_claims: list[tuple[tuple[str, str, int], str, float]] = []
+        self._bot_self_ids: dict[str, str] = {}
+        self._peer_seen: dict[tuple[str, str], float] = {}
+        # 框架发送前记录的回复全文，用于识别其分段发送产生的群消息回声
+        self._bot_reply_records: dict[str, list[tuple[float, str, int]]] = {}
 
     # ---- 生命周期 ----
 
@@ -122,6 +145,7 @@ class MinecraftQueQiaoPlugin(Star):
             logger.info(f"[{PLUGIN_NAME}] 插件已禁用")
             return
 
+        self._subscribe_sent_messages()
         self.binding_service.load()
         self.terminal_logs.load()
         logger.info(
@@ -211,9 +235,11 @@ class MinecraftQueQiaoPlugin(Star):
     # message 子对象，Web API 侧先展平再交给本方法。
     SOFT_CONFIG_KEYS = (
         "enable_ai_chat",
+        "ai_persona_id",
         "ai_chat_prefix",
         "enable_local_translation",
         "forward_chat_to_astrbot",
+        "forward_chat_prefix",
         "forward_chat_format",
         "forward_join_leave_to_astrbot",
         "forward_death_to_astrbot",
@@ -221,6 +247,16 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_image_to_mc",
         "forward_image_from_mc",
         "auto_forward_prefix",
+        "e33chat_media_dir",
+        "e33chat_image_max_edge",
+        "e33chat_media_backend",
+        "mcsm_panel_url",
+        "mcsm_api_key",
+        "mcsm_daemon_id",
+        "mcsm_instance_uuid",
+        "mcsm_media_dir",
+        "mcsm_daemon_url",
+        "mc_image_mode",
         "target_sessions",
         "terminal_days",
         "notify_on_connect",
@@ -278,6 +314,14 @@ class MinecraftQueQiaoPlugin(Star):
                 # 互通终端加载天数（每台服务器独立）：0~30 钳制
                 config.terminal_days = max(
                     0, min(30, _to_int(fields.get(key), config.terminal_days))
+                )
+            elif key == "e33chat_image_max_edge":
+                config.e33chat_image_max_edge = max(
+                    E33CHAT_IMAGE_MAX_EDGE_MIN,
+                    min(
+                        E33CHAT_IMAGE_MAX_EDGE_MAX,
+                        _to_int(fields.get(key), config.e33chat_image_max_edge),
+                    ),
                 )
             elif key == "connect_fail_notify_delay":
                 # 断连静默期（秒，每台服务器独立）：0~3600 钳制
@@ -353,6 +397,7 @@ class MinecraftQueQiaoPlugin(Star):
     async def terminate(self) -> None:
         """插件卸载时清理所有连接。"""
         logger.info(f"[{PLUGIN_NAME}] 正在关闭...")
+        self._sent_forward_active = False
 
         if self._init_task and not self._init_task.done():
             self._init_task.cancel()
@@ -361,6 +406,225 @@ class MinecraftQueQiaoPlugin(Star):
 
         await self._stop_runtime()
         logger.info(f"[{PLUGIN_NAME}] 已关闭")
+
+    def _aiocqhttp_insts(self) -> list:
+        return [
+            inst
+            for inst in self.context.platform_manager.platform_insts
+            if inst.meta().name == "aiocqhttp"
+        ]
+
+    def _has_peer_listener(self, umo: str) -> bool:
+        """除机器人自身平台外还有 aiocqhttp 连接时，机器人发出的群消息可被其旁路收到。"""
+        platform_id = umo.split(":", 1)[0]
+        return any(inst.meta().id != platform_id for inst in self._aiocqhttp_insts())
+
+    def _subscribe_sent_messages(self) -> None:
+        """订阅 aiocqhttp 的 message_sent 与群消息事件，捕获机器人账号手动发出的消息。
+
+        实测手动发送的群消息只推送给同群的其他连接（对端 self_id），不推送给发送者自己的连接，
+        因此在所有 aiocqhttp 连接上监听群消息，识别发送者为绑定机器人账号的情况。
+        """
+        self._sent_forward_active = True
+        subscribed = 0
+        for inst in self._aiocqhttp_insts():
+            client = inst.get_client()
+            client.subscribe(
+                "message_sent", functools.partial(self._on_message_sent, inst)
+            )
+            client.subscribe(
+                "message.group", functools.partial(self._on_group_message_any, inst)
+            )
+            subscribed += 1
+        logger.info(
+            f"[{PLUGIN_NAME}] 已订阅 message_sent 的 aiocqhttp 适配器数={subscribed}"
+        )
+
+    async def _on_message_sent(self, inst, payload) -> None:
+        """账号自身发出的消息（message_sent 推送）：按转发规则送入 MC。"""
+        if not self._sent_forward_active:
+            return
+        try:
+            event = await self._build_bot_event(inst, {**payload, "post_type": "message"})
+            if event is not None:
+                await self._forward_bot_event(event, "sent")
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 处理 message_sent 失败: {exc}")
+
+    async def _on_group_message_any(self, inst, payload) -> None:
+        """识别发送者为绑定机器人账号、但投递到了其他连接的群消息（即手动发送的消息）。"""
+        if not self._sent_forward_active or payload.get("message_type") != "group":
+            return
+        try:
+            receiver_id = str(payload.get("self_id") or "")
+            sender_id = str(payload.get("user_id") or "")
+            if not receiver_id or not sender_id:
+                return
+            self._bot_self_ids[inst.meta().id] = receiver_id
+            if sender_id == receiver_id:
+                return
+            owner = self._find_bot_owner(inst, sender_id)
+            if owner is None:
+                await self._learn_login_ids()
+                owner = self._find_bot_owner(inst, sender_id)
+            if owner is None:
+                logger.debug(
+                    f"[{PLUGIN_NAME}] 群消息发送者 {sender_id} 未匹配到任何绑定机器人连接"
+                )
+                return
+            if not self._mark_peer_seen(sender_id, str(payload.get("message_id") or "")):
+                return
+            event = await self._build_bot_event(
+                owner,
+                {**payload, "post_type": "message", "self_id": payload.get("user_id")},
+            )
+            if event is None:
+                return
+            await self._forward_bot_event(event, "peer")
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 处理群消息旁路监听失败: {exc}")
+
+    def _find_bot_owner(self, inst, sender_id: str):
+        """返回 self_id 等于 sender_id 的其他 aiocqhttp 连接。"""
+        return next(
+            (
+                other
+                for other in self._aiocqhttp_insts()
+                if other.meta().id != inst.meta().id
+                and self._bot_self_ids.get(other.meta().id) == sender_id
+            ),
+            None,
+        )
+
+    async def _learn_login_ids(self) -> None:
+        """主动读取尚未知道登录账号的连接的 QQ 号（get_login_info）。
+
+        机器人账号的连接收不到手动发送的群消息，只能通过 API 获取其 self_id。
+        """
+        for inst in self._aiocqhttp_insts():
+            inst_id = inst.meta().id
+            if inst_id in self._bot_self_ids:
+                continue
+            try:
+                info = await asyncio.wait_for(
+                    inst.get_client().call_action("get_login_info"), timeout=5
+                )
+                uid = str((info or {}).get("user_id") or "")
+                if uid:
+                    self._bot_self_ids[inst_id] = uid
+            except Exception as exc:
+                logger.debug(f"[{PLUGIN_NAME}] 获取登录账号失败 ({inst_id}): {exc}")
+
+    @staticmethod
+    async def _build_bot_event(inst, payload):
+        """用指定适配器把原始 OneBot 事件转换为 AstrBot 事件。失败返回 None。"""
+        try:
+            from aiocqhttp import Event
+
+            abm = await inst.convert_message(Event(payload))
+            if abm is None:
+                return None
+            return inst.create_event(abm)
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 转换 OneBot 事件失败: {exc}")
+            return None
+
+    def _mark_peer_seen(self, sender_id: str, message_id: str) -> bool:
+        """同一条消息会被同群的多个连接收到，只允许第一次通过。"""
+        if not message_id:
+            return True
+        now = time.monotonic()
+        self._peer_seen = {
+            key: seen_at for key, seen_at in self._peer_seen.items() if now - seen_at < 30.0
+        }
+        key = (sender_id, message_id)
+        if key in self._peer_seen:
+            return False
+        self._peer_seen[key] = now
+        return True
+
+    async def _forward_bot_event(self, event, origin: str) -> None:
+        """机器人账号消息的统一转发入口。origin 用于跨路径去重（sent / peer / hook）。"""
+        umo = event.unified_msg_origin
+        text = event.get_message_str().strip()
+        images = self._extract_images(event)
+        targets = self.message_bridge.servers_for_session(umo)
+        logger.debug(
+            f"[{PLUGIN_NAME}] 收到账号自身发出的消息（{origin}）："
+            f"umo={umo}，文本非空={bool(text)}，图片组件={len(images)}，"
+            f"绑定服务器={len(targets)}"
+        )
+        if not any(config.forward_bot_self_messages for _, config in targets):
+            return
+        if (
+            origin != "hook"
+            and not self._has_peer_listener(umo)
+            and self._is_bot_reply_segment(umo, text, len(images))
+        ):
+            # 无旁路监听器时，框架逐段发送的回复分段由发送后钩子整条转发
+            return
+        echo_matched = self.message_bridge.consume_outbound_echo(umo, text)
+        if echo_matched:
+            # 文本回声只抑制文本；图片由内容指纹逐张识别，保留非回声图片。
+            text = ""
+        original_text = getattr(event.message_obj, "message_str", None)
+        if (
+            not echo_matched
+            and isinstance(original_text, str)
+            and original_text.strip() != text
+        ):
+            echo_matched = self.message_bridge.consume_outbound_echo(
+                umo, original_text.strip()
+            )
+            if echo_matched:
+                text = ""
+        images = await self.message_bridge.filter_outbound_image_echoes(umo, images)
+        if not text and not images:
+            return
+        if not self._claim_bot_forward(
+            self._claim_key(umo, text, len(images)), origin
+        ):
+            return
+
+        await self._relay_to_minecraft(
+            event,
+            umo,
+            text,
+            images=images,
+            is_bot_self_message=True,
+            sender_override=await self._get_bot_display_name(event),
+            apply_wake_prefix=False,
+            include_self_mention=False,
+            image_fallback_placeholders=True,
+        )
+
+    @staticmethod
+    def _claim_key(umo: str, text: str, image_count: int) -> tuple[str, str, int]:
+        """去重键忽略空白与 [表情:1] 等占位符差异，两条路径的文本渲染方式不同。"""
+        return umo, MinecraftQueQiaoPlugin._normalize_bot_text(text), image_count
+
+    @staticmethod
+    def _normalize_bot_text(text: str) -> str:
+        return re.sub(r"\[[^\]]*\]|\s+", "", text)
+
+    def _claim_bot_forward(self, key: tuple[str, str, int], origin: str) -> bool:
+        """同一条机器人消息可能同时经 message_sent 与发送后钩子到达，只允许先到的一条路径转发。
+
+        同一来源的重复记录不去重（手动连发相同内容仍会转发）；
+        不同来源在时效内命中同一键时，后到者放弃转发并移除登记。
+        """
+        now = time.monotonic()
+        self._bot_forward_claims = [
+            claim for claim in self._bot_forward_claims if now - claim[2] < 5.0
+        ]
+        for index, (claimed_key, claimed_origin, _) in enumerate(
+            self._bot_forward_claims
+        ):
+            if claimed_key == key and claimed_origin != origin:
+                del self._bot_forward_claims[index]
+                return False
+        self._bot_forward_claims.append((key, origin, now))
+        return True
 
     async def _setup_image_services(self) -> None:
         """按根级配置构建图片转存条目并启动内置 HTTP 监听。
@@ -452,11 +716,11 @@ class MinecraftQueQiaoPlugin(Star):
 
     @staticmethod
     def _warn_prefix_conflict(config: ServerConfig) -> None:
-        """两个前缀互相包含时告警，提示用户在配置中改开。"""
+        """转发前缀与 AI 前缀互相包含时告警，提示用户改开。"""
         if config.prefixes_conflict:
             logger.warning(
-                f"[{PLUGIN_NAME}][{config.server_name}] 互通前缀 "
-                f"`{config.auto_forward_prefix}` 与 AI 前缀 "
+                f"[{PLUGIN_NAME}][{config.server_name}] 游戏→群前缀 "
+                f"`{config.forward_chat_prefix}` 与 AI 前缀 "
                 f"`{config.ai_chat_prefix}` 相互包含，消息归属可能产生歧义，"
                 f"建议改为互不相同的两个前缀"
             )
@@ -554,10 +818,23 @@ class MinecraftQueQiaoPlugin(Star):
 
         sent = 0
         for umo in config.target_sessions:
+            echo_stamp = self.message_bridge.mark_outbound_message(umo, text)
             try:
-                await self.context.send_message(umo, chain)
+                result = await self.context.send_message(umo, chain)
+                if result is False:
+                    self.message_bridge.discard_outbound_message(
+                        umo, text, echo_stamp
+                    )
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{config.server_name}] "
+                        f"没有可用适配器发送通知到 {umo}"
+                    )
+                    continue
                 sent += 1
             except Exception:
+                self.message_bridge.discard_outbound_message(
+                    umo, text, echo_stamp
+                )
                 logger.warning(
                     f"[{PLUGIN_NAME}][{config.server_name}] 向 {umo} 发送通知失败",
                     exc_info=True,
@@ -810,7 +1087,7 @@ class MinecraftQueQiaoPlugin(Star):
             f"[{PLUGIN_NAME}][{server_name}] AI 提问来自 {player.display_name}: {question}"
         )
 
-        reply = await self._ask_llm(event, question)
+        reply = await self._ask_llm(config, event, question)
         self.metrics.record_ai_chat(
             server_name, player.display_name, question, bool(reply)
         )
@@ -843,18 +1120,37 @@ class MinecraftQueQiaoPlugin(Star):
                 f"@{player.display_name} {reply}", config.broadcast_color
             )
 
-    async def _ask_llm(self, event: QueQiaoEvent, question: str) -> str:
+    async def _ask_llm(
+        self, config: ServerConfig, event: QueQiaoEvent, question: str
+    ) -> str:
         """调用 AstrBot LLM，返回纯文本回复；不可用时返回空串。
 
         使用 `get_using_provider` + `text_chat`，与 AstrBot 4.x 的 provider 接口一致。
+        - uma 优先取该服务器的首个 target_sessions，以匹配对应适配器的 provider；
+          无 target_sessions 时 uma=None，回退默认 provider。
+        - 若配置了 ai_persona_id，取该人格 prompt 作为 system_prompt，与 UMO 会话
+          默认人格解耦，用户可自行选择对话人格。
         """
         try:
-            provider = self.context.get_using_provider(umo=None)
+            uma = config.target_sessions[0] if config.target_sessions else None
+            provider = self.context.get_using_provider(umo=uma)
             if provider is None:
                 logger.warning(f"[{PLUGIN_NAME}] 未找到可用的 LLM 提供商")
                 return ""
 
-            response = await provider.text_chat(prompt=question)
+            system_prompt = None
+            persona_id = getattr(config, "ai_persona_id", "") or ""
+            if persona_id:
+                persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
+                if persona:
+                    system_prompt = str(persona.get("prompt") or "").strip() or None
+
+            if system_prompt:
+                response = await provider.text_chat(
+                    system_prompt=system_prompt, prompt=question
+                )
+            else:
+                response = await provider.text_chat(prompt=question)
             return (getattr(response, "completion_text", "") or "").strip()
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] LLM 调用失败: {exc}")
@@ -996,25 +1292,293 @@ class MinecraftQueQiaoPlugin(Star):
 
     # ---- 消息监听：外部 → MC 转发与自定义指令 ----
 
+    @filter.on_decorating_result()
+    async def capture_bot_reply_for_relay(self, event: AstrMessageEvent) -> None:
+        """在框架拆分回复前保存完整文本，供发送后统一转发。"""
+        umo = event.unified_msg_origin
+        if not any(
+            config.forward_bot_self_messages
+            for _, config in self.message_bridge.servers_for_session(umo)
+        ):
+            return
+
+        result = event.get_result()
+        if result is None:
+            return
+
+        text = self._bot_reply_to_text(result.chain)
+        images = self._bot_reply_images(result.chain)
+        if text:
+            event.set_extra("_queqiao_bot_reply_text", text)
+        if images:
+            event.set_extra("_queqiao_bot_reply_images", images)
+        if text or images:
+            self._record_bot_reply(umo, text, len(images))
+
+    def _record_bot_reply(self, umo: str, text: str, image_count: int) -> None:
+        """记录一条即将发出的回复，供分段发送产生的群消息回声识别。"""
+        now = time.monotonic()
+        records = [
+            record
+            for record in self._bot_reply_records.get(umo, [])
+            if now - record[0] < BOT_REPLY_RECORD_TTL
+        ]
+        records.append((now, self._normalize_bot_text(text), image_count))
+        self._bot_reply_records[umo] = records
+
+    def _is_bot_reply_segment(self, umo: str, text: str, image_count: int) -> bool:
+        """判断群消息是否为近期某条流水线回复的分段（框架逐段发送时产生）。"""
+        now = time.monotonic()
+        normalized = self._normalize_bot_text(text)
+        for seen_at, reply_text, reply_images in self._bot_reply_records.get(umo, []):
+            if now - seen_at >= BOT_REPLY_RECORD_TTL:
+                continue
+            if normalized and normalized in reply_text:
+                return True
+            if not normalized and image_count and image_count <= reply_images:
+                return True
+        return False
+
+    @staticmethod
+    def _bot_reply_to_text(components: Sequence[object]) -> str:
+        """Extract reply text while preserving non-image component placeholders."""
+        from astrbot.api.message_components import Face, Image, Plain
+
+        parts = []
+        for component in components:
+            if isinstance(component, Plain):
+                parts.append(component.text or "")
+                continue
+            if isinstance(component, Image):
+                continue
+            if isinstance(component, Face):
+                placeholder = f"[表情:{component.id}]"
+            else:
+                component_name = type(component).__name__
+                placeholder = f"[{component_name}]"
+            if parts and parts[-1] and not parts[-1][-1].isspace():
+                parts.append(" ")
+            parts.extend((placeholder, " "))
+        return "".join(parts).strip()
+
+    @staticmethod
+    def _bot_reply_images(components: Sequence[object]) -> list[object]:
+        from astrbot.api.message_components import Image
+
+        return [component for component in components if isinstance(component, Image)]
+
+    async def _get_bot_display_name(self, event: AstrMessageEvent) -> str:
+        """Resolve the bot's display name instead of exposing its platform ID."""
+        bot_id = str(event.get_self_id() or "").strip()
+        if not bot_id:
+            return "Bot"
+
+        get_platform_id = getattr(event, "get_platform_id", None)
+        platform_id = (
+            str(get_platform_id() or "")
+            if callable(get_platform_id)
+            else str(event.get_platform_name() or "")
+        )
+        cache_key = (platform_id, bot_id)
+        if cached_name := self._bot_display_names.get(cache_key):
+            return cached_name
+
+        display_name = ""
+        if event.get_platform_name() == "aiocqhttp":
+            bot = getattr(event, "bot", None)
+            call_action = getattr(bot, "call_action", None)
+            if callable(call_action):
+                group_id = getattr(event, "get_group_id", lambda: "")()
+                if group_id:
+                    try:
+                        numeric_group_id = int(group_id)
+                        numeric_bot_id = int(bot_id)
+                    except (TypeError, ValueError):
+                        member = None
+                    else:
+                        try:
+                            member = await call_action(
+                                action="get_group_member_info",
+                                group_id=numeric_group_id,
+                                user_id=numeric_bot_id,
+                                no_cache=False,
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                f"[{PLUGIN_NAME}] 获取 Bot 群昵称失败，"
+                                f"回退账号昵称: {exc}"
+                            )
+                            member = None
+                    if isinstance(member, dict):
+                        display_name = str(member.get("card") or "").strip() or str(
+                            member.get("nickname") or ""
+                        ).strip()
+
+                if not display_name:
+                    try:
+                        login_info = await call_action(action="get_login_info")
+                    except Exception as exc:
+                        logger.warning(
+                            f"[{PLUGIN_NAME}] 获取 Bot 昵称失败，将使用通用名称: {exc}"
+                        )
+                    else:
+                        if isinstance(login_info, dict):
+                            display_name = str(
+                                login_info.get("nickname")
+                                or login_info.get("name")
+                                or ""
+                            ).strip()
+
+        if display_name and display_name != bot_id:
+            self._bot_display_names[cache_key] = display_name
+            return display_name
+        return "Bot"
+
+    @filter.after_message_sent()
+    async def on_after_message_sent(self, event: AstrMessageEvent) -> None:
+        """仅监听 AstrBot 经消息管道发出的回复，不把机器人消息重新送入指令处理。"""
+        umo = event.unified_msg_origin
+        if not any(
+            config.forward_bot_self_messages
+            for _, config in self.message_bridge.servers_for_session(umo)
+        ):
+            return
+        if self._has_peer_listener(umo):
+            # 分段已由旁路监听逐段转发，此处不再补发整条回复
+            return
+
+        text = event.get_extra("_queqiao_bot_reply_text", "")
+        images = event.get_extra("_queqiao_bot_reply_images", [])
+        if not isinstance(text, str):
+            text = ""
+        if not isinstance(images, list):
+            images = []
+        if not images:
+            result = event.get_result()
+            if result is not None:
+                images = self._bot_reply_images(result.chain)
+        if not text and not images:
+            return
+
+        if not self._claim_bot_forward(
+            self._claim_key(umo, text, len(images)), "hook"
+        ):
+            logger.debug(f"[{PLUGIN_NAME}] Bot 回复已由 message_sent 路径转发，跳过重复转发")
+            return
+        echo_stamp = self.message_bridge.mark_outbound_message(umo, text)
+        relayed = False
+        try:
+            relayed = await self._relay_to_minecraft(
+                event,
+                umo,
+                text,
+                images=images,
+                is_bot_self_message=True,
+                sender_override=await self._get_bot_display_name(event),
+                apply_wake_prefix=False,
+                include_self_mention=False,
+                image_fallback_placeholders=True,
+            )
+        finally:
+            if not relayed:
+                self.message_bridge.discard_outbound_message(
+                    umo, text, echo_stamp
+                )
+
+    @staticmethod
+    def _is_platform_event(event: AstrMessageEvent) -> bool:
+        """识别通知/请求等非聊天事件，避免转发事件描述文本。"""
+        message_type = event.get_message_type()
+        if getattr(message_type, "value", message_type) == "OtherMessage":
+            return True
+
+        raw_message = getattr(event.message_obj, "raw_message", None)
+        post_type = getattr(raw_message, "post_type", None)
+        raw_get = getattr(raw_message, "get", None)
+        if post_type is None and callable(raw_get):
+            post_type = raw_get("post_type")
+        if post_type in {"notice", "request"}:
+            return True
+
+        for component in event.get_messages() or []:
+            component_type = getattr(component, "type", None)
+            if getattr(component_type, "value", component_type) == "Poke":
+                return True
+        return False
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """处理外部消息：自定义指令匹配与转发到 MC（含图片）。
 
         不要用 `is_at_or_wake_command` 短路：QQ 回复/转发 Bot 消息时客户端
         会自动附带 @Bot（AstrBot 唤醒判定会因此标记唤醒命令），若在此 return，
-        这类回复内容将永远无法转发到游戏。空消息（无文本无图片）由下方统一过滤。
+        这类回复内容将永远无法转发到游戏。普通转发只作为监听操作，不停止原事件，
+        让 AstrBot 仍可处理唤醒消息。空消息（无文本无图片）由下方统一过滤。
         """
-        umo = event.unified_msg_origin
-        text = event.get_message_str().strip()
-
-        # 图片不参与文本匹配，但可随消息一起转发到 MC
-        images = self._extract_images(event)
-        if not text and not images:
+        if self._is_platform_event(event):
+            if event.get_sender_id() == event.get_self_id():
+                logger.info(
+                    f"[{PLUGIN_NAME}] 收到 Bot 自身平台事件但按非聊天事件过滤："
+                    f"type={event.get_message_type()}"
+                )
             return
 
+        umo = event.unified_msg_origin
+        text = event.get_message_str().strip()
+        images = self._extract_images(event)
+
+        is_bot_self_message = event.get_sender_id() == event.get_self_id()
+        targets = self.message_bridge.servers_for_session(umo)
+        if is_bot_self_message:
+            enabled_targets = [
+                server_name
+                for server_name, config in targets
+                if config.forward_bot_self_messages
+            ]
+            logger.info(
+                f"[{PLUGIN_NAME}] 收到 Bot 自身群消息监听事件："
+                f"图片组件={len(images)}，文本非空={bool(text)}，"
+                f"绑定服务器={len(targets)}，启用自身转发={enabled_targets}"
+            )
+            echo_matched = self.message_bridge.consume_outbound_echo(umo, text)
+            original_text = getattr(event.message_obj, "message_str", None)
+            if (
+                not echo_matched
+                and isinstance(original_text, str)
+                and original_text.strip() != text
+            ):
+                echo_matched = self.message_bridge.consume_outbound_echo(
+                    umo, original_text.strip()
+                )
+            if echo_matched:
+                text = ""
+            if not any(
+                config.forward_bot_self_messages for _, config in targets
+            ):
+                logger.info(
+                    f"[{PLUGIN_NAME}] Bot 自身消息未转发："
+                    "目标会话未启用「转发机器人自己的消息，不剥离唤醒词」"
+                )
+                return
+
+        images = await self.message_bridge.filter_outbound_image_echoes(umo, images)
+
+        # 图片不参与文本匹配，但可随消息一起转发到 MC
+        if not text and not images:
+            original_wake_text = event.is_at_or_wake_command and any(
+                config.forward_bot_self_messages
+                and (
+                    self._relay_text(event, config, text)
+                    or self._self_mention_text(event)
+                )
+                for _, config in self.message_bridge.servers_for_session(umo)
+            )
+            if not original_wake_text:
+                return
+
         # 自定义指令：仅在会话绑定的服务器上匹配（按文本匹配，图片不参与）
-        if text:
-            for server_name, config in self.message_bridge.servers_for_session(umo):
+        if text and not is_bot_self_message:
+            for server_name, config in targets:
                 actual = self.command_handler.match_custom_command(server_name, text)
                 if actual:
                     instance = self.server_manager.get(server_name)
@@ -1031,8 +1595,47 @@ class MinecraftQueQiaoPlugin(Star):
                     return
 
         # 转发到 MC
-        if await self._relay_to_minecraft(event, umo, text, images):
-            event.stop_event()
+        relayed = await self._relay_to_minecraft(
+            event,
+            umo,
+            text,
+            images,
+            is_bot_self_message=is_bot_self_message,
+            image_fallback_placeholders=is_bot_self_message,
+        )
+        if is_bot_self_message and not relayed:
+            logger.info(
+                f"[{PLUGIN_NAME}] Bot 自身消息已到监听器但未转发："
+                f"图片组件={len(images)}，文本非空={bool(text)}；"
+                "请检查转发前缀、服务器连接及图片转发配置/日志"
+            )
+
+    @staticmethod
+    def _relay_text(event: AstrMessageEvent, config: ServerConfig, text: str) -> str:
+        """Choose the pre-wake text only when that server opts into it."""
+        if config.forward_bot_self_messages and event.is_at_or_wake_command:
+            original_text = getattr(event.message_obj, "message_str", None)
+            if isinstance(original_text, str) and original_text.strip():
+                return original_text.strip()
+        return text
+
+    @staticmethod
+    def _self_mention_text(event: AstrMessageEvent) -> str | None:
+        """Restore the leading self-mention omitted from OneBot's message text."""
+        try:
+            from astrbot.api.message_components import At
+        except ImportError:
+            return None
+
+        self_id = str(event.get_self_id() or "").strip()
+        if not self_id:
+            return None
+
+        for component in event.get_messages() or []:
+            if isinstance(component, At) and str(component.qq) == self_id:
+                name = str(getattr(component, "name", "") or "").strip() or self_id
+                return f"@{name}({self_id})"
+        return None
 
     @staticmethod
     def _extract_images(event: AstrMessageEvent) -> list:
@@ -1108,13 +1711,23 @@ class MinecraftQueQiaoPlugin(Star):
         return f"url={url!r} file={file_!r} path={path!r}"
 
     async def _relay_to_minecraft(
-        self, event: AstrMessageEvent, umo: str, text: str, images: list | None = None
+        self,
+        event: AstrMessageEvent,
+        umo: str,
+        text: str,
+        images: list[object] | None = None,
+        *,
+        is_bot_self_message: bool | None = None,
+        sender_override: str | None = None,
+        apply_wake_prefix: bool = True,
+        include_self_mention: bool = True,
+        image_fallback_placeholders: bool = False,
     ) -> bool:
         """把外部会话消息按前缀规则转发到绑定的 MC 服务器。
 
         `images` 为消息链中的图片组件列表；仅当服务器开启了
-        `forward_image_to_mc` 且能解析出玩家客户端可访问的 URL 时，
-        才以 ChatImage 代码形式追加到广播内容。
+        `forward_image_to_mc` 且服务器连接正常时，图片按所选模式转换为
+        ChatImage URL 引用或 E33Chat 服务端媒体引用后追加到广播内容。
         """
         targets = self.message_bridge.servers_for_session(umo)
         if not targets:
@@ -1122,11 +1735,29 @@ class MinecraftQueQiaoPlugin(Star):
             return False
 
         relayed = False
-        sender = event.get_sender_name() or event.get_sender_id()
+        sender = sender_override or event.get_sender_name() or event.get_sender_id()
         platform = event.get_platform_name() or "未知"
+        if is_bot_self_message is None:
+            is_bot_self_message = event.get_sender_id() == event.get_self_id()
 
         for server_name, config in targets:
-            if not self.message_bridge.should_relay(config, text):
+            if (
+                is_bot_self_message and not config.forward_bot_self_messages
+            ):
+                continue
+            relay_text = (
+                self._relay_text(event, config, text) if apply_wake_prefix else text
+            )
+            self_mention = (
+                self._self_mention_text(event)
+                if include_self_mention and config.forward_bot_self_messages
+                else None
+            )
+            if not relay_text and not images and not self_mention:
+                continue
+            if not self.message_bridge.should_relay(
+                config, relay_text, has_images=bool(images)
+            ):
                 continue
 
             instance = self.server_manager.get(server_name)
@@ -1138,27 +1769,79 @@ class MinecraftQueQiaoPlugin(Star):
                 continue
 
             # 文本部分（供回声抑制与格式占位符使用）
-            content = self.message_bridge.strip_relay_prefix(config, text)
+            content = self.message_bridge.strip_relay_prefix(config, relay_text)
+            if self_mention and self_mention not in content:
+                content = f"{self_mention} {content}".strip()
 
-            # 图片 → ChatImage 代码（[[CICode,url=...,name=...]]）
+            # 图片按模式转换为 ChatImage URL 或 E33Chat 媒体引用。
             image_codes = []
             skipped_images = 0
             skipped_sample: object | None = None
             skip_reason: str | None = None
             if images and config.forward_image_to_mc:
                 for comp in images:
-                    url, reason = await resolve_image_url(
-                        comp, self.image_bed
-                    )
-                    if url:
-                        image_codes.append(
-                            build_chatimage_code(url, config.chatimage_name)
+                    if config.mc_image_mode == "e33chat":
+                        data, reason = await acquire_image_bytes(
+                            comp, max_bytes=E33CHAT_MEDIA_MAX_FILE_BYTES
                         )
+                        if data and sniff_image_format(data) == "gif":
+                            data = None
+                            reason = "E33Chat 不支持 GIF 动图，已拦截"
+                        elif data:
+                            data, _, resize_error = await asyncio.to_thread(
+                                resize_e33chat_image,
+                                data,
+                                config.e33chat_image_max_edge,
+                            )
+                            if resize_error:
+                                logger.warning(
+                                    f"[{PLUGIN_NAME}][{server_name}] "
+                                    f"E33Chat 图片缩小失败，保留原图上传: {resize_error}"
+                                )
+                        media_id = None
+                        if data:
+                            if config.e33chat_media_backend == "mcsm":
+                                try:
+                                    media_id = uuid.uuid4().hex
+                                    await MCSManagerMedia(
+                                        config.mcsm_panel_url,
+                                        config.mcsm_api_key,
+                                        config.mcsm_daemon_id,
+                                        config.mcsm_instance_uuid,
+                                        config.mcsm_media_dir,
+                                        config.mcsm_daemon_url,
+                                    ).upload(media_id, data)
+                                    reason = ""
+                                except Exception as exc:
+                                    media_id = None
+                                    reason = (
+                                        "MCSManager 媒体上传失败（"
+                                        f"{describe_mcsmanager_error(exc)}）"
+                                    )
+                            else:
+                                media_id, reason = await store_e33chat_media(
+                                    data, config.e33chat_media_dir
+                                )
+                        if media_id:
+                            image_codes.append(
+                                build_e33chat_media_code(media_id)
+                            )
+                        else:
+                            skipped_images += 1
+                            if skipped_sample is None:
+                                skipped_sample = comp
+                                skip_reason = reason
                     else:
-                        skipped_images += 1
-                        if skipped_sample is None:
-                            skipped_sample = comp
-                            skip_reason = reason
+                        url, reason = await resolve_image_url(comp, self.image_bed)
+                        if url:
+                            image_codes.append(
+                                build_chatimage_code(url, config.chatimage_name)
+                            )
+                        else:
+                            skipped_images += 1
+                            if skipped_sample is None:
+                                skipped_sample = comp
+                                skip_reason = reason
             elif images:
                 # 默认关闭：多数服务器未装 ChatImage，开箱不应外溢；
                 # 但用户排查时这里必须有可见日志，否则图片静默丢失无从查起
@@ -1167,15 +1850,33 @@ class MinecraftQueQiaoPlugin(Star):
                     "但未开启 forward_image_to_mc，图片未转发"
                 )
 
-            if not content and not image_codes:
-                if skipped_images:
-                    logger.warning(
-                        f"[{PLUGIN_NAME}][{server_name}] 消息中的图片均无可访问"
-                        f"的公开 URL（{skipped_images} 张），已跳过。"
-                        f"图片组件: {self._describe_image(skipped_sample)}；"
-                        f"兜底状态: {self.image_bed.status_text}；"
-                        f"原因: {skip_reason or '未知'}"
+            if (
+                image_fallback_placeholders
+                and images
+                and config.mc_image_mode != "e33chat"
+            ):
+                unforwarded_images = len(images) - len(image_codes)
+                if unforwarded_images:
+                    placeholders = " ".join(
+                        "[图片]" for _ in range(unforwarded_images)
                     )
+                    content = f"{content} {placeholders}".strip()
+
+            if skipped_images:
+                image_service_status = (
+                    f"图床状态: {self.image_bed.status_text}；"
+                    if config.mc_image_mode == "chatimage"
+                    else ""
+                )
+                logger.warning(
+                    f"[{PLUGIN_NAME}][{server_name}] 消息中的图片未能按"
+                    f"{config.mc_image_mode} 模式转发（{skipped_images} 张），已跳过。"
+                    f"图片组件: {self._describe_image(skipped_sample)}；"
+                    f"{image_service_status}"
+                    f"原因: {skip_reason or '未知'}"
+                )
+
+            if not content and not image_codes:
                 continue
 
             message = content
@@ -1197,7 +1898,29 @@ class MinecraftQueQiaoPlugin(Star):
                 display_name=config.server_label,
                 server_name=server_name,
             )
-            sent = await instance.client.broadcast(formatted, config.broadcast_color)
+            if config.mc_image_mode == "e33chat":
+                command_text = formatted.replace("\r", " ").replace("\n", " ")
+                try:
+                    command_output, _ = await instance.execute_command_with_channel(
+                        f"say {command_text}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{server_name}] E33Chat 消息无法通过"
+                        f"服务器 SAY 发送（{type(exc).__name__}），已跳过"
+                    )
+                    continue
+                if command_output is None:
+                    logger.warning(
+                        f"[{PLUGIN_NAME}][{server_name}] E33Chat 消息无法通过"
+                        "服务器 SAY 发送，已跳过；请启用鹊桥 RCON 或配置直连 RCON"
+                    )
+                    continue
+                sent = True
+            else:
+                sent = await instance.client.broadcast(
+                    formatted, config.broadcast_color
+                )
             if not sent:
                 logger.warning(
                     f"[{PLUGIN_NAME}][{server_name}] 群消息转发到游戏失败: "
@@ -1205,9 +1928,10 @@ class MinecraftQueQiaoPlugin(Star):
                 )
                 continue
             # 记录以防止该消息从游戏回传时形成回声。
-            # 回声抑制只针对可被玩家复述的文本部分；图片代码由服务端广播，
-            # 不会以玩家聊天事件回传，因此以纯文本 content 作为抑制键
-            self.message_bridge.mark_forwarded(server_name, content)
+            # 记录实际广播到 MC 的 formatted 文本，与 forward_event 中
+            # _is_echo 比对的 event.message 保持一致（均含格式前缀），
+            # 才能正确抑制 QQ->MC->QQ 的回声刷屏。
+            self.message_bridge.mark_forwarded(server_name, formatted)
             self.metrics.record_relay_to_mc(server_name)
             relayed = True
             # QQ → 游戏方向的转发同时写入互通终端，与游戏事件同流展示
@@ -1231,7 +1955,8 @@ class MinecraftQueQiaoPlugin(Star):
                     f"[{PLUGIN_NAME}][{server_name}] 已转发 {len(image_codes)} "
                     f"张图片到游戏内{extra}"
                 )
-            # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
-            await self.message_bridge.mark_relayed(event, config)
+            if not is_bot_self_message:
+                # 转发成功后给原消息回执（emoji 贴表情 / text 文本回复）
+                await self.message_bridge.mark_relayed(event, config)
 
         return relayed

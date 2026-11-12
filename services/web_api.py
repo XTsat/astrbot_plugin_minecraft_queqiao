@@ -23,6 +23,9 @@ from ..core.constants import (
     DEFAULT_CONNECT_FAIL_NOTIFY_DELAY,
     DEFAULT_CONNECT_FAIL_NOTIFY_FORMAT,
     DEFAULT_CONNECT_NOTIFY_FORMAT,
+    DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
     DEFAULT_QUIET_HOURS_ENABLED,
     DEFAULT_QUIET_HOURS_END,
@@ -360,6 +363,12 @@ class WebApiController:
                         ["POST"],
                         "清空某台服务器的性能监控采样数据（不可恢复）",
                     ),
+                    (
+                        "/personas",
+                        self.get_personas,
+                        ["GET"],
+                        "获取 AstrBot 框架中所有可用人格列表（用于 AI 聊天人格选择）",
+                    ),
                 ]
             )
 
@@ -393,6 +402,27 @@ class WebApiController:
         data["reconnecting_servers"] = reconnecting
         data["exhausted_servers"] = exhausted
         return json_response(data)
+
+    async def get_personas(self) -> Any:
+        """获取 AstrBot 框架中所有可用人格列表。
+
+        用于 AI 聊天人格选择下拉/复选框。
+        """
+        personas = []
+        try:
+            pm = getattr(self.context, "persona_manager", None)
+            if pm is not None:
+                all_personas = getattr(pm, "personas_v3", None) or []
+                for p in all_personas:
+                    # 兼容 dict 或对象
+                    name = p.get("name") if isinstance(p, dict) else getattr(
+                        p, "name", None
+                    ) or getattr(p, "prompt_name", None) or str(p)
+                    if name:
+                        personas.append({"name": name})
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 获取人格列表失败: {exc}")
+        return json_response({"personas": personas})
 
     async def get_servers(self) -> Any:
         """获取所有服务器列表及其连接状态，并附带各服务器的实时状态与在线玩家。
@@ -1296,6 +1326,7 @@ class WebApiController:
         msg = raw_msg if isinstance(raw_msg, dict) else {}
         return {
             "forward_chat_to_astrbot": _as_bool(msg.get("forward_chat_to_astrbot"), True),
+            "forward_chat_prefix": str(msg.get("forward_chat_prefix") or ""),
             "forward_chat_format": str(msg.get("forward_chat_format") or DEFAULT_CHAT_FORMAT),
             "forward_join_leave_to_astrbot": _as_bool(
                 msg.get("forward_join_leave_to_astrbot"), False
@@ -1310,6 +1341,18 @@ class WebApiController:
             "forward_image_to_mc": _as_bool(msg.get("forward_image_to_mc"), False),
             "forward_image_from_mc": _as_bool(msg.get("forward_image_from_mc"), False),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
+            "e33chat_media_dir": str(msg.get("e33chat_media_dir") or ""),
+            "e33chat_image_max_edge": _as_int_clamped(
+                msg.get("e33chat_image_max_edge"),
+                DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                E33CHAT_IMAGE_MAX_EDGE_MIN,
+                E33CHAT_IMAGE_MAX_EDGE_MAX,
+            ),
+            "mc_image_mode": (
+                "e33chat"
+                if str(msg.get("mc_image_mode") or "").strip().lower() == "e33chat"
+                else "chatimage"
+            ),
         }
 
     def _find_server_entry(
@@ -1523,6 +1566,7 @@ class WebApiController:
             for key in (
                 "enable_local_translation",
                 "forward_chat_to_astrbot",
+                "forward_chat_prefix",
                 "forward_chat_format",
                 "forward_join_leave_to_astrbot",
                 "forward_death_to_astrbot",
@@ -1530,10 +1574,27 @@ class WebApiController:
                 "forward_image_to_mc",
                 "forward_image_from_mc",
                 "auto_forward_prefix",
+                "e33chat_media_dir",
+                "e33chat_image_max_edge",
+                "e33chat_media_backend",
+                "mcsm_panel_url",
+                "mcsm_api_key",
+                "mcsm_daemon_id",
+                "mcsm_instance_uuid",
+                "mcsm_media_dir",
+                "mcsm_daemon_url",
+                "mc_image_mode",
             ):
                 if key not in message_payload:
                     continue
-                if key in ("enable_local_translation", "forward_chat_to_astrbot",
+                if key == "e33chat_image_max_edge":
+                    msg[key] = _as_int_clamped(
+                        message_payload[key],
+                        DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                        E33CHAT_IMAGE_MAX_EDGE_MIN,
+                        E33CHAT_IMAGE_MAX_EDGE_MAX,
+                    )
+                elif key in ("enable_local_translation", "forward_chat_to_astrbot",
                            "forward_join_leave_to_astrbot",
                            "forward_death_to_astrbot", "forward_achievement_to_astrbot",
                            "forward_image_to_mc", "forward_image_from_mc"):
