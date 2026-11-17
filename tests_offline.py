@@ -45,6 +45,12 @@ class _Filter:
     def event_message_type(self, *a, **k):
         def deco(fn): return fn
         return deco
+    def on_decorating_result(self, *a, **k):
+        def deco(fn): return fn
+        return deco
+    def after_message_sent(self, *a, **k):
+        def deco(fn): return fn
+        return deco
 ev.filter = _Filter()
 sys.modules["astrbot.api.event"] = ev
 mc = types.ModuleType("astrbot.api.message_components")
@@ -428,12 +434,20 @@ class _Ev:
     def __init__(self, bot, mid="12345"):
         self.bot = bot
         self.message_obj = _MsgObj(mid)
+        self.unified_msg_origin = "umo:GroupMessage:123"
         self.sent = []
     async def send(self, chain): self.sent.append(chain)
 
+class _MarkContext:
+    """桩：文本回执改为主动发送（context.send_message），不再借用事件回复。"""
+    def __init__(self): self.sent = []
+    async def send_message(self, umo, chain):
+        self.sent.append((umo, chain))
+        return True
+
 def _run(coro): return _asyncio.new_event_loop().run_until_complete(coro)
 
-_bridge = _MB(context=None)
+_bridge = _MB(context=_MarkContext())
 
 # (a) emoji 模式：走平台接口贴表情，且不额外发文本
 _bot = _Bot(); _ev = _Ev(_bot)
@@ -447,8 +461,8 @@ assert _ev.sent == [], "emoji 模式不应再发文本"
 _bot2 = _Bot(); _ev2 = _Ev(_bot2)
 cfg2 = _S2.from_dict({"message": {"mark_option": "text"}})
 _run(_bridge.mark_relayed(_ev2, cfg2))
-assert len(_ev2.sent) == 1, _ev2.sent
-assert _ev2.sent[0].chain[0].text.startswith("✅"), _ev2.sent[0].chain[0].text
+assert len(_bridge.context.sent) == 1, _bridge.context.sent
+assert _bridge.context.sent[0][1].chain[0].text.startswith("✅"), _bridge.context.sent[0]
 assert _bot2.calls == [], "text 模式不应贴表情"
 
 # (c) none 模式：什么都不做
@@ -1204,6 +1218,13 @@ class _Cli26:
 class _Inst26:
     def __init__(self): self.client = _Cli26(); self.connected = True
 
+class _MsgType26:
+    """桩：对齐 astrbot.core.platform.message_type.MessageType 的取值。"""
+    GROUP_MESSAGE = types.SimpleNamespace(value="GroupMessage")
+    FRIEND_MESSAGE = types.SimpleNamespace(value="FriendMessage")
+    OTHER_MESSAGE = types.SimpleNamespace(value="OtherMessage")
+
+
 class _Ev26:
     """模拟外部会话消息事件（aiocqhttp 形态：message_str 只含文本）。"""
     def __init__(self, text="", images=(), sender="群友A", platform="aiocqhttp"):
@@ -1217,7 +1238,9 @@ class _Ev26:
     def get_messages(self): return self._images
     def get_sender_name(self): return self._sender
     def get_sender_id(self): return ""
+    def get_self_id(self): return "bot"
     def get_platform_name(self): return self._platform
+    def get_message_type(self): return _MsgType26.GROUP_MESSAGE
     def stop_event(self): self.stopped = True
     def plain_result(self, text): return text
 
@@ -2606,12 +2629,15 @@ class _Ctx32:
         self.sent.append((umo, chain))
 
 
+from astrbot_plugin_minecraft_queqiao.services.message_bridge import MessageBridge as _MB32
+
 class _Self32:
     """插件桩 self：仅含 context 与共用的逐会话发送方法。"""
     _send_text_to_sessions = _P32._send_text_to_sessions
 
     def __init__(self, ctx):
         self.context = ctx
+        self.message_bridge = _MB32(ctx)
 
 
 # (a) 有目标会话：告警发到每个 target_session，文本包含重复的 server_name
@@ -3677,7 +3703,7 @@ _wac35.register_routes()
 # 32 条基础路由（/config、/page/switch 已随配置独立页移除；/config/full 与
 # /config/save 恢复供 dashboard 配置视图使用）
 # + 5 条监控路由；无互切路由
-assert len(_ctx35.routes) == 37, f"监控注入后应注册 37 条路由, 实际 {len(_ctx35.routes)}"
+assert len(_ctx35.routes) == 38, f"监控注入后应注册 38 条路由（含 /personas）, 实际 {len(_ctx35.routes)}"
 _rp35 = [r[0] for r in _ctx35.routes]
 assert "/astrbot_plugin_minecraft_queqiao/monitor/status" in _rp35
 assert "/astrbot_plugin_minecraft_queqiao/monitor/<server_name>/series" in _rp35
@@ -5039,7 +5065,7 @@ _cfgschema44 = json.loads(
 )
 assert _cfgschema44["mc_servers"]["templates"]["server"]["items"][
     "terminal_days"
-]["type"] == "integer", "terminal_days 在 schema 中应是 integer（前端已兼容）"
+]["type"] == "int", "terminal_days 在 schema 中应是 int（AstrBot 只认 int）"
 print("OK  AI 字段条目顶层读写(不污染 server 子对象) / 前缀置空与字符串布尔 / "
       "消息转发 message 子对象读写·漏传合并·运行时就地生效 / 目标会话软更新 / "
       "自动刷新间隔与折叠状态钳制·合并·落盘 / 监控弹窗控件迁移与前端静态守卫")
@@ -5932,7 +5958,7 @@ _pi49.server_manager._servers["S49"] = _inst49
 _ev49a = _Ev49(text="收到，马上来")
 assert _run49(_pi49.on_message(_ev49a)) == []
 assert _inst49.client.sent == [("[QQ]群友A: 收到，马上来", "white")], _inst49.client.sent
-assert _ev49a.stopped is True, "转发成功后应 stop 后续处理"
+assert _ev49a.stopped is False, "转发只作监听，不再 stop 后续处理"
 
 # (b) 纯 @Bot 无内容 → 不转发（空消息统一过滤，不是 wake 短路的结果）
 _pi49b = _P49(_Ctx26(), {})
@@ -5997,7 +6023,7 @@ _ev50a = _Ev50(text="收到，马上来",
 assert _run49(_pi50.on_message(_ev50a)) == []
 assert _inst50.client.sent == [("[QQ]群友A: @Player_A 收到，马上来", "white")], \
     _inst50.client.sent
-assert _ev50a.stopped is True, "转发成功后应 stop 后续处理"
+assert _ev50a.stopped is False, "转发只作监听，不再 stop 后续处理"
 
 # (b) 普通消息（无 Reply 组件）→ 不加 @
 _pi50b, _inst50b = _mk50({"server": {"server_name": "S50"},
@@ -6155,6 +6181,11 @@ def _make_plugin51(configs, ctx):
     pi.context = ctx
     pi.metrics = _MC51()
     pi.terminal_logs = _TL51()
+    # 连通通知走 _send_text_to_sessions，需要 message_bridge 登记回声标记
+    from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
+        MessageBridge as _MB51,
+    )
+    pi.message_bridge = _MB51(ctx)
     return pi
 
 
@@ -6604,7 +6635,8 @@ assert "notify_on_connect" not in _items51["message"]["items"], \
 assert "notify_on_connect_fail" not in _items51["message"]["items"], \
     "连接失败通知应落在模板项顶层，message 子对象内不得重复"
 # 断连静默期：整数秒，默认 60，与代码默认一致，hint 说明 0=立即通知
-assert _items51["connect_fail_notify_delay"]["type"] == "integer"
+assert _items51["connect_fail_notify_delay"]["type"] == "int", \
+    "AstrBot 配置页只认 int，写成 integer 会被当成文本输入框"
 assert _items51["connect_fail_notify_delay"]["default"] == _DCFND51
 assert "秒" in _items51["connect_fail_notify_delay"]["hint"]
 assert "0" in _items51["connect_fail_notify_delay"]["hint"]
