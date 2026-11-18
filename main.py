@@ -229,6 +229,7 @@ class MinecraftQueQiaoPlugin(Star):
         "ai_chat_prefix",
         "enable_local_translation",
         "forward_chat_to_astrbot",
+        "forward_chat_prefix",
         "forward_chat_format",
         "forward_join_leave_to_astrbot",
         "forward_death_to_astrbot",
@@ -683,8 +684,8 @@ class MinecraftQueQiaoPlugin(Star):
         """两个前缀互相包含时告警，提示用户在配置中改开。"""
         if config.prefixes_conflict:
             logger.warning(
-                f"[{PLUGIN_NAME}][{config.server_name}] 互通前缀 "
-                f"`{config.auto_forward_prefix}` 与 AI 前缀 "
+                f"[{PLUGIN_NAME}][{config.server_name}] 游戏→群前缀 "
+                f"`{config.forward_chat_prefix}` 与 AI 前缀 "
                 f"`{config.ai_chat_prefix}` 相互包含，消息归属可能产生歧义，"
                 f"建议改为互不相同的两个前缀"
             )

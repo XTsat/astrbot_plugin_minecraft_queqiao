@@ -175,6 +175,99 @@ def _to_platform_map(value: object) -> dict[str, str]:
     return mapping
 
 
+# schema 分组 → 运行时扁平属性名。
+# 配置页按「同类一个对象」组织（ai / prefix / notify / quiet_hours），
+# 运行时与面板仍按扁平属性读取；这里就是两者之间的唯一翻译层。
+CONFIG_GROUP_ALIASES: dict[str, dict[str, str]] = {
+    "ai": {
+        "enable_chat": "enable_ai_chat",
+        "persona_id": "ai_persona_id",
+    },
+    "prefix": {
+        "group_to_game": "auto_forward_prefix",
+        "game_to_group": "forward_chat_prefix",
+        "game_to_ai": "ai_chat_prefix",
+    },
+    "notify": {
+        "on_connect": "notify_on_connect",
+        "on_connect_format": "notify_on_connect_format",
+        "on_connect_fail": "notify_on_connect_fail",
+        "on_connect_fail_format": "notify_on_connect_fail_format",
+        "fail_delay": "connect_fail_notify_delay",
+        "slp_address": "slp_address",
+    },
+    "quiet_hours": {
+        "enabled": "quiet_hours_enabled",
+        "start": "quiet_hours_start",
+        "end": "quiet_hours_end",
+        "items": "quiet_hours_items",
+    },
+}
+
+# 旧版把这两个前缀写在 message 子对象里，运行时也按 message 键读取
+_PREFIX_MESSAGE_KEYS = ("auto_forward_prefix", "forward_chat_prefix")
+
+
+def normalize_entry(entry: dict) -> dict:
+    """把服务器条目摊平成运行时视图（旧扁平键名）。
+
+    schema 已按分组嵌套；运行时、面板与旧配置文件都按扁平键读取，
+    因此先深拷贝一份，把分组值写回扁平键，再交给下游。
+    新分组优先于旧扁平键：用户在新结构里改了值，旧键不应再覆盖它。
+    """
+    if not isinstance(entry, dict):
+        return {}
+    data = dict(entry)
+    raw_message = data.get("message")
+    data["message"] = dict(raw_message) if isinstance(raw_message, dict) else {}
+
+    for group, aliases in CONFIG_GROUP_ALIASES.items():
+        node = data.get(group)
+        if not isinstance(node, dict):
+            continue
+        for leaf, flat in aliases.items():
+            if leaf not in node:
+                continue
+            if flat in _PREFIX_MESSAGE_KEYS:
+                data["message"][flat] = node[leaf]
+            else:
+                data[flat] = node[leaf]
+    return data
+
+
+def fold_entry(entry: dict) -> dict:
+    """把扁平运行时视图折回分组结构，用于落盘（schema 的新形状）。
+
+    写入前调用：`normalize_entry` 摊平读取、改完再 `fold_entry` 折叠保存。
+    旧扁平键会被移除，避免同一配置在两处并存。
+    """
+    if not isinstance(entry, dict):
+        return {}
+    data = dict(entry)
+    raw_message = data.get("message")
+    message = dict(raw_message) if isinstance(raw_message, dict) else {}
+
+    for group, aliases in CONFIG_GROUP_ALIASES.items():
+        node = data.get(group)
+        grouped = dict(node) if isinstance(node, dict) else {}
+        for leaf, flat in aliases.items():
+            if flat in _PREFIX_MESSAGE_KEYS:
+                if flat in message:
+                    grouped[leaf] = message.pop(flat)
+            elif flat in data:
+                grouped[leaf] = data.pop(flat)
+        if grouped:
+            data[group] = grouped
+    if message:
+        data["message"] = message
+    else:
+        data.pop("message", None)
+    # 旧扁平键不残留：迁移后同一配置不得在两处并存
+    for flat in _PREFIX_MESSAGE_KEYS:
+        data.pop(flat, None)
+    return data
+
+
 @dataclass
 class ServerConfig:
     """单台 MC 服务器的完整配置（对应 conf 中一个模板项）。"""
@@ -237,6 +330,8 @@ class ServerConfig:
 
     # ---- 消息转发 ----
     forward_chat_to_astrbot: bool = True
+    # 关闭全量转发后，游戏聊天以此开头才转发到群（留空 = 不转发普通聊天）
+    forward_chat_prefix: str = ""
     forward_chat_format: str = DEFAULT_CHAT_FORMAT
     forward_join_leave_to_astrbot: bool = False
     forward_death_to_astrbot: bool = False
@@ -400,20 +495,20 @@ class ServerConfig:
 
     @property
     def prefixes_conflict(self) -> bool:
-        """互通前缀与 AI 前缀是否冲突（互相包含即视为冲突）。
+        """游戏→群前缀与 AI 前缀是否冲突（互相包含即视为冲突）。
 
-        两个前缀作用在不同方向，但都必须能唯一判定消息归属：
-        - 群→MC 的互通前缀：外部会话消息以此开头才转发到游戏
-        - AI 前缀：游戏内聊天以此开头才触发 AI
+        两个前缀竞争的是同一条游戏内聊天：
+        - 游戏→群前缀：游戏聊天以此开头才转发到外部会话
+        - AI 前缀：游戏聊天以此开头才触发 AI
 
         若两者互相包含（例如同为 `*`，或一个是另一个的前缀），
         同一条游戏内消息可能同时命中两个语义，因此在读取时告警。
         """
-        if not self.auto_forward_prefix or not self.ai_chat_prefix:
+        if not self.forward_chat_prefix or not self.ai_chat_prefix:
             return False
         return (
-            self.auto_forward_prefix.startswith(self.ai_chat_prefix)
-            or self.ai_chat_prefix.startswith(self.auto_forward_prefix)
+            self.forward_chat_prefix.startswith(self.ai_chat_prefix)
+            or self.ai_chat_prefix.startswith(self.forward_chat_prefix)
         )
 
     @property
@@ -462,6 +557,7 @@ class ServerConfig:
         if not isinstance(data, dict):
             return cls()
 
+        data = normalize_entry(data)
         server = _as_object(data.get("server"))
         message = _as_object(data.get("message"))
         cmd = _as_object(data.get("cmd"))
@@ -574,6 +670,7 @@ class ServerConfig:
             or DEFAULT_QUIET_HOURS_END,
             quiet_hours_items=_to_quiet_items(data.get("quiet_hours_items")),
             forward_chat_to_astrbot=_to_bool(message.get("forward_chat_to_astrbot"), True),
+            forward_chat_prefix=_to_str(message.get("forward_chat_prefix"), "").strip(),
             forward_chat_format=_to_str(
                 message.get("forward_chat_format"), DEFAULT_CHAT_FORMAT
             )

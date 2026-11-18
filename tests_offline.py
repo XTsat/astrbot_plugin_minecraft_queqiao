@@ -282,11 +282,41 @@ assert P._match_ai_prefix(cfg_hash, QueQiaoEvent.from_dict(
 cfg_empty = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":""})
 assert P._match_ai_prefix(cfg_empty, chat_norm) is False
 
-# 前缀冲突检测：互相包含即告警
-assert SC.from_dict({"ai_chat_prefix":"*","message":{"auto_forward_prefix":"*"}}).prefixes_conflict
-assert SC.from_dict({"ai_chat_prefix":"a","message":{"auto_forward_prefix":"ab"}}).prefixes_conflict
-assert SC.from_dict({"ai_chat_prefix":"#ai","message":{"auto_forward_prefix":"*"}}).prefixes_conflict is False
+# 前缀冲突检测：游戏→群前缀与 AI 前缀互相包含即告警（两个方向都竞争同一条游戏聊天）
+assert SC.from_dict({"ai_chat_prefix":"*","message":{"forward_chat_prefix":"*"}}).prefixes_conflict
+assert SC.from_dict({"ai_chat_prefix":"a","message":{"forward_chat_prefix":"ab"}}).prefixes_conflict
+assert SC.from_dict({"ai_chat_prefix":"#ai","message":{"forward_chat_prefix":"*"}}).prefixes_conflict is False
+# 群→MC 前缀与 AI 前缀方向不同，不构成冲突
+assert SC.from_dict({"ai_chat_prefix":"ai","message":{"auto_forward_prefix":"ai"}}).prefixes_conflict is False
 print("OK  AI 前缀命中走 AI、普通聊天走互通、空前缀不触发、冲突可检测")
+
+# 游戏→群前缀：关闭全量转发后只放行命中前缀的聊天，转发时剥掉前缀
+cfg_fp = SC.from_dict({"server":{"server_name":"FP"},
+    "message":{"target_sessions":["umo:GroupMessage:1"],
+               "forward_chat_to_astrbot":False,"forward_chat_prefix":"*"}})
+_ev_fp_hit = QueQiaoEvent.from_dict(
+    {"event_name":"PlayerChatEvent","message":"*去挖矿","player":{"nickname":"A"}})
+_ev_fp_miss = QueQiaoEvent.from_dict(
+    {"event_name":"PlayerChatEvent","message":"随便聊聊","player":{"nickname":"A"}})
+assert br.should_forward(cfg_fp, _ev_fp_hit) is True
+assert br.should_forward(cfg_fp, _ev_fp_miss) is False, "未命中游戏→群前缀的聊天不得转发"
+assert br.format_event(cfg_fp, _ev_fp_hit, "*去挖矿").endswith("去挖矿"), \
+    "转发时应剥掉游戏→群前缀"
+# 前缀留空 = 关闭全量转发后不转发普通聊天
+cfg_fp_empty = SC.from_dict({"server":{"server_name":"FPE"},
+    "message":{"target_sessions":["umo:GroupMessage:1"],
+               "forward_chat_to_astrbot":False,"forward_chat_prefix":""}})
+assert br.should_forward(cfg_fp_empty, _ev_fp_hit) is False
+# 图片转发不受文本前缀限制：关闭全量转发也放行带图聊天
+cfg_fp_img = SC.from_dict({"server":{"server_name":"FPI"},
+    "message":{"target_sessions":["umo:GroupMessage:1"],
+               "forward_chat_to_astrbot":False,"forward_chat_prefix":"*",
+               "forward_image_from_mc":True}})
+_ev_fp_img = QueQiaoEvent.from_dict({
+    "event_name":"PlayerChatEvent","message":"看 [[CICode,url=https://x/a.png]]",
+    "player":{"nickname":"A"}})
+assert br.should_forward(cfg_fp_img, _ev_fp_img) is True, "图片转发不受文本前缀限制"
+print("OK  游戏→群前缀放行与剥离 / 前缀留空不转发 / 图片转发不受前缀限制")
 
 print("=== 14. 端到端：同一条游戏内消息只走一条路径 ===")
 sent2 = []
@@ -858,6 +888,13 @@ _alias4 = {
     ("cmd", "rcon_password"): "rcon_password",
     # 注：性能监控设置不在 conf schema 中（只在仪表盘内维护），故此处无对应别名
 }
+# 分组键 → 运行时属性名：直接用 models_config 的同一张映射表，避免两处漂移
+from astrbot_plugin_minecraft_queqiao.core.models_config import (
+    CONFIG_GROUP_ALIASES as _GA4,
+)
+for _g4, _leaves4 in _GA4.items():
+    for _leaf4, _attr4 in _leaves4.items():
+        _alias4[(_g4, _leaf4)] = _attr4
 _code_defaults4 = _S2.from_dict({})  # 代码侧默认（含防御式兜底）
 for _path4, _sd4 in _flat_defaults4(_tpl4):
     _field4 = _alias4.get(_path4, _path4[-1])
@@ -4454,7 +4491,8 @@ assert _new43["target_sessions"] == ["default:GroupMessage:2"]
 assert _new43["server"]["server_name"] == "Server2"
 assert _new43["server"]["display_name"] == "新服"
 assert _new43["server"]["ws_url"] == "ws://127.0.0.1:8280/minecraft/ws"
-assert _new43["ai_chat_prefix"] == "ai" and _new43["enable_ai_chat"] is True
+assert _new43["prefix"]["game_to_ai"] == "ai", "新建条目按新分组结构补默认值"
+assert _new43["ai"]["enable_chat"] is True
 assert _new43["server"]["reverse_port"] == 8080, "未指定的连接参数回落 schema 默认值"
 assert _new43["server"]["client_origin"] == "astrbot"
 assert isinstance(_new43["message"], dict) and _new43["message"]["forward_chat_format"]
@@ -4571,6 +4609,7 @@ _plugin44.SOFT_CONFIG_KEYS = (
     "ai_chat_prefix",
     "enable_local_translation",
     "forward_chat_to_astrbot",
+    "forward_chat_prefix",
     "forward_chat_format",
     "forward_join_leave_to_astrbot",
     "forward_death_to_astrbot",
@@ -4655,6 +4694,13 @@ def _apply_soft44(server_name, fields):
 
 _plugin44.apply_soft_config = _apply_soft44
 
+from astrbot_plugin_minecraft_queqiao.core.models_config import (
+    normalize_entry as _norm44,
+)
+def _stored44():
+    """落盘条目按运行时视图读取：配置按分组嵌套，断言仍按扁平键写。"""
+    return _norm44(_plugin44.config["mc_servers"][0])
+
 # 列表：AI 字段取条目顶层（与 server 子对象平级，main 层用整条 entry 构造
 # ServerConfig），并做防御式布尔 / 字符串解析
 _it44 = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
@@ -4683,7 +4729,7 @@ _set_payload44({"index": 0, "enable_ai_chat": False, "ai_chat_prefix": "小助�
 _resp44 = asyncio.run(_wac44.update_config_server())
 assert _resp44["data"]["saved"] is True
 assert _resp44["data"]["reloaded"] is False, "只改 AI 开关不得热重载"
-_entry44 = _plugin44.config["mc_servers"][0]
+_entry44 = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44["enable_ai_chat"] is False and _entry44["ai_chat_prefix"] == "小助手"
 assert "enable_ai_chat" not in _entry44["server"], "AI 字段属条目顶层，不得写进 server 子对象"
 assert _entry44["server"]["server_name"] == "Server", "未传字段不得被改动"
@@ -4698,12 +4744,12 @@ assert _it44c["enable_ai_chat"] is False and _it44c["ai_chat_prefix"] == "小助
 # 前缀置空 = 不触发 AI（合法路径，main 层据此不再走 AI 分支）
 _set_payload44({"index": 0, "ai_chat_prefix": "   "})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["ai_chat_prefix"] == "", "空白前缀需 strip 成空串"
+assert _stored44()["ai_chat_prefix"] == "", "空白前缀需 strip 成空串"
 assert _cfg44_run.ai_chat_prefix == "" and _plugin44.reloads == 0, "运行时前缀同样需 strip"
 # 字符串布尔写回（表单 / WebUI 可能传字符串）
 _set_payload44({"index": 0, "enable_ai_chat": "true"})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["enable_ai_chat"] is True
+assert _stored44()["enable_ai_chat"] is True
 assert _cfg44_run.enable_ai_chat is True and _plugin44.reloads == 0
 
 # ---- 消息转发（conf 的 message 子对象）：面板「功能设置」读写 ----
@@ -4711,6 +4757,7 @@ assert _cfg44_run.enable_ai_chat is True and _plugin44.reloads == 0
 _it44d = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
 _m44 = _it44d["message"]
 assert _m44["forward_chat_to_astrbot"] is True
+assert _m44["forward_chat_prefix"] == "", "面板缺省应回显空前缀"
 assert _m44["forward_chat_format"] == "[{display_name}]{player}: {message}"
 assert _m44["forward_join_leave_to_astrbot"] is False
 assert _m44["forward_death_to_astrbot"] is False
@@ -4724,6 +4771,7 @@ _set_payload44({
     "index": 0,
     "message": {
         "forward_chat_to_astrbot": False,
+        "forward_chat_prefix": "*",
         "forward_chat_format": "<{player}> {message}",
         "forward_join_leave_to_astrbot": True,
         "forward_death_to_astrbot": True,
@@ -4735,13 +4783,14 @@ _set_payload44({
 _resp44d = asyncio.run(_wac44.update_config_server())
 assert _resp44d["data"]["saved"] is True
 assert _resp44d["data"]["reloaded"] is False, "消息转发 / 目标会话属软字段，不得热重载"
-_entry44m = _plugin44.config["mc_servers"][0]
+_entry44m = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44m["message"]["forward_chat_to_astrbot"] is False
 assert _entry44m["message"]["forward_chat_format"] == "<{player}> {message}"
 assert _entry44m["message"]["forward_join_leave_to_astrbot"] is True
 assert _entry44m["message"]["forward_death_to_astrbot"] is True
 assert _entry44m["message"]["forward_achievement_to_astrbot"] is True
 assert _entry44m["message"]["auto_forward_prefix"] == "!"
+assert _entry44m["message"]["forward_chat_prefix"] == "*", "游戏→群前缀应落盘"
 assert _entry44m["target_sessions"] == ["umo:GroupMessage:9", "umo:GroupMessage:2"]
 assert _plugin44.reloads == 0, "转发保存不得热重载（连接与监控保持不动）"
 assert _cfg44_run.forward_chat_to_astrbot is False
@@ -4750,12 +4799,13 @@ assert _cfg44_run.forward_join_leave_to_astrbot is True
 assert _cfg44_run.forward_death_to_astrbot is True
 assert _cfg44_run.forward_achievement_to_astrbot is True
 assert _cfg44_run.auto_forward_prefix == "!"
+assert _cfg44_run.forward_chat_prefix == "*", "游戏→群前缀应就地生效"
 assert _cfg44_run.target_sessions == ["umo:GroupMessage:9", "umo:GroupMessage:2"], \
     "运行时 ServerConfig 必须就地更新，否则要等下次重载才生效"
 # 字符串布尔兼容（表单 / WebUI 可能传字符串）
 _set_payload44({"index": 0, "message": {"forward_chat_to_astrbot": "true"}})
 asyncio.run(_wac44.update_config_server())
-_entry44m2 = _plugin44.config["mc_servers"][0]
+_entry44m2 = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44m2["message"]["forward_chat_to_astrbot"] is True
 assert _entry44m2["message"]["forward_chat_format"] == "<{player}> {message}", \
     "message 子对象漏传键不得清空既有值（合并语义）"
@@ -4764,13 +4814,13 @@ assert _cfg44_run.forward_chat_to_astrbot is True and _plugin44.reloads == 0
 # 本地翻译开关（message 子对象）：与转发开关同属软字段，开 / 关都要落盘
 _set_payload44({"index": 0, "message": {"enable_local_translation": True}})
 asyncio.run(_wac44.update_config_server())
-_entry44n = _plugin44.config["mc_servers"][0]
+_entry44n = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44n["message"]["enable_local_translation"] is True, "本地翻译开启必须落盘"
 assert _cfg44_run.enable_local_translation is True, "运行时 ServerConfig 必须就地更新"
 assert _plugin44.reloads == 0, "本地翻译属软字段，不得热重载"
 _set_payload44({"index": 0, "message": {"enable_local_translation": False}})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["message"]["enable_local_translation"] is False, \
+assert _stored44()["message"]["enable_local_translation"] is False, \
     "本地翻译关闭同样必须落盘（false 不得被过滤）"
 assert _cfg44_run.enable_local_translation is False
 assert _plugin44.reloads == 0
@@ -4793,7 +4843,7 @@ _set_payload44({"index": 0, "notify_on_connect": "true",
 _resp44n = asyncio.run(_wac44.update_config_server())
 assert _resp44n["data"]["saved"] is True
 assert _resp44n["data"]["reloaded"] is False, "连通通知属软字段，不得热重载"
-_entry44n = _plugin44.config["mc_servers"][0]
+_entry44n = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44n["notify_on_connect"] is True
 assert _entry44n["notify_on_connect_format"] == "{display_name} 已启动", \
     "文案需 strip 后落盘"
@@ -4808,7 +4858,7 @@ assert _it44n["notify_on_connect_format"] == "{display_name} 已启动"
 # 关闭同样落盘（false 不得被过滤）
 _set_payload44({"index": 0, "notify_on_connect": False})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["notify_on_connect"] is False
+assert _stored44()["notify_on_connect"] is False
 assert _cfg44_run.notify_on_connect is False and _plugin44.reloads == 0
 
 # 连接失败通知（条目顶层独立开关 + 文案）：同属软字段，开 / 关都落盘且不重载
@@ -4817,7 +4867,7 @@ _set_payload44({"index": 0, "notify_on_connect_fail": True,
 _resp44f = asyncio.run(_wac44.update_config_server())
 assert _resp44f["data"]["saved"] is True
 assert _resp44f["data"]["reloaded"] is False, "连接失败通知属软字段，不得热重载"
-_entry44f = _plugin44.config["mc_servers"][0]
+_entry44f = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44f["notify_on_connect_fail"] is True
 assert _entry44f["notify_on_connect_fail_format"] == "{display_name} 连接失败"
 assert _cfg44_run.notify_on_connect_fail is True
@@ -4832,22 +4882,22 @@ _set_payload44({"index": 0, "connect_fail_notify_delay": "90"})
 _resp44d = asyncio.run(_wac44.update_config_server())
 assert _resp44d["data"]["saved"] is True and _resp44d["data"]["reloaded"] is False, \
     "断连静默期属软字段，不得热重载"
-assert _plugin44.config["mc_servers"][0]["connect_fail_notify_delay"] == 90
+assert _stored44()["connect_fail_notify_delay"] == 90
 assert _cfg44_run.connect_fail_notify_delay == 90, "运行时 ServerConfig 必须就地更新"
 _it44g = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
 assert _it44g["connect_fail_notify_delay"] == 90, _it44g
 # 越界钳制到 0~3600；漏传不清空
 _set_payload44({"index": 0, "connect_fail_notify_delay": 99999})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["connect_fail_notify_delay"] == 3600
+assert _stored44()["connect_fail_notify_delay"] == 3600
 assert _cfg44_run.connect_fail_notify_delay == 3600
 _set_payload44({"index": 0, "connect_fail_notify_delay": -10})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["connect_fail_notify_delay"] == 0
+assert _stored44()["connect_fail_notify_delay"] == 0
 assert _cfg44_run.connect_fail_notify_delay == 0
 _set_payload44({"index": 0, "enable_ai_chat": True})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["connect_fail_notify_delay"] == 0, \
+assert _stored44()["connect_fail_notify_delay"] == 0, \
     "漏传该字段不得清空"
 assert _cfg44_run.connect_fail_notify_delay == 0
 # 状态探测地址（条目顶层字符串）：留空回显空串，保存后落盘 + 就地生效 + 不清空
@@ -4856,13 +4906,13 @@ _set_payload44({"index": 0, "slp_address": " 127.0.0.1:25565 "})
 _resp44s = asyncio.run(_wac44.update_config_server())
 assert _resp44s["data"]["saved"] is True and _resp44s["data"]["reloaded"] is False, \
     "状态探测地址属软字段，不得热重载"
-assert _plugin44.config["mc_servers"][0]["slp_address"] == "127.0.0.1:25565"
+assert _stored44()["slp_address"] == "127.0.0.1:25565"
 assert _cfg44_run.slp_address == "127.0.0.1:25565", "运行时 ServerConfig 必须就地更新"
 _it44s = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
 assert _it44s["slp_address"] == "127.0.0.1:25565", _it44s
 _set_payload44({"index": 0, "enable_ai_chat": True})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["slp_address"] == "127.0.0.1:25565", \
+assert _stored44()["slp_address"] == "127.0.0.1:25565", \
     "漏传该字段不得清空"
 assert _cfg44_run.slp_address == "127.0.0.1:25565"
 assert _plugin44.reloads == 0, "全程不得热重载"
@@ -4886,7 +4936,7 @@ _set_payload44({
 _resp44q = asyncio.run(_wac44.update_config_server())
 assert _resp44q["data"]["saved"] is True
 assert _resp44q["data"]["reloaded"] is False, "免打扰属软字段，不得热重载"
-_entry44q = _plugin44.config["mc_servers"][0]
+_entry44q = _norm44(_plugin44.config["mc_servers"][0])
 assert _entry44q["quiet_hours_enabled"] is True
 assert _entry44q["quiet_hours_start"] == "22:30", "时段需 strip"
 assert _entry44q["quiet_hours_items"] == ["death", "connect_fail"], \
@@ -4900,12 +4950,12 @@ assert _it44q2["quiet_hours_items"] == ["death", "connect_fail"]
 # 时段留空回落默认，避免运行期出现「静默期永不生效」
 _set_payload44({"index": 0, "quiet_hours_start": "", "quiet_hours_end": "  "})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["quiet_hours_start"] == _DQHS44
+assert _stored44()["quiet_hours_start"] == _DQHS44
 assert _cfg44_run.quiet_hours_end == _DQHE44
 # 漏传不覆盖（合并语义）
 _set_payload44({"index": 0, "ai_chat_prefix": "ai"})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["quiet_hours_enabled"] is True, \
+assert _stored44()["quiet_hours_enabled"] is True, \
     "漏传免打扰开关不得清空"
 assert _plugin44.reloads == 0, "免打扰全程不得热重载"
 # 复位，避免影响后续断言
@@ -4936,25 +4986,25 @@ _set_payload44({"index": 0, "terminal_days": 5})
 _resp44t = asyncio.run(_wac44.update_config_server())
 assert _resp44t["data"]["saved"] is True
 assert _resp44t["data"]["reloaded"] is False, "terminal_days 属软字段，不得热重载"
-assert _plugin44.config["mc_servers"][0]["terminal_days"] == 5, "需落盘到条目顶层"
+assert _stored44()["terminal_days"] == 5, "需落盘到条目顶层"
 assert _cfg44_run.terminal_days == 5, "运行时 ServerConfig 必须就地更新"
 # 钳制：0~30 硬边界 + 字符串整数兼容（表单 / WebUI 可能传字符串）
 _set_payload44({"index": 0, "terminal_days": 99})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["terminal_days"] == 30, "超过上限需钳制"
+assert _stored44()["terminal_days"] == 30, "超过上限需钳制"
 assert _cfg44_run.terminal_days == 30 and _plugin44.reloads == 2
 _set_payload44({"index": 0, "terminal_days": -3})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["terminal_days"] == 0, "低于下限需钳制"
+assert _stored44()["terminal_days"] == 0, "低于下限需钳制"
 assert _cfg44_run.terminal_days == 0
 _set_payload44({"index": 0, "terminal_days": "7"})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["terminal_days"] == 7
+assert _stored44()["terminal_days"] == 7
 assert _cfg44_run.terminal_days == 7
 # 漏传不覆盖（合并语义）
 _set_payload44({"index": 0, "ai_chat_prefix": "x"})
 asyncio.run(_wac44.update_config_server())
-assert _plugin44.config["mc_servers"][0]["terminal_days"] == 7, "漏传不得清空既有值"
+assert _stored44()["terminal_days"] == 7, "漏传不得清空既有值"
 # 回读与落盘一致（面板保存后 refreshAll 会重新拉这个接口）
 _it44t = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
 assert _it44t["terminal_days"] == 7
@@ -6616,32 +6666,35 @@ assert _qc51k._last_disconnect_reason == "鹊桥连接已断开", _qc51k._last_d
 _sh51 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
                    .read_text(encoding="utf-8"))
 _items51 = _sh51["mc_servers"]["templates"]["server"]["items"]
-assert _items51["notify_on_connect"]["type"] == "bool"
-assert _items51["notify_on_connect"]["default"] is False
-assert _items51["notify_on_connect_format"]["type"] == "text", \
+_notify51 = _items51["notify"]
+assert _notify51["type"] == "object", "连接通知应独立成一个对象（同类配置放一起）"
+_n51 = _notify51["items"]
+assert _n51["on_connect"]["type"] == "bool"
+assert _n51["on_connect"]["default"] is False
+assert _n51["on_connect_format"]["type"] == "text", \
     "多行文案在 AstrBot 配置页需用 text 类型渲染为多行输入框"
-assert _items51["notify_on_connect_format"]["default"] == _DCN51
-assert "多行" in _items51["notify_on_connect_format"]["hint"]
-assert "{display_name}" in _items51["notify_on_connect_format"]["hint"]
-assert _items51["notify_on_connect_fail"]["type"] == "bool"
-assert _items51["notify_on_connect_fail"]["default"] is False
-assert _items51["notify_on_connect_fail_format"]["type"] == "text", \
+assert _n51["on_connect_format"]["default"] == _DCN51
+assert "多行" in _n51["on_connect_format"]["hint"]
+assert "{display_name}" in _n51["on_connect_format"]["hint"]
+assert _n51["on_connect_fail"]["type"] == "bool"
+assert _n51["on_connect_fail"]["default"] is False
+assert _n51["on_connect_fail_format"]["type"] == "text", \
     "多行文案在 AstrBot 配置页需用 text 类型渲染为多行输入框"
-assert _items51["notify_on_connect_fail_format"]["default"] == _DCNF51
-assert "多行" in _items51["notify_on_connect_fail_format"]["hint"]
-assert "{display_name}" in _items51["notify_on_connect_fail_format"]["hint"]
-assert "notify_on_connect" not in _items51["message"]["items"], \
-    "连通通知应落在模板项顶层，message 子对象内不得重复"
-assert "notify_on_connect_fail" not in _items51["message"]["items"], \
-    "连接失败通知应落在模板项顶层，message 子对象内不得重复"
+assert _n51["on_connect_fail_format"]["default"] == _DCNF51
+assert "多行" in _n51["on_connect_fail_format"]["hint"]
+assert "{display_name}" in _n51["on_connect_fail_format"]["hint"]
 # 断连静默期：整数秒，默认 60，与代码默认一致，hint 说明 0=立即通知
-assert _items51["connect_fail_notify_delay"]["type"] == "int", \
+assert _n51["fail_delay"]["type"] == "int", \
     "AstrBot 配置页只认 int，写成 integer 会被当成文本输入框"
-assert _items51["connect_fail_notify_delay"]["default"] == _DCFND51
-assert "秒" in _items51["connect_fail_notify_delay"]["hint"]
-assert "0" in _items51["connect_fail_notify_delay"]["hint"]
-assert "connect_fail_notify_delay" not in _items51["message"]["items"], \
-    "断连静默期应落在模板项顶层，message 子对象内不得重复"
+assert _n51["fail_delay"]["default"] == _DCFND51
+assert "秒" in _n51["fail_delay"]["hint"]
+assert "0" in _n51["fail_delay"]["hint"]
+# 旧扁平位置不得残留同名键（迁移后只保留分组一处）
+for _stale51 in ("notify_on_connect", "notify_on_connect_format",
+                 "notify_on_connect_fail", "notify_on_connect_fail_format",
+                 "connect_fail_notify_delay", "slp_address"):
+    assert _stale51 not in _items51, f"旧扁平键 {_stale51} 应已迁入 notify 分组"
+    assert _stale51 not in _items51["message"]["items"]
 print("OK  默认关闭 / 模板渲染防异常 / 连接回调逐会话发送 / 失败隔离 / "
       "同一轮故障只通知首次失败 / 断连静默期（期间连回不通知）/ "
       "优雅关闭按断线处理 / 反向替换不误报 / 软更新即时生效 / schema 同步")
@@ -7066,25 +7119,30 @@ _schema58 = json.loads(
     pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8")
 )
 _items58 = _schema58["mc_servers"]["templates"]["server"]["items"]
+_qh58 = _items58["quiet_hours"]
+assert _qh58["type"] == "object", "免打扰应独立成一个对象（同类配置放一起）"
+_qh_items58 = _qh58["items"]
 for _k58, _t58 in (
-    ("quiet_hours_enabled", "bool"),
-    ("quiet_hours_start", "string"),
-    ("quiet_hours_end", "string"),
-    ("quiet_hours_items", "list"),
+    ("enabled", "bool"),
+    ("start", "string"),
+    ("end", "string"),
+    ("items", "list"),
 ):
-    assert _k58 in _items58, f"schema 缺少 {_k58}"
-    assert _items58[_k58]["type"] == _t58, f"{_k58} 类型错误"
-    assert _items58[_k58]["default"] == getattr(
-        ServerConfig.from_dict({}), _k58
-    ), f"{_k58} 默认值与代码不一致"
-    assert _items58[_k58]["hint"].strip(), f"{_k58} 缺少 hint"
-assert "quiet_hours_enabled" not in _items58["message"]["items"], \
-    "免打扰属条目顶层，不得落在 message 子对象"
-assert "23:00" in _items58["quiet_hours_start"]["hint"]
-assert _items58["quiet_hours_items"]["default"] == list(_DQHI58)
+    assert _k58 in _qh_items58, f"schema 缺少 quiet_hours.{_k58}"
+    assert _qh_items58[_k58]["type"] == _t58, f"quiet_hours.{_k58} 类型错误"
+    assert _qh_items58[_k58]["default"] == getattr(
+        ServerConfig.from_dict({}), "quiet_hours_" + _k58
+    ), f"quiet_hours.{_k58} 默认值与代码不一致"
+    assert _qh_items58[_k58]["hint"].strip(), f"quiet_hours.{_k58} 缺少 hint"
+for _stale58 in ("quiet_hours_enabled", "quiet_hours_start",
+                 "quiet_hours_end", "quiet_hours_items"):
+    assert _stale58 not in _items58, f"旧扁平键 {_stale58} 应已迁入 quiet_hours 分组"
+    assert _stale58 not in _items58["message"]["items"]
+assert "23:00" in _qh_items58["start"]["hint"]
+assert _qh_items58["items"]["default"] == list(_DQHI58)
 # AstrBot 插件配置页据 render_type=checkbox + options/labels 渲染多选框，
 # 三者必须与 QUIET_HOURS_ITEMS 顺序一一对应，否则前端会串位
-_qitems58 = _items58["quiet_hours_items"]
+_qitems58 = _qh_items58["items"]
 assert _qitems58.get("render_type") == "checkbox", _qitems58.get("render_type")
 assert _qitems58.get("options") == list(_QIK58), _qitems58.get("options")
 assert isinstance(_qitems58.get("labels"), list) and len(_qitems58["labels"]) == len(
@@ -7249,11 +7307,12 @@ _schema59 = json.loads(
     pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8")
 )
 _items59 = _schema59["mc_servers"]["templates"]["server"]["items"]
-assert "slp_address" in _items59, "schema 缺少 slp_address"
-assert _items59["slp_address"]["type"] == "string"
-assert _items59["slp_address"]["default"] == ServerConfig.from_dict({}).slp_address == ""
-assert "25565" in _items59["slp_address"]["hint"]
-assert "slp_address" not in _items59["message"]["items"], "应属条目顶层"
+_slp59 = _items59["notify"]["items"]["slp_address"]
+assert _slp59["type"] == "string"
+assert _slp59["default"] == ServerConfig.from_dict({}).slp_address == ""
+assert "25565" in _slp59["hint"]
+assert "slp_address" not in _items59, "应已迁入 notify 分组"
+assert "slp_address" not in _items59["message"]["items"]
 assert ServerConfig.from_dict({"slp_address": " 1.2.3.4:25566 "}).slp_address == (
     "1.2.3.4:25566"
 )

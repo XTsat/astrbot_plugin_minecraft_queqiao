@@ -95,118 +95,50 @@
               }
             }
           },
-          "enable_ai_chat": {
-            "type": "bool",
-            "description": "启用 AI 对话功能",
-            "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
-            "default": true
+          "ai": {
+            "type": "object",
+            "description": "AI 对话",
+            "hint": "游戏内聊天命中 AI 触发前缀时交给大模型回复（回复私聊给玩家）",
+            "items": {
+              "enable_chat": {
+                "type": "bool",
+                "description": "启用 AI 对话功能",
+                "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
+                "default": true
+              },
+              "persona_id": {
+                "type": "string",
+                "description": "AI 对话人格 ID",
+                "hint": "可选，选择 AstrBot 中已有的人格，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
+                "default": "",
+                "render_type": "persona_select"
+              }
+            }
           },
-          "ai_persona_id": {
-            "type": "string",
-            "description": "AI 对话人格 ID",
-            "hint": "可选，选择 AstrBot 中已有的人格，游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响；留空表示使用该会话的默认人格",
-            "default": "",
-            "render_type": "persona_select"
-          },
-          "ai_chat_prefix": {
-            "type": "string",
-            "description": "AI 对话触发前缀",
-            "hint": "游戏内聊天以此前缀开头时触发 AI（例如填写 ai 则发送『ai 你好』）。命中该前缀的消息只走 AI，不再转发到群。留空表示不启用 AI 触发，普通聊天不受影响",
-            "default": "ai"
-          },
-          "terminal_days": {
-            "type": "int",
-            "description": "互通终端加载最近几天的日志分片",
-            "hint": "互通终端展示最近几天的日志（0~30，0=全部保留分片，默认 2：今天+昨天）。每台服务器独立",
-            "default": 2
-          },
-          "notify_on_connect": {
-            "type": "bool",
-            "description": "服务器连通通知",
-            "hint": "连接建立时向「目标会话」发送一条「服务器已启动」通知。断线重连、插件热重载后重新连上也会再发一次；需先填写目标会话，未填写则不发送。默认关闭",
-            "default": false
-          },
-          "notify_on_connect_format": {
-            "type": "text",
-            "description": "连通通知格式",
-            "hint": "服务器连通通知的文案（多行输入），支持 {display_name}（服务器显示名称，留空时用显示名称默认值）与 {server_name}（服务器名称）两个占位符。留空则用默认文案 [{display_name}] 🟢 服务器已启动",
-            "default": "[{display_name}] 🟢 服务器已启动"
-          },
-          "notify_on_connect_fail": {
-            "type": "bool",
-            "description": "连接失败通知",
-            "hint": "初次连不上服务器、以及已连接后断线时，向「目标会话」发送一条「服务器连接失败」通知。断线需超过「断连静默期」仍未恢复才发送，期间连回不通知；同一轮故障只发第一条。需先填写目标会话，默认关闭",
-            "default": false
-          },
-          "notify_on_connect_fail_format": {
-            "type": "text",
-            "description": "连接失败通知格式",
-            "hint": "连接失败通知的文案（多行输入），支持 {display_name}（服务器显示名称）与 {server_name}（服务器名称）两个占位符。留空则用默认文案 [{display_name}] 🔴 服务器连接失败",
-            "default": "[{display_name}] 🔴 服务器连接失败"
-          },
-          "connect_fail_notify_delay": {
-            "type": "int",
-            "description": "断连静默期（秒）",
-            "hint": "断线超过该秒数仍未恢复才发「连接失败」通知，期间连回则完全不通知。0 到 3600，0 = 断线立即通知，默认 60",
-            "default": 60
-          },
-          "slp_address": {
-            "type": "string",
-            "description": "服务器状态探测地址",
-            "hint": "游戏端口地址，如 127.0.0.1:25565（可省略端口，默认 25565）。开启连通通知后，断线期间会探测该地址：服务器仍在响应说明只是连接抖动，不发「服务器已启动」；连不上才认为是真重启。留空则按断线时长判断（超过 30 秒才发通知）",
-            "default": ""
-          },
-          "quiet_hours_enabled": {
-            "type": "bool",
-            "description": "启用免打扰",
-            "hint": "开启后，时段内只把勾选的消息类型静音（不发到目标会话）。默认关闭",
-            "default": false
-          },
-          "quiet_hours_start": {
-            "type": "string",
-            "description": "免打扰开始时间",
-            "hint": "24 小时制 HH:MM（AstrBot 本地时间），如 23:00；与结束时间相同视为未配置",
-            "default": "23:00"
-          },
-          "quiet_hours_end": {
-            "type": "string",
-            "description": "免打扰结束时间",
-            "hint": "24 小时制 HH:MM（AstrBot 本地时间）；早于开始时间表示跨零点",
-            "default": "08:00"
-          },
-          "quiet_hours_items": {
-            "type": "list",
-            "description": "免打扰项目",
-            "hint": "时段内静音哪些消息类型，勾选即生效；默认勾选死亡、成就、连通、连接失败四类通知",
-            "options": [
-              "chat",
-              "join_leave",
-              "death",
-              "achievement",
-              "connect",
-              "connect_fail"
-            ],
-            "labels": [
-              "游戏聊天",
-              "玩家进出",
-              "死亡消息",
-              "成就消息",
-              "连通通知",
-              "连接失败通知"
-            ],
-            "render_type": "checkbox",
-            "default": [
-              "death",
-              "achievement",
-              "connect",
-              "connect_fail"
-            ]
-          },
-          "text2image": {
-            "type": "bool",
-            "description": "将服务器信息渲染为图片输出",
-            "hint": "渲染失败会自动回退为文本发送",
-            "default": true
+          "prefix": {
+            "type": "object",
+            "description": "触发前缀",
+            "hint": "三个方向的前缀互不干扰；一条游戏内消息只会命中其中一个",
+            "items": {
+              "group_to_game": {
+                "type": "string",
+                "description": "群 → 游戏 触发前缀",
+                "hint": "群消息以此开头才转发进游戏；留空 = 全部转发",
+                "default": ""
+              },
+              "game_to_group": {
+                "type": "string",
+                "description": "游戏 → 群 触发前缀",
+                "hint": "关闭「全量转发游戏聊天」后，游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 不转发普通聊天；图片转发不受此前缀限制",
+                "default": ""
+              },
+              "game_to_ai": {
+                "type": "string",
+                "description": "游戏 → AI 触发前缀",
+                "hint": "游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 不触发",
+                "default": "ai"
+              }
+            }
           },
           "message": {
             "description": "消息转发配置",
@@ -214,8 +146,8 @@
             "items": {
               "forward_chat_to_astrbot": {
                 "type": "bool",
-                "description": "转发聊天消息到指定会话",
-                "hint": "将 Minecraft 玩家聊天消息转发到指定的外部会话",
+                "description": "全量转发游戏聊天到指定会话",
+                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后只有以「游戏→群触发前缀」开头的聊天才转发。已开启的图片转发不受该前缀限制",
                 "default": true
               },
               "forward_chat_format": {
@@ -248,16 +180,10 @@
                 "hint": "内置翻译库，专给死亡/成就转发翻译：无需服务端开翻译",
                 "default": false
               },
-              "auto_forward_prefix": {
-                "type": "string",
-                "description": "外部消息转发到MC的前缀",
-                "hint": "外部会话中以此前缀开头的消息才被转发到MC服务器（例如: *）；默认留空 = 全部转发（仅对已绑定目标会话的会话生效）。请勿与上面的 AI 前缀相互包含，否则同一条消息的归属会产生歧义",
-                "default": ""
-              },
               "forward_bot_self_messages": {
                 "type": "bool",
                 "description": "转发机器人自己的消息，不剥离唤醒词",
-                "hint": "默认关闭，保持之前版本的行为；开启后机器人唤醒消息按处理前原文转发（包括被 OneBot 从文本中省略的 @机器人），单独 @机器人也会转发；并一并转发消息管道回复和本插件监听到的机器人自身群消息。图片复用「转发图片到游戏内」及图床配置，上传/转发失败或未开启时才用 [图片] 占位；表情以 [表情:id] 记录；同时抑制插件自身发往群内的消息防止刷屏",
+                "hint": "默认关闭。开启后机器人唤醒消息按原文转发（含被 OneBot 省略的 @机器人），并转发消息管道回复与机器人自身的群消息；图片与表情按转发配置处理",
                 "default": false
               },
               "broadcast_format": {
@@ -300,7 +226,7 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话消息及已开启机器人自身转发时，消息管道回复或监听到的机器人自身群消息图片，均可转发到 MC 游戏内。需要游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本。图片以广播消息携带 URL 的形式发送，玩家客户端自行加载，需保证图片 URL 对玩家客户端可达；无公开 URL 时可启用根级图床配置",
+                "hint": "外部会话与机器人自身消息中的图片转发到 MC 游戏内。需游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本；图片 URL 需对玩家客户端可达，无公开 URL 时可启用根级图床配置",
                 "default": false
               },
               "chatimage_name": {
@@ -316,6 +242,114 @@
                 "default": false
               }
             }
+          },
+          "notify": {
+            "type": "object",
+            "description": "连接通知",
+            "hint": "服务器连通 / 连接失败时向目标会话发送通知",
+            "items": {
+              "on_connect": {
+                "type": "bool",
+                "description": "服务器连通通知",
+                "hint": "连接建立时向「目标会话」发送一条「服务器已启动」通知。断线重连、插件热重载后重新连上也会再发一次；需先填写目标会话，未填写则不发送。默认关闭",
+                "default": false
+              },
+              "on_connect_format": {
+                "type": "text",
+                "description": "连通通知格式",
+                "hint": "服务器连通通知的文案（多行输入），支持 {display_name}（服务器显示名称，留空时用显示名称默认值）与 {server_name}（服务器名称）两个占位符。留空则用默认文案 [{display_name}] 🟢 服务器已启动",
+                "default": "[{display_name}] 🟢 服务器已启动"
+              },
+              "on_connect_fail": {
+                "type": "bool",
+                "description": "连接失败通知",
+                "hint": "初次连不上服务器、以及已连接后断线时，向「目标会话」发送一条「服务器连接失败」通知。断线需超过「断连静默期」仍未恢复才发送，期间连回不通知；同一轮故障只发第一条。需先填写目标会话，默认关闭",
+                "default": false
+              },
+              "on_connect_fail_format": {
+                "type": "text",
+                "description": "连接失败通知格式",
+                "hint": "连接失败通知的文案（多行输入），支持 {display_name}（服务器显示名称）与 {server_name}（服务器名称）两个占位符。留空则用默认文案 [{display_name}] 🔴 服务器连接失败",
+                "default": "[{display_name}] 🔴 服务器连接失败"
+              },
+              "fail_delay": {
+                "type": "int",
+                "description": "断连静默期（秒）",
+                "hint": "断线超过该秒数仍未恢复才发「连接失败」通知，期间连回则完全不通知。0 到 3600，0 = 断线立即通知，默认 60",
+                "default": 60
+              },
+              "slp_address": {
+                "type": "string",
+                "description": "服务器状态探测地址",
+                "hint": "游戏端口地址，如 127.0.0.1:25565（可省略端口，默认 25565）。开启连通通知后，断线期间会探测该地址：服务器仍在响应说明只是连接抖动，不发「服务器已启动」；连不上才认为是真重启。留空则按断线时长判断（超过 30 秒才发通知）",
+                "default": ""
+              }
+            }
+          },
+          "quiet_hours": {
+            "type": "object",
+            "description": "免打扰时段",
+            "hint": "时段内只静音勾选的消息类型，事件本身照常记录",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用免打扰",
+                "hint": "开启后，时段内只把勾选的消息类型静音（不发到目标会话）。默认关闭",
+                "default": false
+              },
+              "start": {
+                "type": "string",
+                "description": "免打扰开始时间",
+                "hint": "24 小时制 HH:MM（AstrBot 本地时间），如 23:00；与结束时间相同视为未配置",
+                "default": "23:00"
+              },
+              "end": {
+                "type": "string",
+                "description": "免打扰结束时间",
+                "hint": "24 小时制 HH:MM（AstrBot 本地时间）；早于开始时间表示跨零点",
+                "default": "08:00"
+              },
+              "items": {
+                "type": "list",
+                "description": "免打扰项目",
+                "hint": "时段内静音哪些消息类型，勾选即生效；默认勾选死亡、成就、连通、连接失败四类通知",
+                "options": [
+                  "chat",
+                  "join_leave",
+                  "death",
+                  "achievement",
+                  "connect",
+                  "connect_fail"
+                ],
+                "labels": [
+                  "游戏聊天",
+                  "玩家进出",
+                  "死亡消息",
+                  "成就消息",
+                  "连通通知",
+                  "连接失败通知"
+                ],
+                "render_type": "checkbox",
+                "default": [
+                  "death",
+                  "achievement",
+                  "connect",
+                  "connect_fail"
+                ]
+              }
+            }
+          },
+          "terminal_days": {
+            "type": "int",
+            "description": "互通终端加载最近几天的日志分片",
+            "hint": "互通终端展示最近几天的日志（0~30，0=全部保留分片，默认 2：今天+昨天）。每台服务器独立",
+            "default": 2
+          },
+          "text2image": {
+            "type": "bool",
+            "description": "将服务器信息渲染为图片输出",
+            "hint": "渲染失败会自动回退为文本发送",
+            "default": true
           },
           "cmd": {
             "description": "远程指令配置",

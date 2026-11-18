@@ -125,13 +125,14 @@
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `forward_chat_to_astrbot` | bool | `true` | 转发玩家聊天到指定会话 |
+| `forward_chat_to_astrbot` | bool | `true` | 全量转发游戏聊天到指定会话；关闭后只有命中 `forward_chat_prefix` 的聊天才转发，图片转发不受前缀限制 |
+| `forward_chat_prefix` | string | 空 | 游戏→群触发前缀：关闭全量转发后，游戏聊天以此开头才转发到群，转发时去掉前缀 |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | 聊天消息格式，支持 `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息（自动附带服务器显示名称，多服同群可区分来源） |
 | `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
 | `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
 | `auto_forward_prefix` | string | 空 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
-| `forward_bot_self_messages` | bool | `false` | **转发机器人自己的消息，不剥离唤醒词**：开启后，唤醒消息按处理前原文转发（包括 OneBot 从文本中省略的 `@机器人`，单独 `@机器人` 也会转发）；同时转发消息管道回复和本插件监听到的机器人自身群消息（存在其他 aiocqhttp 适配器时按分段旁路转发，整条回复不再重复补发；仅有单个 aiocqhttp 适配器、无法旁路监听时，回退为转发整条回复），并使用可用的机器人群昵称；图片复用 `forward_image_to_mc` 和图床配置；只有未开启图片转发或图床无法提供可访问 URL 时才降级为 `[图片]` 占位，表情以 `[表情:id]` 记录；无需关闭 `ignore_bot_self_message`，也不会再次进入指令处理；仍受 `auto_forward_prefix` 过滤；本插件发群消息仍会回声抑制 |
+| `forward_bot_self_messages` | bool | `false` | 转发机器人自己的消息，不剥离唤醒词：唤醒消息按原文转发（含被 OneBot 省略的 `@机器人`），并转发机器人自身的群消息；图片复用 `forward_image_to_mc`，无可用图片 URL 时降级为 `[图片]`，表情记为 `[表情:id]` |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，支持 `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | 平台名称映射：`原始平台名=显示名`，如 `aiocqhttp=QQ` |
 | `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
@@ -298,14 +299,15 @@
 | `enable_ai_chat` | bool | `true` | 启用游戏内 AI 对话（总开关） |
 | `ai_chat_prefix` | string | `ai` | 触发前缀：游戏内以 `ai 你好` 发言即触发 AI，回复私聊给玩家；留空 = 不触发 |
 
-两个前缀作用方向不同、互相独立，一条消息只会命中其中一个：
+三个前缀作用方向不同、互相独立，一条游戏内消息只会命中其中一个。配置位于模板项 `prefix` 对象下：
 
-| 前缀 | 方向 | 作用 |
+| 配置项 | 方向 | 作用 |
 |------|------|------|
-| `auto_forward_prefix` | 群 → MC | 群消息以此开头才转发到游戏 |
-| `ai_chat_prefix` | 游戏内 → AI | 游戏内聊天以此开头才触发 AI，不再转发到群 |
+| `prefix.group_to_game` | 群 → 游戏 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| `prefix.game_to_group` | 游戏 → 群 | 关闭全量转发后，游戏聊天以此开头才转发到群（转发时去掉前缀）；留空 = 不转发普通聊天；图片转发不受此前缀限制 |
+| `prefix.game_to_ai` | 游戏 → AI | 游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 不触发 |
 
-> 前缀匹配做词边界判断：以字母/数字结尾的前缀要求后跟空格或直接结束，`ai` 不会误伤 `aim`、`airport`；字母不区分大小写。两个前缀**不要相互包含**，否则同一条消息的归属会产生歧义（启动时会告警）。`ai_chat_prefix` 留空不会导致所有聊天触发 AI。
+> 前缀匹配做词边界判断：以字母/数字结尾的前缀要求后跟空格或直接结束，`ai` 不会误伤 `aim`、`airport`；字母不区分大小写。`game_to_group` 与 `game_to_ai` **不要相互包含**，否则同一条游戏聊天的归属会产生歧义（启动时会告警）。`game_to_ai` 留空不会导致所有聊天触发 AI。
 
 </details>
 

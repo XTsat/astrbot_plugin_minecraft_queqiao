@@ -415,7 +415,18 @@ class MessageBridge:
     def should_forward(self, config: ServerConfig, event: QueQiaoEvent) -> bool:
         """依据事件类型与配置判断是否需要转发。"""
         if event.is_chat:
-            return config.forward_chat_to_astrbot
+            message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            # 图片转发不受文本前缀约束：否则关闭全量转发后带图消息会被整条丢弃
+            image_enabled = config.forward_image_from_mc and bool(
+                extract_image_refs(message)
+            )
+            return (
+                config.forward_chat_to_astrbot
+                or prefix_matches(config.forward_chat_prefix, message)
+                or image_enabled
+            )
         if event.is_join or event.is_quit:
             return config.forward_join_leave_to_astrbot
         if event.is_death:
@@ -424,13 +435,25 @@ class MessageBridge:
             return config.forward_achievement_to_astrbot
         return False
 
-    def format_event(self, config: ServerConfig, event: QueQiaoEvent) -> str:
-        """把事件渲染为转发文本。"""
+    def format_event(
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        message_override: str | None = None,
+    ) -> str:
+        """把事件渲染为转发文本。
+
+        `message_override` 用于聊天消息：调用方已按前缀剥好要转发的内容，
+        传 None 表示按原始聊天文本渲染。
+        """
         player = event.player_name or "未知"
 
         if event.is_chat:
-            message = component_to_text(event.raw_message) or component_to_text(
-                event.message
+            message = (
+                message_override
+                if message_override is not None
+                else component_to_text(event.raw_message)
+                or component_to_text(event.message)
             )
             return self._format_chat(config, player, message)
 
@@ -480,16 +503,25 @@ class MessageBridge:
         )
 
     async def _resolve_forward_images(
-        self, config: ServerConfig, event: QueQiaoEvent, content: str
+        self,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        content: str,
+        message_override: str | None = None,
     ) -> tuple[str, list]:
         """开启 `forward_image_from_mc` 时，把聊天里的图片引用转为图片组件。
 
         返回 `(text, images)`：text 为剥离「已成功转图」引用后的格式化文本
         （下载失败的引用保留原文，避免信息静默丢失），images 为下载成功的
         Image 组件列表。
+
+        `message_override` 与 `format_event` 同义，保证重排后的文本仍带着
+        调用方已剥好的前缀语义。
         """
-        message = component_to_text(event.raw_message) or component_to_text(
-            event.message
+        message = (
+            message_override
+            if message_override is not None
+            else component_to_text(event.raw_message) or component_to_text(event.message)
         )
         refs = extract_image_refs(message)
         if not refs:
@@ -542,11 +574,24 @@ class MessageBridge:
             logger.debug(f"[{PLUGIN_NAME}][{server_name}] 抑制回声消息: {event.message}")
             return False
 
-        content = self.format_event(config, event)
+        # 关闭全量转发后，只有命中「游戏→群前缀」的聊天才转发；命中时剥掉前缀
+        message_override: str | None = None
+        if event.is_chat:
+            chat_message = component_to_text(event.raw_message) or component_to_text(
+                event.message
+            )
+            message_override = (
+                strip_prefix(config.forward_chat_prefix, chat_message)
+                if prefix_matches(config.forward_chat_prefix, chat_message)
+                else chat_message
+            )
+        content = self.format_event(config, event, message_override)
         images: list = []
 
         if event.is_chat and config.forward_image_from_mc:
-            content, images = await self._resolve_forward_images(config, event, content)
+            content, images = await self._resolve_forward_images(
+                config, event, content, message_override
+            )
 
         if not content and not images:
             return False

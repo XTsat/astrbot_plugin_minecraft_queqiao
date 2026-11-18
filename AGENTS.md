@@ -317,7 +317,7 @@ class MinecraftQueQiaoPlugin(Star):
 - 配置持久化：`self.config[...]` 读写 → `self.config.save_config()` 保存
 - 服务器字段解析集中在 `ServerConfig.from_dict()`，缺字段回落到 `_conf_schema.json` 的默认值
 - 读取时防御式转换：布尔/整数用 `_to_bool` / `_to_int`，非法输入回落默认值
-- 两个前缀互相包含时 `ServerConfig.prefixes_conflict` 为真，启动时告警
+- `forward_chat_prefix`（游戏 → 群）与 `ai_chat_prefix`（游戏 → AI）互相包含时 `ServerConfig.prefixes_conflict` 为真，启动时告警：两者竞争同一条游戏聊天
 
 ### 5.4 运行时数据与持久化
 
@@ -466,7 +466,7 @@ async def cmd_sub(
 - 展示类（broadcast / title / actionbar）超时在封装层按已投递处理返回 True
 - 仅「确定失败」（未连接 / 鹊桥明确报错）才允许走兜底通道
 
-### 6.6 AI 触发与两个前缀（不可混淆）
+### 6.6 AI 触发与三个前缀（不可混淆）
 
 游戏内 AI **仅由聊天前缀触发**（`PlayerChatEvent` + `ai_chat_prefix`，默认 `ai`），全端可用。
 
@@ -482,7 +482,8 @@ async def cmd_sub(
 
 | 配置项 | 方向 | 默认值 | 语义 |
 |---|---|---|---|
-| `auto_forward_prefix` | 群 → MC | 留空 | 群消息以此开头才转发到游戏；留空 = 全部转发（仅对已绑定 `target_sessions` 的群生效） |
+| `auto_forward_prefix` | 群 → MC | 留空 | 群消息以此开头才转发到游戏；留空 = 全部转发（仅对已绑定 `target_sessions` 的群生效）；已开启的图片转发不受此前缀限制 |
+| `forward_chat_prefix` | 游戏内 → 群 | 留空 | 关闭全量转发（`forward_chat_to_astrbot`）后，游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 不转发普通聊天；图片转发不受此前缀限制 |
 | `ai_chat_prefix` | 游戏内 → AI | `ai` | 游戏内聊天以此开头才触发 AI；留空 = 不触发 |
 
 不变式（改事件编排时必须保持）：

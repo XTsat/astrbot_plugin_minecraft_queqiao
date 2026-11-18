@@ -3425,6 +3425,7 @@ class DashboardApp {
       imageToMc: document.getElementById('st-fwd-image-to-mc'),
       imageFromMc: document.getElementById('st-fwd-image-from-mc'),
       prefix: document.getElementById('st-fwd-prefix'),
+      chatPrefix: document.getElementById('st-fwd-chat-prefix'),
       sessions: document.getElementById('st-fwd-sessions'),
     };
     const fwdFocused = Object.values(fwdBoxes)
@@ -3450,6 +3451,11 @@ class DashboardApp {
       if (fwdBoxes.prefix) {
         fwdBoxes.prefix.value = typeof msg.auto_forward_prefix === 'string'
           ? msg.auto_forward_prefix
+          : '';
+      }
+      if (fwdBoxes.chatPrefix) {
+        fwdBoxes.chatPrefix.value = typeof msg.forward_chat_prefix === 'string'
+          ? msg.forward_chat_prefix
           : '';
       }
       if (fwdBoxes.sessions) {
@@ -3490,13 +3496,14 @@ class DashboardApp {
       : null;
     // 前缀冲突预检：AI 前缀与自动转发前缀互相包含时，同一条消息会命中两条
     // 路径（启动时后端也会告警），这里提前拦截
+    const fwdPrefix = document.getElementById('st-fwd-prefix');
     const fwdMsg = (confItem && confItem.message) || {};
-    const forwardPrefix = (typeof fwdMsg.auto_forward_prefix === 'string' && fwdMsg.auto_forward_prefix)
-      || (confItem && confItem.auto_forward_prefix)
-      || (server && server.auto_forward_prefix) || '';
-    if (server && aiEnabled && aiPrefix && forwardPrefix &&
-        (aiPrefix.startsWith(forwardPrefix) || forwardPrefix.startsWith(aiPrefix))) {
-      this.showToast('AI 触发前缀与自动转发前缀互相包含，请改成互不包含的前缀', 'error');
+    const fwdPrefixVal = (fwdPrefix && fwdPrefix.value.trim())
+      || (typeof fwdMsg.auto_forward_prefix === 'string' && fwdMsg.auto_forward_prefix)
+      || '';
+    if (server && aiEnabled && aiPrefix && fwdPrefixVal &&
+        (aiPrefix.startsWith(fwdPrefixVal) || fwdPrefixVal.startsWith(aiPrefix))) {
+      this.showToast('游戏→AI 与 群→游戏 触发前缀互相包含，请改成互不包含的前缀', 'error');
       return;
     }
     if (saveBtn) saveBtn.disabled = true;
@@ -3508,7 +3515,16 @@ class DashboardApp {
       let reloaded = false;
       let daysChanged = false;
       {
-        const payload = { enable_ai_chat: aiEnabled, ai_chat_prefix: aiPrefix };
+        const fwdPrefixBox = document.getElementById('st-fwd-prefix');
+        const chatPrefixBox = document.getElementById('st-fwd-chat-prefix');
+        const payload = {
+          enable_ai_chat: aiEnabled,
+          prefix: {
+            group_to_game: fwdPrefixBox ? fwdPrefixBox.value.trim() : '',
+            game_to_group: chatPrefixBox ? chatPrefixBox.value.trim() : '',
+            game_to_ai: aiPrefix,
+          },
+        };
         // 互通终端加载天数（单服生效，0~30；后端会再钳制一次）
         daysChanged = daysVal !== this.terminalDaysFor(server.server_name);
         payload.terminal_days = daysVal;
@@ -3559,7 +3575,6 @@ class DashboardApp {
         const fwdImage = document.getElementById('st-fwd-image');
         const fwdImageToMc = document.getElementById('st-fwd-image-to-mc');
         const fwdImageFromMc = document.getElementById('st-fwd-image-from-mc');
-        const fwdPrefix = document.getElementById('st-fwd-prefix');
         const fwdSessions = document.getElementById('st-fwd-sessions');
         if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdImage && fwdPrefix && fwdSessions) {
           msg.forward_chat_to_astrbot = !!fwdChat.checked;
@@ -3573,7 +3588,6 @@ class DashboardApp {
           // 图片转发：按两个方向的实际勾选分别保存（总开关只做快捷全开/全关联动）
           msg.forward_image_to_mc = !!(fwdImageToMc && fwdImageToMc.checked);
           msg.forward_image_from_mc = !!(fwdImageFromMc && fwdImageFromMc.checked);
-          msg.auto_forward_prefix = fwdPrefix.value.trim();
           payload.message = msg;
           // 目标会话：每行一个 UMO（同服务器表单解析规则）
           payload.target_sessions = fwdSessions.value

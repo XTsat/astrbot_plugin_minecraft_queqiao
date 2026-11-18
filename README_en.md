@@ -120,13 +120,14 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `forward_chat_to_astrbot` | bool | `true` | Forward player chat to target sessions |
+| `forward_chat_to_astrbot` | bool | `true` | Relay all in-game chat to target sessions; when off, only chat matching `forward_chat_prefix` is relayed, image forwarding ignores the text prefix |
+| `forward_chat_prefix` | string | empty | Game → group trigger prefix; with full forwarding off, only chat starting with it is relayed (prefix removed) |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | Chat format; supports `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages (server display name appended, so the source is clear when several servers share a group) |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
 | `forward_achievement_to_astrbot` | bool | `false` | Forward achievement messages (unsupported on Vanilla/Velocity) |
 | `auto_forward_prefix` | string | empty | Group messages starting with it are relayed into the game; empty relays all |
-| `forward_bot_self_messages` | bool | `false` | **Relay the bot's own messages without stripping wake prefixes**: wake messages use their original pre-processing text, including the self-mention omitted from OneBot's text (a standalone `@bot` is relayed too); bot replies produced by AstrBot's message pipeline and bot self-messages observed by this plugin are relayed with the available group nickname. Images reuse `forward_image_to_mc` and the image-host settings; `[图片]` is only used when image forwarding is disabled or no reachable URL can be obtained. Faces are recorded as `[表情:id]`. No need to disable `ignore_bot_self_message`, and replies are not fed back into command handling. `auto_forward_prefix` still applies; this plugin's own group messages remain echo-suppressed |
+| `forward_bot_self_messages` | bool | `false` | Relay the bot's own messages without stripping wake prefixes: wake messages use their original text (including the `@bot` OneBot omits), and bot self-messages in groups are relayed too. Images reuse `forward_image_to_mc`; `[图片]` is used when no reachable image URL exists, faces are recorded as `[表情:id]` |
 | `broadcast_format` | string | `[{platform}]{sender}: {message}` | Format used when relaying into the game; supports `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
 | `platform_names` | list | `["aiocqhttp=QQ"]` | Platform name mapping: `raw=display`, e.g. `aiocqhttp=QQ` |
 | `broadcast_color` | string | `white` | Message color; MC color name or `#RRGGBB` |
@@ -295,14 +296,15 @@ Example: `display_name` = `生存服`, format `[{display_name}] <{player}> {mess
 | `enable_ai_chat` | bool | `true` | Master switch for in-game AI chat |
 | `ai_chat_prefix` | string | `ai` | Trigger prefix: in-game chat like `ai hello` goes to the AI, replied privately; empty disables the trigger |
 
-The two prefixes act in different directions and are configured independently; a given message matches only one of them:
+The three prefixes act in different directions and are configured independently; a given in-game message matches only one of them:
 
 | Prefix | Direction | Effect |
 |--------|-----------|--------|
-| `auto_forward_prefix` | group → MC | Group messages starting with it are relayed into the game |
-| `ai_chat_prefix` | in-game → AI | In-game chat starting with it triggers the AI and is **not** relayed to the group |
+| `prefix.group_to_game` | group → game | Group messages starting with it are relayed into the game; empty = all are relayed |
+| `prefix.game_to_group` | game → group | With full forwarding off, only in-game chat starting with it is relayed to the group (prefix removed); empty = ordinary chat is not relayed; image forwarding ignores this prefix |
+| `prefix.game_to_ai` | game → AI | In-game chat starting with it triggers the AI and is **not** relayed to the group; empty = not triggered |
 
-> Matching does word-boundary checks: a prefix ending in a letter/digit must be followed by a space or the end of the message, so `ai` will not misfire on `aim`/`airport`; letter matching is case-insensitive. Do not let the two prefixes contain one another, or a message's routing becomes ambiguous (a startup warning is logged). Leaving `ai_chat_prefix` empty does **not** make every message trigger the AI.
+> Matching does word-boundary checks: a prefix ending in a letter/digit must be followed by a space or the end of the message, so `ai` will not misfire on `aim`/`airport`; letter matching is case-insensitive. Do not let `forward_chat_prefix` and `ai_chat_prefix` contain one another, or a message's routing becomes ambiguous (a startup warning is logged). Leaving `ai_chat_prefix` empty does **not** make every message trigger the AI.
 
 </details>
 

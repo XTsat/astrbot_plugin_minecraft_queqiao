@@ -38,6 +38,11 @@ from ..core.constants import (
     TERMINAL_DAYS_MAX,
     TERMINAL_DAYS_MIN,
 )
+from ..core.models_config import (
+    CONFIG_GROUP_ALIASES,
+    fold_entry,
+    normalize_entry,
+)
 from ..core.queqiao_client import reverse_servers_snapshot
 from .host_mem import correct_physical_memory
 from .metrics import MetricsCollector
@@ -1231,6 +1236,8 @@ class WebApiController:
         for index, entry in enumerate(self._conf_server_entries()):
             if not isinstance(entry, dict):
                 continue
+            # schema 按分组嵌套，面板与下游按扁平键读取
+            entry = normalize_entry(entry)
             raw_server = entry.get("server")
             server = raw_server if isinstance(raw_server, dict) else {}
             server_name = str(server.get("server_name") or "").strip()
@@ -1323,6 +1330,7 @@ class WebApiController:
         msg = raw_msg if isinstance(raw_msg, dict) else {}
         return {
             "forward_chat_to_astrbot": _as_bool(msg.get("forward_chat_to_astrbot"), True),
+            "forward_chat_prefix": str(msg.get("forward_chat_prefix") or ""),
             "forward_chat_format": str(msg.get("forward_chat_format") or DEFAULT_CHAT_FORMAT),
             "forward_join_leave_to_astrbot": _as_bool(
                 msg.get("forward_join_leave_to_astrbot"), False
@@ -1453,6 +1461,8 @@ class WebApiController:
         if found is None:
             return error_response("未找到对应的服务器条目", status_code=404)
         position, entry = found
+        # 摊平成运行时视图改写，落盘前再折叠回分组结构
+        entry = normalize_entry(entry)
         raw_server = entry.get("server")
         server = raw_server if isinstance(raw_server, dict) else {}
         entry["server"] = server
@@ -1550,6 +1560,7 @@ class WebApiController:
             for key in (
                 "enable_local_translation",
                 "forward_chat_to_astrbot",
+                "forward_chat_prefix",
                 "forward_chat_format",
                 "forward_join_leave_to_astrbot",
                 "forward_death_to_astrbot",
@@ -1587,17 +1598,28 @@ class WebApiController:
             changed_keys.discard("message")
             if isinstance(payload.get("message"), dict):
                 changed_keys.update(payload["message"].keys())
+        # 新分组写法也按摊平后的键判定：分组名本身不算字段，只有叶子键参与
+        payload_view = normalize_entry(payload)
+        changed_keys = {
+            key
+            for key in payload_view
+            if key not in (
+                "index", "server_name", "message", "server",
+                *CONFIG_GROUP_ALIASES.keys(),
+            )
+        }
+        changed_keys.update(payload_view.get("message") or {})
         soft_only = bool(changed_keys) and changed_keys.issubset(set(soft_keys))
         reloaded = True
         try:
             if soft_only:
                 soft_fields: dict[str, Any] = {
-                    key: payload[key] for key in soft_keys if key in payload
+                    key: payload_view[key] for key in soft_keys if key in payload_view
                 }
-                if isinstance(payload.get("message"), dict):
-                    for key in soft_keys:
-                        if key in payload["message"]:
-                            soft_fields[key] = payload["message"][key]
+                for key in soft_keys:
+                    if key in (payload_view.get("message") or {}):
+                        soft_fields[key] = payload_view["message"][key]
+                entries[position] = fold_entry(entry)
                 await self._write_config(self._conf_with_servers(entries))
                 applier = getattr(self.plugin, "apply_soft_config", None)
                 applied = bool(
@@ -1611,6 +1633,7 @@ class WebApiController:
                     # 保证磁盘配置与运行态一致
                     await self.plugin.reload_config()
             else:
+                entries[position] = fold_entry(entry)
                 await self._persist_config(self._conf_with_servers(entries))
         except Exception as exc:
             logger.exception(f"[{PLUGIN_NAME}] 更新服务器配置失败")

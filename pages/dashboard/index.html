@@ -189,12 +189,31 @@
             </span>
             <span class="settings-row-hint">游戏内聊天以 AI 前缀开头时与 AI 对话，回复以私聊发给该玩家；不影响群服互通转发</span>
           </label>
+        </div>
+        <div class="settings-group" id="settings-group-prefix">
+          <div class="settings-group-head">
+            <span class="settings-group-title">🔤 触发前缀</span>
+          </div>
           <label class="settings-row">
-            <span class="settings-row-label">AI 触发前缀</span>
+            <span class="settings-row-label">群 → 游戏 触发前缀</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">群消息以此开头才转发进游戏；留空 = 全部转发</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏 → 群 触发前缀</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-chat-prefix" placeholder="留空 = 不转发普通聊天" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">关闭「全量转发游戏聊天」后，游戏聊天以此开头才转发到群（转发时去掉前缀）；图片转发不受此前缀限制</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏 → AI 触发前缀</span>
             <span class="settings-row-control">
               <input type="text" id="st-ai-prefix" placeholder="ai" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群（如填 ai，游戏内发「ai 你好」即触发）；留空 = 不触发 AI，普通聊天不受影响。与「自动转发前缀」互相包含会在启动时告警</span>
+            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群；留空 = 不触发 AI</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-forward">
@@ -271,13 +290,6 @@
               <span class="settings-row-hint">游戏内图片（ChatImage 的 [[CICode,url=...]] 代码或直贴链接）自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
             </label>
           </div>
-          <label class="settings-row">
-            <span class="settings-row-label">群 → MC 触发前缀</span>
-            <span class="settings-row-control">
-              <input type="text" id="st-fwd-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
-            </span>
-            <span class="settings-row-hint">外部消息以此开头才转发进游戏；留空 = 全部转发。与「AI 触发前缀」互相包含会在启动时告警</span>
-          </label>
           <label class="settings-row">
             <span class="settings-row-label">目标会话（每行一个）</span>
             <span class="settings-row-control">
