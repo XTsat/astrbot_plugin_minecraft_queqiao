@@ -1050,7 +1050,6 @@ class DashboardApp {
       memoryHtml = `
         <div class="progress-wrap">
           <div class="progress-header">
-            <span class="detail-label">物理内存</span>
             <span class="detail-val">${status.memory_usage_text || '--'}</span>
           </div>
           <div class="progress-bar-bg">
@@ -1077,9 +1076,8 @@ class DashboardApp {
       if (jvm.max > 0) jvmSegs.push(`${mbInt(jvm.max)} 上限`);
       const jvmText = `${jvmSegs.join(' / ')} (${jvmPercent.toFixed(1)}%)`;
       jvmMemoryHtml = `
-        <div class="progress-wrap jvm-progress">
+        <div class="progress-wrap">
           <div class="progress-header">
-            <span class="detail-label">JVM 堆</span>
             <span class="detail-val">${jvmText}</span>
           </div>
           <div class="progress-bar-bg">
@@ -1182,7 +1180,10 @@ class DashboardApp {
       const ageText = formatAgeText(status.timestamp_seconds);
       const stale = ageText.includes('分钟') || ageText.includes('小时');
       freshnessHtml = `
-        <span class="status-freshness ${stale ? 'stale' : ''}">🕐 更新于 ${ageText || '--'}</span>`;
+        <div class="detail-row status-freshness ${stale ? 'stale' : ''}">
+          <span class="detail-label">更新时间</span>
+          <span class="detail-val">${ageText || '--'}</span>
+        </div>`;
     }
 
     // MOTD 渲染：过滤鹊桥错误响应 JSON（如 {"status":"error","message":"未授权"}）
@@ -1270,34 +1271,41 @@ class DashboardApp {
               ${slpBadgeHtml}
               ${reconnectBadgeHtml}
             </div>
-            ${freshnessHtml}
           </div>
         </div>
 
+        ${freshnessHtml}
+
         ${motdHtml}
 
-        <div class="details-grid">
-          <div class="detail-item">
-            <span class="detail-label">服务端核心 / 版本</span>
+        <div class="details-list">
+          <div class="detail-row">
+            <span class="detail-label">服务端</span>
             <span class="detail-val">${status?.server_type || '--'} ${status?.server_version || ''}</span>
           </div>
-          <div class="detail-item">
-            <span class="detail-label">CPU 核心与负载</span>
+          <div class="detail-row">
+            <span class="detail-label">CPU 负载</span>
             <span class="detail-val">${cpuHtml}</span>
           </div>
-          <div class="detail-item" style="grid-column: span 2;">
-            <span class="detail-label">内存占用</span>
-            ${memoryHtml}
-            ${jvmMemoryHtml}
+          <div class="detail-row">
+            <span class="detail-label">物理内存</span>
+            <span class="detail-val detail-val-block">${memoryHtml || '--'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">JVM 堆</span>
+            <span class="detail-val detail-val-block">${jvmMemoryHtml || '--'}</span>
           </div>
         </div>
 
         ${monitorRowHtml}
 
         <div class="players-box">
-          <div class="players-header">
-            <span>在线玩家 (${playersCountText})</span>
-            <span class="players-source-tag">${playerSourceText}</span>
+          <div class="detail-row players-header">
+            <span class="detail-label">在线玩家</span>
+            <span class="detail-val">
+              ${playersCountText}
+              <span class="players-source-tag">${playerSourceText}</span>
+            </span>
           </div>
           <div class="players-tags-list">
             ${playersListHtml}

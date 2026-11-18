@@ -579,16 +579,20 @@ body {
    -------------------------------------------------------------------------- */
 
 .layout-main {
-  /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控（各占一半，
-     紧贴排列），第 3 行「功能设置」折叠面板通栏，第 4 行终端通栏。
+  /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控，第 3 行
+     「功能设置」折叠面板通栏，第 4 行终端通栏。
      align-items: start → 服务器面板按内容自然高度排布（玩家进出时如实
      变高）；监控面板由 JS 显式 height 跟随服务器面板（双向等高、底部
-     对齐），见 app.js syncMonitorPanelHeight */
+     对齐），见 app.js syncMonitorPanelHeight。
+     max-width + margin auto：超宽屏上整页不再铺满，各面板收在中间，
+     与卡片/设置行的紧凑排版保持一致 */
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-rows: auto auto auto auto;
   gap: 12px;
   align-items: start;
+  max-width: 1560px;
+  margin: 0 auto;
 }
 
 .servers-panel {
@@ -613,13 +617,12 @@ body {
 
 .servers-container {
   display: grid;
-  /* auto-fit + 1fr：多台服务器横向并排、平分面板宽度（占满一排），
-     不留未填充的空列；面板高度由卡片内容自然决定（align-items: start
-     不拉伸），卡片不再被右侧监控面板撑高。
-     最小轨道宽取 max(320px, (100% - 3*gap)/4)：宽屏最多 4 列，第 5 张卡片
-     起换行（列数多于一排 4 个时卡片过窄、内容挤压不好看），
-     窗口变窄时按 320px 下限自然退化为 3 / 2 列 */
-  grid-template-columns: repeat(auto-fit, minmax(max(320px, calc((100% - 60px) / 4)), 1fr));
+  /* auto-fill（不是 auto-fit）：auto-fit 会折叠空轨道，只有 1 台服务器时
+     那张卡片被拉伸成整行宽，和「单服务器小面板」的观感完全不一致。
+     auto-fill 保留空轨道，卡片始终按小面板宽度排布。
+     最小轨道 320px：所在栏有多宽就排几列（左栏约 770px → 2 列，全局视图
+     约 1560px → 4 列），卡片不会被拉成整行，也不会在右侧留下大片死白 */
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   flex: 1 1 auto;
   gap: 20px;
 }
@@ -849,25 +852,35 @@ body {
   word-break: break-all;
 }
 
-/* 详情网格 */
-.details-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  padding: 12px;
+/* 详情列表：标签—值缩排行。
+   与「功能设置」同一套节奏（定宽标签列 + 自适应值列），卡片内每一行左边缘
+   对齐，不再像旧网格那样把「内存占用」横跨两列、内容在卡片里横跳 */
+.details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
   background: var(--details-bg);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
 }
 
-.detail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.detail-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  font-size: 13px;
+}
+
+/* 行间细线：最后一行不画，避免与卡片底部分隔线叠成双线 */
+.detail-row + .detail-row {
+  border-top: 1px solid var(--border-subtle);
 }
 
 .detail-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   font-weight: 500;
 }
@@ -877,20 +890,30 @@ body {
   font-weight: 600;
   color: var(--text-primary);
   font-feature-settings: "tnum";
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 含进度条的值：块级铺满值列，数值与进度条上下排 */
+.detail-val-block {
+  display: block;
+  font-weight: 400;
 }
 
 /* 进度条 (内存与在线玩家) */
 .progress-wrap {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
+  padding: 2px 0;
 }
 
 .progress-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   font-size: 12px;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .progress-bar-bg {
@@ -910,21 +933,23 @@ body {
 .progress-bar-fill.warning { background: var(--mc-yellow); }
 .progress-bar-fill.danger { background: var(--mc-red); }
 
-/* JVM 堆内存条：与物理内存条分隔 */
+/* JVM 堆与物理内存已各占一行，无需再加虚线分隔 */
 .progress-wrap.jvm-progress {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border-color);
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
-/* 状态数据新鲜度（get_status timestamp）：徽章行下方独立一排，右对齐，超 60 秒标黄 */
-.status-freshness {
+/* 状态数据新鲜度（get_status timestamp）：徽章行下方独立一行，
+   与详情行共用「标签—值」缩排（左对齐），超 60 秒标黄 */
+.status-freshness .detail-label,
+.status-freshness .detail-val {
   font-size: 11px;
   color: var(--text-muted);
-  text-align: right;
 }
 
-.status-freshness.stale {
+.status-freshness.stale .detail-label,
+.status-freshness.stale .detail-val {
   color: var(--mc-yellow);
 }
 
@@ -936,12 +961,12 @@ body {
 }
 
 .players-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 2px;
 }
 
 .players-source-tag {
@@ -1112,11 +1137,19 @@ body {
 
 .settings-row {
   display: grid;
-  grid-template-columns: 130px 1fr auto;
+  /* 三列：标签 / 控件 / 说明。控件列封顶而不是 1fr——宽屏上 1fr 会把
+     输入框拉成整页宽，说明文字被推到最右侧，左右跨度大得没法读。
+     整行再限宽，保证 2K 屏上也不会把控件抻开 */
+  grid-template-columns: 150px minmax(0, 320px) minmax(0, 1fr);
   gap: 10px 12px;
   align-items: center;
   font-size: 13px;
   margin-bottom: 10px;
+}
+
+/* 开关行：中间列只有一个 16px 复选框，收窄到贴合尺寸，说明文字紧跟其后 */
+.settings-row:has(.settings-row-control input[type='checkbox']) {
+  grid-template-columns: 150px 40px minmax(0, 1fr);
 }
 
 .settings-row-label {
@@ -1183,7 +1216,12 @@ body {
 }
 
 .settings-subgroup .settings-row {
-  grid-template-columns: 150px 400px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 320px) minmax(0, 1fr);
+  max-width: 1000px;
+}
+
+.settings-subgroup .settings-row:has(.settings-row-control input[type='checkbox']) {
+  grid-template-columns: 150px 40px minmax(0, 1fr);
 }
 
 .settings-inline-toggle {
@@ -1666,8 +1704,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 10px 12px;
   flex-wrap: wrap;
+  /* 工具条按钮多，窄面板下换行后与标题左对齐，不再挤在同一行 */
+  row-gap: 8px;
 }
 
 .monitor-title {
@@ -1726,8 +1766,9 @@ body {
 .monitor-err { color: var(--mc-yellow); }
 
 .monitor-summary {
+  /* auto-fill：指标项少时不再被拉伸成整行宽（与服务器卡片同一取舍） */
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -2463,7 +2504,8 @@ body {
   body { padding: 14px; }
   .dashboard-header { flex-direction: column; align-items: flex-start; }
   .header-actions { width: 100%; justify-content: space-between; }
-  .details-grid { grid-template-columns: 1fr 1fr; }
+  /* 窄屏：详情行标签列收窄，值列吃掉剩余宽度 */
+  .detail-row { grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
   .servers-container { grid-template-columns: 1fr; }
   .terminal-panel { height: 60vh; min-height: 320px; }
 }
@@ -2969,5 +3011,6 @@ body {
 
 /* 配置表单复用主页面 settings-* 体系：字段名为英文 key，label 列加宽 */
 .config-view .settings-row {
-  grid-template-columns: 180px 400px minmax(0, 1fr);
+  grid-template-columns: 180px minmax(0, 380px) minmax(0, 1fr);
+  max-width: 1120px;
 }
