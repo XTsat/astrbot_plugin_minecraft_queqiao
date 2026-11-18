@@ -246,16 +246,22 @@ MONITOR_API_TIMEOUT = 5
 def prefix_matches(prefix: str, text: str) -> bool:
     """判断文本是否以指定前缀触发（词边界感知，字母部分不区分大小写）。
 
+    三个方向的前缀统一采用「**留空 = 全部命中**」：不填前缀即不设门槛，
+    所有消息都算命中该方向。调用方据此实现「留空 = 全部转发 / 全部交给 AI」，
+    不必再各自维护一套空值分支。
+
     短前缀（如 `ai`）若只做 `startswith` 会误伤同词头的正常发言：
     `aim 很高`、`airport` 都会被当成 AI 触发。因此当前缀以字母/数字结尾时，
     要求其后紧跟分隔符（空格）或行尾，避免把单词截断算作命中。
 
     纯字母前缀同时忽略大小写，让 `AI 你好` 与 `ai 你好` 等效。
 
-    非字母数字结尾的前缀（如 `*`、`!`）本身已具备分隔作用，保持简单前缀匹配。
+    非字母数字结尾的前缀（如 `#`、`*`、`!`）本身已具备分隔作用，
+    保持简单前缀匹配（`#你好` 直接命中，无需空格）。
     """
     if not prefix:
-        return False
+        # 留空 = 不设门槛：全部命中（统一三个方向的前缀语义）
+        return True
 
     stripped = text.strip()
     if prefix[-1].isalnum():
@@ -269,7 +275,11 @@ def prefix_matches(prefix: str, text: str) -> bool:
 
 
 def strip_prefix(prefix: str, text: str) -> str:
-    """去掉触发前缀，返回剩余内容（前缀未命中时原样返回）。"""
+    """去掉触发前缀，返回剩余内容（前缀未命中时原样返回）。
+
+    前缀留空时没有可去掉的内容，原样返回（与 `prefix_matches` 的
+    「留空 = 全部命中」配套：命中但不剥任何字符）。
+    """
     if not prefix:
         return text.strip()
     stripped = text.strip()

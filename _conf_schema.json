@@ -100,12 +100,6 @@
             "description": "AI 对话",
             "hint": "游戏内聊天命中 AI 触发前缀时交给大模型回复（回复私聊给玩家）",
             "items": {
-              "enable_chat": {
-                "type": "bool",
-                "description": "启用 AI 对话功能",
-                "hint": "开启后，游戏内聊天以 AI 前缀开头时与 AI 对话，回复私聊给该玩家。不影响正常的群服互通",
-                "default": true
-              },
               "persona_id": {
                 "type": "string",
                 "description": "AI 对话人格 ID",
@@ -118,8 +112,18 @@
           "prefix": {
             "type": "object",
             "description": "触发前缀",
-            "hint": "三个方向的前缀互不干扰；一条游戏内消息只会命中其中一个",
+            "hint": "三个方向各有一个开关与触发前缀，互不干扰；一条游戏内消息只会命中其中一个",
             "items": {
+              "enabled_directions": {
+                "type": "list",
+                "description": "转发渠道",
+                "hint": "勾选启用该方向；取消后整条链路静音，对应前缀不再生效。默认三个方向都开",
+                "items": {"type": "string"},
+                "options": ["group_to_game", "game_to_group", "game_to_ai"],
+                "labels": ["群 → 游戏", "游戏 → 群", "游戏 → AI"],
+                "render_type": "checkbox",
+                "default": ["group_to_game", "game_to_group", "game_to_ai"]
+              },
               "group_to_game": {
                 "type": "string",
                 "description": "群 → 游戏 触发前缀",
@@ -129,14 +133,14 @@
               "game_to_group": {
                 "type": "string",
                 "description": "游戏 → 群 触发前缀",
-                "hint": "关闭「全量转发游戏聊天」后，游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 不转发普通聊天；图片转发不受此前缀限制",
+                "hint": "游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 全部转发；图片转发不受此前缀限制",
                 "default": ""
               },
               "game_to_ai": {
                 "type": "string",
                 "description": "游戏 → AI 触发前缀",
-                "hint": "游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 不触发",
-                "default": "ai"
+                "hint": "游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 全部触发（所有游戏聊天都交给 AI）",
+                "default": "#"
               }
             }
           },
@@ -147,7 +151,7 @@
               "forward_chat_to_astrbot": {
                 "type": "bool",
                 "description": "全量转发游戏聊天到指定会话",
-                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后只有以「游戏→群触发前缀」开头的聊天才转发。已开启的图片转发不受该前缀限制",
+                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后只有以「游戏→群触发前缀」开头的聊天才转发（该前缀留空则仍全部转发）。已开启的图片转发不受该前缀限制",
                 "default": true
               },
               "forward_chat_format": {

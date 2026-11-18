@@ -153,7 +153,7 @@ assert br.servers_for_session("umo:GroupMessage:1")[0][0] == "S"
 assert br.should_relay(cfg,"*hello") is True
 assert br.should_relay(cfg,"no prefix") is False
 assert br.strip_relay_prefix(cfg,"*hello") == "hello"
-# 转发前缀留空 = 全部转发（与 AI 前缀「留空即不触发」语义相反，属刻意设计）
+# 转发前缀留空 = 全部转发（三个方向前缀统一：留空 = 全部命中）
 cfg_empty_prefix = ServerConfig.from_dict({"server":{"server_name":"S2"},
     "message":{"target_sessions":["umo:GroupMessage:1"]}})
 assert cfg_empty_prefix.auto_forward_prefix == ""
@@ -240,7 +240,7 @@ from astrbot_plugin_minecraft_queqiao.core.models_config import ServerConfig as 
 # 因为转发生效前必须先绑定 target_sessions，默认放开不会外溢到未绑定会话）
 d = SC.from_dict({})
 assert d.enable_ai_chat is True and d.forward_chat_to_astrbot is True
-assert d.ai_chat_prefix == "ai" and d.auto_forward_prefix == ""
+assert d.ai_chat_prefix == "#" and d.auto_forward_prefix == ""
 assert d.prefixes_conflict is False, "默认前缀不应冲突"
 
 # 命中 AI 前缀 -> 走 AI，不转发
@@ -278,9 +278,10 @@ assert P._match_ai_prefix(cfg_hash, QueQiaoEvent.from_dict(
 assert P._match_ai_prefix(cfg_hash, QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"#ai 你好"})) is True
 
-# AI 前缀留空 -> 不触发（避免全量投喂 LLM）
+# AI 前缀留空 -> 全部命中（三个方向统一：留空 = 全部触发，所有游戏聊天交给 AI）
 cfg_empty = SC.from_dict({"server":{"server_name":"S"},"ai_chat_prefix":""})
-assert P._match_ai_prefix(cfg_empty, chat_norm) is False
+assert P._match_ai_prefix(cfg_empty, chat_norm) is True
+assert P._resolve_ai_question(cfg_empty, chat_norm) == "大家好", "留空时应整条作为提问"
 
 # 前缀冲突检测：游戏→群前缀与 AI 前缀互相包含即告警（两个方向都竞争同一条游戏聊天）
 assert SC.from_dict({"ai_chat_prefix":"*","message":{"forward_chat_prefix":"*"}}).prefixes_conflict
@@ -290,10 +291,10 @@ assert SC.from_dict({"ai_chat_prefix":"#ai","message":{"forward_chat_prefix":"*"
 assert SC.from_dict({"ai_chat_prefix":"ai","message":{"auto_forward_prefix":"ai"}}).prefixes_conflict is False
 print("OK  AI 前缀命中走 AI、普通聊天走互通、空前缀不触发、冲突可检测")
 
-# 游戏→群前缀：关闭全量转发后只放行命中前缀的聊天，转发时剥掉前缀
+# 游戏→群前缀：开关打开时只放行命中前缀的聊天，转发时剥掉前缀
 cfg_fp = SC.from_dict({"server":{"server_name":"FP"},
     "message":{"target_sessions":["umo:GroupMessage:1"],
-               "forward_chat_to_astrbot":False,"forward_chat_prefix":"*"}})
+               "forward_chat_to_astrbot":True,"forward_chat_prefix":"*"}})
 _ev_fp_hit = QueQiaoEvent.from_dict(
     {"event_name":"PlayerChatEvent","message":"*去挖矿","player":{"nickname":"A"}})
 _ev_fp_miss = QueQiaoEvent.from_dict(
@@ -302,21 +303,49 @@ assert br.should_forward(cfg_fp, _ev_fp_hit) is True
 assert br.should_forward(cfg_fp, _ev_fp_miss) is False, "未命中游戏→群前缀的聊天不得转发"
 assert br.format_event(cfg_fp, _ev_fp_hit, "*去挖矿").endswith("去挖矿"), \
     "转发时应剥掉游戏→群前缀"
-# 前缀留空 = 关闭全量转发后不转发普通聊天
+# 前缀留空 = 全部转发（三个方向统一：留空不设门槛）
 cfg_fp_empty = SC.from_dict({"server":{"server_name":"FPE"},
     "message":{"target_sessions":["umo:GroupMessage:1"],
+               "forward_chat_to_astrbot":True,"forward_chat_prefix":""}})
+assert br.should_forward(cfg_fp_empty, _ev_fp_hit) is True
+assert br.should_forward(cfg_fp_empty, _ev_fp_miss) is True, "空前缀应放行全部聊天"
+# 总开关关闭 = 整条链路静音，前缀写得再宽也不转发
+cfg_fp_off = SC.from_dict({"server":{"server_name":"FPO"},
+    "message":{"target_sessions":["umo:GroupMessage:1"],
                "forward_chat_to_astrbot":False,"forward_chat_prefix":""}})
-assert br.should_forward(cfg_fp_empty, _ev_fp_hit) is False
-# 图片转发不受文本前缀限制：关闭全量转发也放行带图聊天
+assert br.should_forward(cfg_fp_off, _ev_fp_hit) is False, "总开关关闭后不得转发"
+assert br.should_forward(cfg_fp_off, _ev_fp_miss) is False, "总开关关闭后不得转发"
+# 图片转发不受文本前缀限制：开关打开时带图聊天即便没命中前缀也放行
 cfg_fp_img = SC.from_dict({"server":{"server_name":"FPI"},
     "message":{"target_sessions":["umo:GroupMessage:1"],
-               "forward_chat_to_astrbot":False,"forward_chat_prefix":"*",
+               "forward_chat_to_astrbot":True,"forward_chat_prefix":"*",
                "forward_image_from_mc":True}})
 _ev_fp_img = QueQiaoEvent.from_dict({
     "event_name":"PlayerChatEvent","message":"看 [[CICode,url=https://x/a.png]]",
     "player":{"nickname":"A"}})
 assert br.should_forward(cfg_fp_img, _ev_fp_img) is True, "图片转发不受文本前缀限制"
-print("OK  游戏→群前缀放行与剥离 / 前缀留空不转发 / 图片转发不受前缀限制")
+print("OK  游戏→群前缀放行与剥离 / 前缀留空=全部转发 / 总开关优先 / 图片转发不受前缀限制")
+
+# 三个方向各一个开关：开关是总闸（关闭即整条链路静音），前缀只负责筛消息
+# 群 → 游戏
+cfg_relay_on = SC.from_dict({"message":{"enable_relay_to_mc":True,
+                                        "auto_forward_prefix":""}})
+cfg_relay_off = SC.from_dict({"message":{"enable_relay_to_mc":False,
+                                         "auto_forward_prefix":""}})
+assert br.should_relay(cfg_relay_on, "随便聊聊") is True
+assert br.should_relay(cfg_relay_off, "随便聊聊") is False, "群→游戏总开关关闭后不得转发"
+# 游戏 → AI：总开关关闭时前缀命中也不触发
+_cfg_ai_on = SC.from_dict({"enable_ai_chat":True, "ai_chat_prefix":"#"})
+_cfg_ai_off = SC.from_dict({"enable_ai_chat":False, "ai_chat_prefix":"#"})
+_ev_ai = QueQiaoEvent.from_dict(
+    {"event_name":"PlayerChatEvent","message":"#你好","player":{"nickname":"A"}})
+assert P._resolve_ai_question(_cfg_ai_on, _ev_ai) == "你好"
+assert P._resolve_ai_question(_cfg_ai_off, _ev_ai) is None, "AI 总开关关闭后不得触发"
+# 三个开关默认都开（升级后行为不变）
+_d3 = SC.from_dict({})
+assert _d3.enable_relay_to_mc is True and _d3.forward_chat_to_astrbot is True \
+    and _d3.enable_ai_chat is True, "三个方向开关默认开启"
+print("OK  三个方向开关均为总闸：关闭即静音，默认全开")
 
 print("=== 14. 端到端：同一条游戏内消息只走一条路径 ===")
 sent2 = []
@@ -342,7 +371,7 @@ print("\n全部离线逻辑校验通过 ✅（含前缀语义）")
 
 print("=== 15. AI 触发方式：仅聊天前缀 ===")
 d2 = SC.from_dict({})
-assert d2.enable_ai_chat is True and d2.ai_chat_prefix == "ai"
+assert d2.enable_ai_chat is True and d2.ai_chat_prefix == "#"
 # 相关配置项不应存在
 assert not hasattr(d2, "ai_command_enabled"), "不应残留 ai_command_enabled"
 assert not hasattr(d2, "ai_command_name"), "不应残留 ai_command_name"
@@ -4491,8 +4520,10 @@ assert _new43["target_sessions"] == ["default:GroupMessage:2"]
 assert _new43["server"]["server_name"] == "Server2"
 assert _new43["server"]["display_name"] == "新服"
 assert _new43["server"]["ws_url"] == "ws://127.0.0.1:8280/minecraft/ws"
-assert _new43["prefix"]["game_to_ai"] == "ai", "新建条目按新分组结构补默认值"
-assert _new43["ai"]["enable_chat"] is True
+assert _new43["prefix"]["game_to_ai"] == "#", "新建条目按新分组结构补默认值"
+assert _new43["prefix"]["enabled_directions"] == [
+    "group_to_game", "game_to_group", "game_to_ai"
+], "新建条目默认三个方向都启用"
 assert _new43["server"]["reverse_port"] == 8080, "未指定的连接参数回落 schema 默认值"
 assert _new43["server"]["client_origin"] == "astrbot"
 assert isinstance(_new43["message"], dict) and _new43["message"]["forward_chat_format"]
@@ -4609,6 +4640,7 @@ _plugin44.SOFT_CONFIG_KEYS = (
     "ai_chat_prefix",
     "enable_local_translation",
     "forward_chat_to_astrbot",
+    "enable_relay_to_mc",
     "forward_chat_prefix",
     "forward_chat_format",
     "forward_join_leave_to_astrbot",
@@ -4639,6 +4671,7 @@ def _apply_soft44(server_name, fields):
         "enable_ai_chat": True,
         "enable_local_translation": False,
         "forward_chat_to_astrbot": True,
+        "enable_relay_to_mc": True,
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
         "forward_achievement_to_astrbot": False,
@@ -4831,6 +4864,61 @@ assert _it44e["message"]["auto_forward_prefix"] == "!"
 assert _it44e["target_sessions"] == ["umo:GroupMessage:9", "umo:GroupMessage:2"]
 # 本地翻译开关回显：面板保存后必须原样返回，否则前端把复选框重置为取消
 assert _it44e["message"]["enable_local_translation"] is False
+
+# 「转发渠道」多选框 + prefix 分组前缀：面板保存后必须真正落盘。
+# 此前后端根本没读 payload.prefix，三个前缀改完保存又被旧值覆盖回去
+_set_payload44({
+    "index": 0,
+    "enabled_directions": ["group_to_game", "game_to_ai"],
+    "prefix": {"group_to_game": "#g", "game_to_group": "#c", "game_to_ai": "#a"},
+})
+_resp44p = asyncio.run(_wac44.update_config_server())
+assert _resp44p["data"]["saved"] is True
+assert _resp44p["data"]["reloaded"] is False, "前缀 / 方向开关属软字段，不得热重载"
+_stored44p = _stored44()
+assert _stored44p["prefix"]["group_to_game"] == "#g", "群→游戏前缀必须落盘"
+assert _stored44p["prefix"]["game_to_group"] == "#c", "游戏→群前缀必须落盘"
+assert _stored44p["prefix"]["game_to_ai"] == "#a", "游戏→AI 前缀必须落盘"
+assert _stored44p["prefix"]["enabled_directions"] == ["group_to_game", "game_to_ai"], \
+    "转发渠道多选框必须按已知方向顺序落盘"
+# 落盘的原始形态（未 normalize）里不能再有这三个独立布尔：
+# 否则配置页会同时显示多选框和旧开关，改一处另一处仍是旧值
+_raw44p = _plugin44.config["mc_servers"][0]
+assert "enable_relay_to_mc" not in _raw44p.get("message", {}), \
+    "方向开关已折进多选框，不得再残留独立布尔"
+assert "forward_chat_to_astrbot" not in _raw44p.get("message", {})
+assert "enable_ai_chat" not in _raw44p, "AI 开关已并入多选框，不得再残留"
+assert "enable_group_to_game" not in _raw44p.get("prefix", {})
+# 运行时同步：游戏→群方向被取消勾选，AI 方向保留
+assert _cfg44_run.enable_relay_to_mc is True
+assert _cfg44_run.forward_chat_to_astrbot is False, "取消勾选的方向必须即时静音"
+assert _cfg44_run.enable_ai_chat is True
+assert _cfg44_run.auto_forward_prefix == "#g" and _cfg44_run.forward_chat_prefix == "#c"
+assert _cfg44_run.ai_chat_prefix == "#a"
+assert _plugin44.reloads == 0
+# 回读与落盘一致（否则面板刷新后又被旧值「变回来」）
+_it44p = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]
+assert _it44p["enabled_directions"] == ["group_to_game", "game_to_ai"]
+assert _it44p["message"]["auto_forward_prefix"] == "#g"
+assert _it44p["message"]["forward_chat_prefix"] == "#c"
+assert _it44p["ai_chat_prefix"] == "#a"
+# 三个方向全取消 = 三条链路全静音
+_set_payload44({"index": 0, "enabled_directions": []})
+asyncio.run(_wac44.update_config_server())
+assert _stored44()["prefix"]["enabled_directions"] == []
+assert _cfg44_run.enable_relay_to_mc is False
+assert _cfg44_run.forward_chat_to_astrbot is False
+assert _cfg44_run.enable_ai_chat is False
+# 脏方向名只保留已知项
+_set_payload44({"index": 0, "enabled_directions": ["game_to_ai", "bogus", 123]})
+asyncio.run(_wac44.update_config_server())
+assert _stored44()["prefix"]["enabled_directions"] == ["game_to_ai"]
+# 恢复默认：三个方向全开，避免影响后续断言
+_set_payload44({"index": 0, "enabled_directions": [
+    "group_to_game", "game_to_group", "game_to_ai"]})
+asyncio.run(_wac44.update_config_server())
+assert _cfg44_run.enable_relay_to_mc and _cfg44_run.forward_chat_to_astrbot \
+    and _cfg44_run.enable_ai_chat
 
 # 服务器连通通知（条目顶层，与 enable_ai_chat 平级）：列表默认关闭 + 文案回落默认
 assert _it44d["notify_on_connect"] is False

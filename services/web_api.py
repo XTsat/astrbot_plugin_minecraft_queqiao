@@ -40,6 +40,9 @@ from ..core.constants import (
 )
 from ..core.models_config import (
     CONFIG_GROUP_ALIASES,
+    PREFIX_DIRECTION_FLAGS,
+    _PREFIX_MESSAGE_FLAGS,
+    _PREFIX_MESSAGE_KEYS,
     fold_entry,
     normalize_entry,
 )
@@ -111,6 +114,28 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+def _enabled_directions_of(entry: Any) -> list[str]:
+    """「转发渠道」多选框回显：优先读 prefix 分组的列表，缺省按运行时布尔推导。
+
+    顺序固定为 `PREFIX_DIRECTION_FLAGS` 的声明顺序，面板与配置页看到的一致。
+    """
+    if not isinstance(entry, dict):
+        return list(PREFIX_DIRECTION_FLAGS)
+    prefix_node = entry.get("prefix")
+    chosen = prefix_node.get("enabled_directions") if isinstance(prefix_node, dict) else None
+    if isinstance(chosen, list):
+        selected = set(_as_str_list(chosen))
+        return [d for d in PREFIX_DIRECTION_FLAGS if d in selected]
+    # 老配置：三个布尔散在 message 子对象与条目顶层
+    message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+    enabled: list[str] = []
+    for direction, flat in PREFIX_DIRECTION_FLAGS.items():
+        source = message if flat in _PREFIX_MESSAGE_FLAGS else entry
+        if _as_bool(source.get(flat), True):
+            enabled.append(direction)
+    return enabled
 
 
 def _quiet_items_view(value: Any) -> list[str]:
@@ -1268,6 +1293,8 @@ class WebApiController:
                     # 注意落在条目顶层（与 server 子对象平级，ServerConfig 读整条）
                     "enable_ai_chat": _as_bool(entry.get("enable_ai_chat"), True),
                     "ai_chat_prefix": str(entry.get("ai_chat_prefix") or ""),
+                    # 「转发渠道」多选框：三个方向统一由这一个列表表示
+                    "enabled_directions": _enabled_directions_of(entry),
                     # 互通终端加载天数（每台服务器独立，条目顶层；缺省回落默认）
                     "terminal_days": _as_int_clamped(
                         entry.get("terminal_days"), DEFAULT_TERMINAL_DAYS,
@@ -1492,8 +1519,61 @@ class WebApiController:
         # 平级，main 层用整条 entry 构造 ServerConfig），不可写进 server 内
         if "enable_ai_chat" in payload:
             entry["enable_ai_chat"] = _as_bool(payload.get("enable_ai_chat"), True)
+        if "enable_relay_to_mc" in payload:
+            # 旧版面板单独提交的群 → 游戏开关：落在 message 子对象，
+            # 随后由 fold_entry 折进 enabled_directions（老缓存页面兼容）
+            raw_msg = entry.get("message")
+            msg_box = raw_msg if isinstance(raw_msg, dict) else {}
+            msg_box["enable_relay_to_mc"] = _as_bool(
+                payload.get("enable_relay_to_mc"), True
+            )
+            entry["message"] = msg_box
+        # 「转发渠道」多选框（面板/配置页共用）：只保留已知方向并固定顺序。
+        # 同时把三个运行时布尔写准——落盘走 fold_entry，它由布尔推导列表，
+        # 只写列表不写布尔会被旧值覆盖回去
+        incoming_directions = payload.get("enabled_directions")
+        if incoming_directions is None and isinstance(payload.get("prefix"), dict):
+            incoming_directions = payload["prefix"].get("enabled_directions")
+        if incoming_directions is not None:
+            chosen = set(_as_str_list(incoming_directions))
+            ordered = [
+                direction for direction in PREFIX_DIRECTION_FLAGS if direction in chosen
+            ]
+            raw_prefix = entry.get("prefix")
+            prefix_box = raw_prefix if isinstance(raw_prefix, dict) else {}
+            prefix_box["enabled_directions"] = ordered
+            entry["prefix"] = prefix_box
+            raw_msg = entry.get("message")
+            msg_box = raw_msg if isinstance(raw_msg, dict) else {}
+            for direction, flat in PREFIX_DIRECTION_FLAGS.items():
+                value = direction in chosen
+                if flat in _PREFIX_MESSAGE_FLAGS:
+                    msg_box[flat] = value
+                else:
+                    entry[flat] = value
+            entry["message"] = msg_box
         if "ai_chat_prefix" in payload:
             entry["ai_chat_prefix"] = str(payload.get("ai_chat_prefix") or "").strip()
+        # 面板的「触发前缀」分组（payload.prefix）：三个前缀 + 三个方向开关。
+        # 按「显式出现」合并，漏传不清空；叶子键名与 ServerConfig 属性对齐
+        prefix_payload = payload.get("prefix")
+        if isinstance(prefix_payload, dict):
+            for leaf, flat in CONFIG_GROUP_ALIASES["prefix"].items():
+                if leaf not in prefix_payload:
+                    continue
+                raw = prefix_payload[leaf]
+                if flat in ("enable_relay_to_mc", "forward_chat_to_astrbot", "enable_ai_chat"):
+                    value: Any = _as_bool(raw, True)
+                else:
+                    value = str(raw or "").strip()
+                if flat in _PREFIX_MESSAGE_FLAGS or flat in _PREFIX_MESSAGE_KEYS:
+                    # 转发类字段与 forward_chat_to_astrbot 同处 message 子对象
+                    raw_msg = entry.get("message")
+                    msg_box = raw_msg if isinstance(raw_msg, dict) else {}
+                    msg_box[flat] = value
+                    entry["message"] = msg_box
+                else:
+                    entry[flat] = value
         if "terminal_days" in payload:
             # 互通终端加载天数（每台服务器独立，面板「功能设置」读写条目顶层）
             entry["terminal_days"] = _as_int_clamped(
@@ -1560,6 +1640,7 @@ class WebApiController:
             for key in (
                 "enable_local_translation",
                 "forward_chat_to_astrbot",
+                "enable_relay_to_mc",
                 "forward_chat_prefix",
                 "forward_chat_format",
                 "forward_join_leave_to_astrbot",
@@ -1572,13 +1653,14 @@ class WebApiController:
                 if key not in message_payload:
                     continue
                 if key in ("enable_local_translation", "forward_chat_to_astrbot",
+                           "enable_relay_to_mc",
                            "forward_join_leave_to_astrbot",
                            "forward_death_to_astrbot", "forward_achievement_to_astrbot",
                            "forward_image_to_mc", "forward_image_from_mc"):
                     # 布尔键：字符串布尔（表单 / WebUI 可能传字符串）统一转真布尔
                     msg[key] = _as_bool(
                         message_payload[key],
-                        True if key == "forward_chat_to_astrbot" else False,
+                        True if key in ("forward_chat_to_astrbot", "enable_relay_to_mc") else False,
                     )
                 else:
                     msg[key] = str(message_payload[key] or "").strip()
@@ -1605,6 +1687,8 @@ class WebApiController:
             for key in payload_view
             if key not in (
                 "index", "server_name", "message", "server",
+                # 多选框本身不是运行时属性，真正生效的是它摊平出的三个布尔
+                "enabled_directions",
                 *CONFIG_GROUP_ALIASES.keys(),
             )
         }

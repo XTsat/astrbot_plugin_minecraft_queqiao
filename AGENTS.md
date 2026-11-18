@@ -468,7 +468,7 @@ async def cmd_sub(
 
 ### 6.6 AI 触发与三个前缀（不可混淆）
 
-游戏内 AI **仅由聊天前缀触发**（`PlayerChatEvent` + `ai_chat_prefix`，默认 `ai`），全端可用。
+游戏内 AI **仅由聊天前缀触发**（`PlayerChatEvent` + `ai_chat_prefix`，默认 `#`），全端可用。
 
 > **明确不做斜杠触发**：本插件运行在 AstrBot 侧，无法向 Minecraft 注册真实指令。
 > 且斜杠输入在游戏内属于**指令**而非聊天：Fabric 侧 `onChatMessage` 直接
@@ -480,16 +480,39 @@ async def cmd_sub(
 
 前缀语义：
 
+**三个方向各有一个开关 + 一个前缀**：开关是总闸（关闭即整条链路静音、不看前缀），
+前缀只负责筛消息。schema 上成对落在 `prefix` 分组，运行时映射到扁平属性。
+
+配置页只保留**一个**多选框 `prefix.enabled_directions`（`type: "list"` +
+`render_type: "checkbox"`），勾选值即启用的方向；运行时仍读三个独立布尔，
+由 `PREFIX_DIRECTION_FLAGS` 双向翻译。**同一开关不得在配置里出现两处**。
+
+| 多选框选项 | 运行时属性 | 方向 | 默认 |
+|---|---|---|---|
+| `group_to_game` | `enable_relay_to_mc` | 群 → MC | 勾选 |
+| `game_to_group` | `forward_chat_to_astrbot` | 游戏内 → 群 | 勾选 |
+| `game_to_ai` | `enable_ai_chat` | 游戏内 → AI | 勾选 |
+
 | 配置项 | 方向 | 默认值 | 语义 |
 |---|---|---|---|
 | `auto_forward_prefix` | 群 → MC | 留空 | 群消息以此开头才转发到游戏；留空 = 全部转发（仅对已绑定 `target_sessions` 的群生效）；已开启的图片转发不受此前缀限制 |
-| `forward_chat_prefix` | 游戏内 → 群 | 留空 | 关闭全量转发（`forward_chat_to_astrbot`）后，游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 不转发普通聊天；图片转发不受此前缀限制 |
-| `ai_chat_prefix` | 游戏内 → AI | `ai` | 游戏内聊天以此开头才触发 AI；留空 = 不触发 |
+| `forward_chat_prefix` | 游戏内 → 群 | 留空 | 游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 全部转发；图片转发不受此前缀限制 |
+| `ai_chat_prefix` | 游戏内 → AI | `#` | 游戏内聊天以此开头才触发 AI；留空 = 全部触发（所有聊天都交给 AI，不再转发到群） |
+
+**三个前缀统一遵循「留空 = 全部命中」**：`prefix_matches("", text)` 恒为真，
+各调用方不得再自行维护空值分支（`should_relay` 曾单独写 `if not prefix: return True`，
+已收敛到 `prefix_matches`）。默认 AI 前缀是 `#`：符号结尾无需空格，
+`#你好` 直接命中。
 
 不变式（改事件编排时必须保持）：
 
 - 游戏内一条消息**只命中一条路径**：先调 `_resolve_ai_question()`，返回非 None 即交给 LLM 并 return，不再转发
-- `ai_chat_prefix` 留空**不得**退化为「全部触发」——那会把全部聊天投给 LLM
+- `ai_chat_prefix` 留空 = 全部触发，此时**不告警**「前缀冲突」以外的歧义（转发方向被 AI 吞掉是用户显式选择）；`prefixes_conflict` 在 AI 前缀留空时为真，启动告警提示群消息会变少
+- **总开关优先于前缀**：`enable_relay_to_mc` / `forward_chat_to_astrbot` / `enable_ai_chat`
+  任一为假即整条链路静音，前缀配置一律不再参与判断（此前 `forward_chat_to_astrbot`
+  曾是「全量转发」开关、会绕过前缀，统一成总闸后不再绕过）
+- **面板保存必须写回 `payload.prefix`**：面板把三个前缀放在 `prefix` 分组提交，
+  后端漏读会表现为「保存后又被旧值覆盖」，改动 `update_config_server` 时不可回归
 - 两个前缀互相包含时 `ServerConfig.prefixes_conflict` 为真，启动时告警
 - 指令事件（`PlayerCommandEvent`）**不得**进入 AI 分支，应放行给互通流程
 - 触发后内容为空（`ai`）不得向 LLM 发请求

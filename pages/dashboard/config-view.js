@@ -190,6 +190,34 @@ function createControl(spec, onchange) {
       };
     }
     case 'list': {
+      // list + options + render_type=checkbox：与 AstrBot 配置页一致渲染成多选框，
+      // 避免同一个字段在两边一个是勾选框、一个是要手打每行一项的文本框
+      if (Array.isArray(spec.options) && spec.render_type === 'checkbox') {
+        const wrap = document.createElement('div');
+        wrap.className = 'cfg-checkbox-group';
+        const labels = Array.isArray(spec.labels) ? spec.labels : [];
+        const boxes = spec.options.map((opt, i) => {
+          const item = document.createElement('label');
+          item.className = 'cfg-checkbox-item';
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.value = String(opt);
+          box.addEventListener('change', () => onchange());
+          const text = document.createElement('span');
+          text.textContent = labels[i] || String(opt);
+          item.append(box, text);
+          wrap.append(item);
+          return box;
+        });
+        return {
+          el: wrap,
+          set: (v) => {
+            const chosen = new Set((Array.isArray(v) ? v : []).map(String));
+            for (const box of boxes) box.checked = chosen.has(box.value);
+          },
+          get: () => boxes.filter((b) => b.checked).map((b) => b.value),
+        };
+      }
       const el = document.createElement('textarea');
       el.className = 'cfg-textarea';
       el.placeholder = '每行一项';
@@ -277,7 +305,9 @@ function buildFieldRow(key, spec, target, onchange, opts = {}) {
     // 未知类型：不渲染控件，仅显示字段名和描述
     return row;
   }
-  control.set(target[key]);
+  // 配置里还没写过这个键时按 schema 默认值回显（否则多选框会全空，
+  // 与实际「默认全开」的行为不一致）
+  control.set(target[key] === undefined ? makeDefault(spec) : target[key]);
   control.el.dataset.fieldKey = key;
   // 控件变更时写回 target，保持 conf 与界面同步
   control.el.addEventListener('input', () => {

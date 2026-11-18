@@ -229,6 +229,7 @@ class MinecraftQueQiaoPlugin(Star):
         "ai_chat_prefix",
         "enable_local_translation",
         "forward_chat_to_astrbot",
+        "enable_relay_to_mc",
         "forward_chat_prefix",
         "forward_chat_format",
         "forward_join_leave_to_astrbot",
@@ -255,6 +256,7 @@ class MinecraftQueQiaoPlugin(Star):
         "enable_ai_chat": True,
         "enable_local_translation": False,
         "forward_chat_to_astrbot": True,
+        "enable_relay_to_mc": True,
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
         "forward_achievement_to_astrbot": False,
@@ -1014,8 +1016,9 @@ class MinecraftQueQiaoPlugin(Star):
     def _match_ai_prefix(config: ServerConfig, event: QueQiaoEvent) -> bool:
         """判断游戏内聊天是否触发 AI。
 
-        AI 前缀为空时**不**触发：否则所有聊天都会被投给 LLM，
-        既产生噪声也消耗额度。需全部触发请显式设置较短前缀。
+        与另外两个前缀统一为「**留空 = 全部命中**」：留空时游戏内所有聊天
+        都会交给 LLM（并因此不再转发到群）。需要只让部分聊天触发 AI 时，
+        填一个前缀即可。
 
         采用词边界感知匹配，避免短前缀误伤同词头发言（如 `ai` 误匹配 `aim`）。
         """
@@ -1031,6 +1034,7 @@ class MinecraftQueQiaoPlugin(Star):
 
         仅由**游戏内聊天**触发（`PlayerChatEvent` 命中 `ai_chat_prefix`）。
         """
+        # 总开关优先：关闭后整条「游戏 → AI」链路静音，不看前缀
         if not config.enable_ai_chat or not event.is_chat:
             return None
 

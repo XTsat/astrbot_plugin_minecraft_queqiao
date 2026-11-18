@@ -579,33 +579,47 @@ body {
    -------------------------------------------------------------------------- */
 
 .layout-main {
-  /* grid：第 1 行标题通栏，第 2 行左服务器面板 + 右性能监控，第 3 行
-     「功能设置」折叠面板通栏，第 4 行终端通栏。
-     align-items: start → 服务器面板按内容自然高度排布（玩家进出时如实
-     变高）；监控面板由 JS 显式 height 跟随服务器面板（双向等高、底部
-     对齐），见 app.js syncMonitorPanelHeight。
-     max-width + margin auto：超宽屏上整页不再铺满，各面板收在中间，
-     与卡片/设置行的紧凑排版保持一致 */
+  /* 两栏：左主内容 + 右「功能设置」抽屉。左栏 minmax(0,1fr) 吃掉剩余宽度，
+     右栏宽度由抽屉自身决定（展开 400px / 折叠 44px 竖排条），展开时主内容
+     收窄而不是被盖住。
+     主内容内部再分两行：服务器卡片 + 性能监控并排（各自宽度按内容自适应，
+     见 .main-row），终端通栏。
+     align-items: start → 面板按内容自然高度排布；监控面板由 JS 显式
+     height 跟随服务器面板（双向等高），见 app.js syncMonitorPanelHeight */
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
-  max-width: 1560px;
-  margin: 0 auto;
+}
+
+/* 左侧主内容：标题 → (服务器卡片 | 性能监控) → 互通终端 */
+.main-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 卡片与监控并排：卡片列宽度贴合卡片（固定 420px 轨道），监控吃掉其余
+   宽度。这样监控面板左缘紧贴卡片右缘，不再因为「左右各占 50%」而在中间
+   留出一条空白竖带；窗口变窄时监控按 minmax(320px, 1fr) 收缩，再窄就由
+   媒体查询退成上下堆叠 */
+.main-row {
+  display: grid;
+  /* 左列固定为卡片宽度（420px，窄屏下限 320px），右列吃掉全部剩余宽度 */
+  grid-template-columns: minmax(320px, 420px) minmax(320px, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
 }
 
 .servers-panel {
-  grid-column: 1;
-  grid-row: 2;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .servers-section-title {
-  grid-column: 1 / -1;
-  grid-row: 1;
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 4px;
@@ -617,12 +631,14 @@ body {
 
 .servers-container {
   display: grid;
-  /* auto-fill（不是 auto-fit）：auto-fit 会折叠空轨道，只有 1 台服务器时
-     那张卡片被拉伸成整行宽，和「单服务器小面板」的观感完全不一致。
-     auto-fill 保留空轨道，卡片始终按小面板宽度排布。
-     最小轨道 320px：所在栏有多宽就排几列（左栏约 770px → 2 列，全局视图
-     约 1560px → 4 列），卡片不会被拉成整行，也不会在右侧留下大片死白 */
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  /* 卡片宽度固定 420px，不随容器伸缩：
+     - auto-fit + 1fr 会把单张卡片拉成整行宽（旧问题）
+     - auto-fill + 1fr 会按容器切轨道，全部服务器视图（1933px）切出 5 个
+       轨道，卡片只有 370px，比单服视图（470px）还窄，两视图不一致
+     固定轨道宽后，两个视图里的卡片一样大；min(420px, 100%) 保证窄屏
+     时轨道退化为容器宽度，不会横向溢出 */
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 420px));
+  justify-content: start;
   flex: 1 1 auto;
   gap: 20px;
 }
@@ -1025,14 +1041,71 @@ body {
    10b. 功能设置面板（可折叠）：AI 对话开关 + 面板偏好
    -------------------------------------------------------------------------- */
 
+/* 抽屉隐藏时（全局视图 / 图床 / 配置管理）右列整体收掉，主内容独占整行。
+   JS 同时会加 drawer-hidden；:has() 只是首帧兜底，旧内核不支持时由 JS 保证 */
+.layout-main:has(> .settings-panel.hidden),
+.layout-main.drawer-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 右侧抽屉：展开时占满整个右列（宽度随视口伸缩，与主内容同处一行，
+   所以是「挤压主内容」而不是覆盖），高度与主内容等高、内容区内部滚动；
+   折叠时收成 44px 竖排窄条，主内容立刻吃掉释放的宽度 */
 .settings-panel {
-  grid-column: 1 / -1;
-  grid-row: 3;
-  min-width: 0;
+  width: clamp(420px, 36vw, 680px);
+  max-width: 100%;
+  /* 高度上限：CSS 先按视口给一个兜底值（不依赖 JS 也能滚动），
+     JS syncDrawerHeight 再把上限收紧到与左侧主内容等高 */
+  align-self: stretch;
+  min-height: 0;
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: width 0.18s ease;
+}
+
+/* 折叠态：整块变成竖排窄条，标题竖排，点一下再展开 */
+.settings-panel.collapsed {
+  width: 44px;
+}
+
+.settings-panel.collapsed .settings-header {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 6px;
+  border-bottom-color: transparent;
+  height: 100%;
+}
+
+.settings-panel.collapsed .settings-toggle {
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  justify-content: flex-start;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.settings-panel.collapsed .settings-title {
+  /* 竖排：折叠后只剩一条窄边，横排文字放不下 */
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+}
+
+.settings-panel.collapsed .settings-spacer {
+  display: none;
+}
+
+.settings-panel.collapsed .settings-status {
+  writing-mode: vertical-rl;
+  max-height: 40%;
   overflow: hidden;
 }
 
@@ -1043,6 +1116,7 @@ body {
   flex-wrap: wrap;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
 }
 
 /* 标题即折叠开关：整块可点，键盘可聚焦（button 原生语义） */
@@ -1075,14 +1149,10 @@ body {
   transform: rotate(-90deg);
 }
 
-.settings-panel.collapsed .settings-header {
-  border-bottom-color: transparent;
-}
-
+/* 折叠态：整块只剩标题条，正文整块隐藏（不是靠 overflow 藏起来） */
 .settings-panel.collapsed .settings-body {
   display: none;
 }
-
 
 .settings-spacer {
   flex: 1 1 auto;
@@ -1093,29 +1163,50 @@ body {
   color: var(--text-muted);
 }
 
-.settings-footer {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
+/* 保存按钮移入标题栏：不用滚到底就能点保存，始终可见 */
+.settings-save {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
+/* 折叠态只剩窄条，保存按钮没有意义（也放不下），整块隐藏 */
+.settings-panel.collapsed .settings-save {
+  display: none;
+}
+
+/* 抽屉正文：分组卡片墙（按可用宽度排 1～2 列），
+   抽屉高度由 JS 钉在主内容高度，内容超出时只在这里滚动、标题栏保持固定。
+   min-height: 0 是滚动生效的关键——没有它 flex 子项不会收缩到内容以下 */
 .settings-body {
+  /* 分组卡片纵向单列：抽屉本身只有 420～680px，切两列会把标签列压到
+     70 多像素、长标签全部折成两三行，卡片反而更高、看着更空。
+     单列 + 每行「标签 150px + 控件占满剩余」，标签不折行、输入框能用满宽度 */
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 12px 14px 14px;
+  gap: 8px;
+  padding: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* auto 而非 contain：抽屉滚到底后滚轮 / 触控手势继续带动页面。
+     contain 会切断滚动链，表现成「滚到底就卡住、页面还得挪到外面才能滚」 */
+  overscroll-behavior-y: auto;
 }
 
 .settings-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 8px 10px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  margin-bottom: 16px;
+  /* 多列布局下靠 margin 控制卡片间隔；break-inside 防止一张卡被劈到两列 */
+  margin: 0 0 8px;
+  min-width: 0;
+  break-inside: avoid;
 }
+
 
 .settings-group-head {
   display: flex;
@@ -1137,42 +1228,91 @@ body {
 
 .settings-row {
   display: grid;
-  /* 三列：标签 / 控件 / 说明。控件列封顶而不是 1fr——宽屏上 1fr 会把
-     输入框拉成整页宽，说明文字被推到最右侧，左右跨度大得没法读。
-     整行再限宽，保证 2K 屏上也不会把控件抻开 */
-  grid-template-columns: 150px minmax(0, 320px) minmax(0, 1fr);
-  gap: 10px 12px;
+  /* 两行式：第一行「标签 + 控件」，第二行整行放说明。
+     标签定宽 150px（长标签如「游戏 → AI 触发前缀」正好一行放下），
+     控件吃掉剩余宽度，不再出现「标签在左、输入框贴最右、中间一大段空」。
+     行间距 2px：说明文字紧跟在标签下面，不需要更多留白 */
+  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-areas:
+    "label control"
+    "hint  hint";
+  gap: 2px 10px;
   align-items: center;
   font-size: 13px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
-/* 开关行：中间列只有一个 16px 复选框，收窄到贴合尺寸，说明文字紧跟其后 */
-.settings-row:has(.settings-row-control input[type='checkbox']) {
-  grid-template-columns: 150px 40px minmax(0, 1fr);
+/* 抽屉内标签不折行：折行会把行高翻倍，白白撑高卡片。
+   配置管理表单（.config-view）不适用——那边标签是英文 key，需要换行 */
+.settings-panel .settings-row-label {
+  white-space: nowrap;
+}
+
+/* 开关行：控件只有 16px 复选框，列宽收到贴合尺寸，不让它孤零零飘在最右 */
+.settings-panel .settings-row:has(.settings-row-control input[type='checkbox']) {
+  grid-template-columns: 150px auto;
+}
+
+/* 开关类控件靠左贴住标签，避免「标签-开关」中间空出一大段 */
+.settings-panel .settings-row:has(.settings-row-control input[type='checkbox']) .settings-row-control {
+  justify-self: start;
+}
+
+/* 转发渠道多选框行：三个方向并排横放（与「免打扰项目」同款），
+   标签占左、控件区可以换行，说明整行在下面 */
+.settings-panel .settings-row:has(.settings-row-control.route-items) {
+  /* 标签列按内容宽（auto），控件列吃剩余宽度：
+     用 1fr 1fr 会把标签挤成「转发渠 / 道」两行 */
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.route-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  justify-self: start;
+}
+
+.route-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.route-item input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--mc-green);
+  cursor: pointer;
 }
 
 .settings-row-label {
-  grid-column: 1;
+  grid-area: label;
   color: var(--text-secondary);
+  min-width: 0;
 }
 
 .settings-row-control {
-  grid-column: 2;
+  grid-area: control;
+  justify-self: stretch;
+  min-width: 0;
 }
 
 .settings-row-hint {
-  grid-column: 3;
+  grid-area: hint;
   font-size: 11px;
   color: var(--text-muted);
-  line-height: 1.4;
-  padding-left: 12px;
-  white-space: normal;
-  word-wrap: break-word;
-  word-break: break-word;
+  line-height: 1.45;
   opacity: 0.85;
-  max-width: 100%;
 }
+
 .settings-row-control input[type='text'],
 .settings-row-control textarea {
   width: 100%;
@@ -1215,14 +1355,7 @@ body {
   background: var(--bg-subtle);
 }
 
-.settings-subgroup .settings-row {
-  grid-template-columns: 150px minmax(0, 320px) minmax(0, 1fr);
-  max-width: 1000px;
-}
-
-.settings-subgroup .settings-row:has(.settings-row-control input[type='checkbox']) {
-  grid-template-columns: 150px 40px minmax(0, 1fr);
-}
+/* 子分组沿用两行式（标签+控件 / 说明整行），只缩进不换列定义 */
 
 .settings-inline-toggle {
   display: inline-block;
@@ -1299,17 +1432,9 @@ body {
   color: var(--warning-color, #e6a23c);
 }
 
-@media (max-width: 480px) {
-  .settings-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-  .settings-row-hint { margin-bottom: 8px; }
-}
+
 
 .terminal-panel {
-  grid-column: 1 / -1;
-  grid-row: 4;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1618,8 +1743,6 @@ body {
 }
 
 .monitor-panel {
-  grid-column: 2;
-  grid-row: 2;
   /* 高度由 JS 与左侧服务器面板双向等高钳制（固定 height，见 app.js
      syncMonitorPanelHeight）；内部 flex 列布局：图表区吃掉剩余空间，
      面板底部无空白 */
@@ -1634,13 +1757,10 @@ body {
   min-width: 0;
 }
 
-/* 监控面板隐藏（全局视图/监控关闭）时：主布局退化为单列全宽，
+/* 监控面板隐藏（全局视图/监控关闭）时：卡片行退化为单列全宽，
    服务器卡片不再被挤在左半列（避免细长） */
-.layout-main.monitor-hidden {
+.layout-main.monitor-hidden .main-row {
   grid-template-columns: minmax(0, 1fr);
-}
-.layout-main.monitor-hidden .servers-panel {
-  grid-column: 1 / -1;
 }
 
 /* 服务器卡片内的监控摘要行（全局视图与单服视图都可见） */
@@ -1880,11 +2000,45 @@ body {
 }
 
 @media (max-width: 900px) {
-  /* 单列布局：按 DOM 顺序自然排布（标题 → 服务器 → 监控 → 终端），各面板占满宽度 */
+  /* 窄屏：主内容与抽屉上下堆叠（抽屉落到最下方、恢复横排标题），
+     卡片与监控也退成上下排列，各面板占满宽度 */
   .layout-main { grid-template-columns: minmax(0, 1fr); }
-  .servers-section-title, .servers-panel, .terminal-panel, .monitor-panel, .settings-panel { grid-column: 1; grid-row: auto; }
+  .main-row { grid-template-columns: minmax(0, 1fr); }
   .monitor-panel { margin-top: 0; }
   .monitor-summary { grid-template-columns: repeat(3, 1fr); }
+  .settings-panel,
+  .settings-panel.collapsed {
+    width: 100%;
+    max-height: none;
+    position: static;
+    /* 窄屏抽屉落进正常文档流、自然高度：不能再留 overflow: hidden，
+       否则触屏上整块区域会把页面滚动吞掉 */
+    overflow: visible;
+  }
+  /* 关键：窄屏下正文不再自成滚动容器。
+     桌面端正文是 overflow-y:auto 的内部滚动区；窄屏下正文是自然高度、
+     没有溢出，再留着 overflow 会让触屏手指的手势被它接住却滚不动任何东西，
+     表现为「设置区划不动、页面也不动」。这里退回普通流式内容，滚动交回页面 */
+  .settings-body {
+    overflow: visible;
+    overscroll-behavior: auto;
+    flex: 0 0 auto;
+  }
+  .settings-panel.collapsed .settings-header {
+    flex-direction: row;
+    align-items: center;
+    padding: 10px 14px;
+  }
+  .settings-panel.collapsed .settings-toggle {
+    flex-direction: row;
+    gap: 8px;
+  }
+  .settings-panel.collapsed .settings-title,
+  .settings-panel.collapsed .settings-status {
+    writing-mode: horizontal-tb;
+    letter-spacing: normal;
+  }
+  .settings-panel.collapsed .settings-spacer { display: block; }
 }
 
 @media (max-width: 480px) {
@@ -2709,6 +2863,32 @@ body {
   font-weight: 400;
 }
 
+/* 配置管理里的多选框组（schema: type=list + options + render_type=checkbox） */
+.cfg-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.cfg-checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cfg-checkbox-item input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--mc-green);
+  cursor: pointer;
+}
+
 /* ---- 控件 ---- */
 .cfg-input,
 .cfg-select,
@@ -3011,6 +3191,14 @@ body {
 
 /* 配置表单复用主页面 settings-* 体系：字段名为英文 key，label 列加宽 */
 .config-view .settings-row {
+  /* 配置表单字段多、需要横向扫读，单独保留三列式 */
   grid-template-columns: 180px minmax(0, 380px) minmax(0, 1fr);
-  max-width: 1120px;
+  grid-template-areas: none;
+  gap: 10px 12px;
+  align-items: center;
+  margin-bottom: 10px;
 }
+
+.config-view .settings-row-label { grid-area: auto; }
+.config-view .settings-row-control { grid-area: auto; justify-self: stretch; }
+.config-view .settings-row-hint { grid-area: auto; padding-left: 12px; }

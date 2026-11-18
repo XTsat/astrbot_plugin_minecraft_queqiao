@@ -180,10 +180,13 @@ def _to_platform_map(value: object) -> dict[str, str]:
 # 运行时与面板仍按扁平属性读取；这里就是两者之间的唯一翻译层。
 CONFIG_GROUP_ALIASES: dict[str, dict[str, str]] = {
     "ai": {
-        "enable_chat": "enable_ai_chat",
+        # AI 的启停已并入「转发渠道」多选框（prefix.enabled_directions），
+        # 这里只保留人格选择，避免同一个开关在配置里出现两处
         "persona_id": "ai_persona_id",
     },
     "prefix": {
+        # 三个方向的多选框（enabled_directions）单独处理成三个布尔，
+        # 见 normalize_entry / fold_entry；这里只放三个前缀本身
         "group_to_game": "auto_forward_prefix",
         "game_to_group": "forward_chat_prefix",
         "game_to_ai": "ai_chat_prefix",
@@ -204,8 +207,24 @@ CONFIG_GROUP_ALIASES: dict[str, dict[str, str]] = {
     },
 }
 
+# 「转发渠道」多选框的选项 → 运行时布尔属性（配置页/面板共用一套）
+PREFIX_DIRECTION_FLAGS: dict[str, str] = {
+    "group_to_game": "enable_relay_to_mc",
+    "game_to_group": "forward_chat_to_astrbot",
+    "game_to_ai": "enable_ai_chat",
+}
+# 旧配置里这三个开关各自散落（prefix 分组 / message 子对象 / 条目顶层），
+# 迁移时取出后折成 enabled_directions，不再保留独立键
+_LEGACY_DIRECTION_LEAVES: dict[str, str] = {
+    "enable_group_to_game": "enable_relay_to_mc",
+    "enable_game_to_group": "forward_chat_to_astrbot",
+    "enable_game_to_ai": "enable_ai_chat",
+}
 # 旧版把这两个前缀写在 message 子对象里，运行时也按 message 键读取
 _PREFIX_MESSAGE_KEYS = ("auto_forward_prefix", "forward_chat_prefix")
+# 两个「转发」开关落在 message 子对象（与历史位置一致），
+# 游戏 → AI 开关沿用条目顶层（与 enable_ai_chat 的历史位置一致）
+_PREFIX_MESSAGE_FLAGS = ("forward_chat_to_astrbot", "enable_relay_to_mc")
 
 
 def normalize_entry(entry: dict) -> dict:
@@ -228,10 +247,36 @@ def normalize_entry(entry: dict) -> dict:
         for leaf, flat in aliases.items():
             if leaf not in node:
                 continue
-            if flat in _PREFIX_MESSAGE_KEYS:
+            if flat in _PREFIX_MESSAGE_KEYS or flat in _PREFIX_MESSAGE_FLAGS:
                 data["message"][flat] = node[leaf]
             else:
                 data[flat] = node[leaf]
+
+    # 「转发渠道」多选框：列表里有的方向 = 开，没有的 = 关。
+    # 列表可能落在 prefix 分组里（配置页/磁盘），也可能写在条目顶层
+    # （面板保存时直接提交），两处都认。
+    # 没出现该键时保留旧配置里的三个独立布尔（老配置免手工迁移）
+    prefix_node = data.get("prefix")
+    prefix_dict = prefix_node if isinstance(prefix_node, dict) else {}
+    chosen = prefix_dict.get("enabled_directions")
+    if chosen is None:
+        chosen = data.get("enabled_directions")
+    if isinstance(chosen, list):
+        enabled = {str(x).strip() for x in chosen if str(x).strip()}
+        for direction, flat in PREFIX_DIRECTION_FLAGS.items():
+            value = direction in enabled
+            if flat in _PREFIX_MESSAGE_FLAGS:
+                data["message"][flat] = value
+            else:
+                data[flat] = value
+    # 旧配置：prefix 分组里的独立布尔（迁移前一个版本写进去的）
+    for leaf, flat in _LEGACY_DIRECTION_LEAVES.items():
+        if leaf not in prefix_dict:
+            continue
+        if flat in _PREFIX_MESSAGE_FLAGS:
+            data["message"][flat] = prefix_dict[leaf]
+        else:
+            data[flat] = prefix_dict[leaf]
     return data
 
 
@@ -247,23 +292,49 @@ def fold_entry(entry: dict) -> dict:
     raw_message = data.get("message")
     message = dict(raw_message) if isinstance(raw_message, dict) else {}
 
+    # 先把三个方向布尔抽成 enabled_directions（必须在别名循环之前：
+    # 否则同名的扁平键会被别的分组先 pop 走，列表就漏项）
+    prefix_group = data.get("prefix")
+    if not isinstance(prefix_group, dict):
+        prefix_group = {}
+    enabled_directions: list[str] = []
+    for direction, flat in PREFIX_DIRECTION_FLAGS.items():
+        source = message if flat in _PREFIX_MESSAGE_FLAGS else data
+        raw = source.pop(flat, True)  # 缺键 = schema 默认（开）
+        if _to_bool(raw, True):
+            enabled_directions.append(direction)
+    # 旧版散落在 prefix 分组里的独立布尔一并清掉
+    for legacy_leaf in _LEGACY_DIRECTION_LEAVES:
+        prefix_group.pop(legacy_leaf, None)
+
     for group, aliases in CONFIG_GROUP_ALIASES.items():
         node = data.get(group)
         grouped = dict(node) if isinstance(node, dict) else {}
+        if group == "prefix":
+            grouped.update(prefix_group)
         for leaf, flat in aliases.items():
-            if flat in _PREFIX_MESSAGE_KEYS:
+            if flat in _PREFIX_MESSAGE_KEYS or flat in _PREFIX_MESSAGE_FLAGS:
                 if flat in message:
                     grouped[leaf] = message.pop(flat)
             elif flat in data:
                 grouped[leaf] = data.pop(flat)
         if grouped:
             data[group] = grouped
+
+    # 多选框列表落盘：schema 只保留这一处方向开关。
+    # 注意取别名循环之后的 prefix（那里已把三个前缀从 message 搬进来），
+    # 直接用前面缓存的 prefix_group 会把前缀覆盖掉
+    final_prefix = data.get("prefix")
+    if not isinstance(final_prefix, dict):
+        final_prefix = prefix_group
+    final_prefix["enabled_directions"] = enabled_directions
+    data["prefix"] = final_prefix
     if message:
         data["message"] = message
     else:
         data.pop("message", None)
     # 旧扁平键不残留：迁移后同一配置不得在两处并存
-    for flat in _PREFIX_MESSAGE_KEYS:
+    for flat in _PREFIX_MESSAGE_KEYS + _PREFIX_MESSAGE_FLAGS:
         data.pop(flat, None)
     return data
 
@@ -301,7 +372,7 @@ class ServerConfig:
     # ---- 功能开关 ----
     enable_ai_chat: bool = True
     ai_persona_id: str = ""
-    ai_chat_prefix: str = "ai"
+    ai_chat_prefix: str = "#"
     text2image: bool = True
     # 互通终端加载最近几天的日志分片（0=全部保留分片），每台服务器独立
     terminal_days: int = DEFAULT_TERMINAL_DAYS
@@ -341,6 +412,9 @@ class ServerConfig:
     # （无需重启服务端，翻译库内置在插件 translations/ 目录）
     enable_local_translation: bool = False
     target_sessions: list[str] = field(default_factory=list)
+    # 群 → 游戏 转发总开关：关闭后该方向整条链路静音（不看前缀）。
+    # 与 forward_chat_to_astrbot（游戏 → 群）成对，三个方向各有一个开关
+    enable_relay_to_mc: bool = True
     # 默认留空 = 全部转发；仅对已绑定 target_sessions 的会话生效，故默认放开是安全的
     auto_forward_prefix: str = ""
     # 同时保留唤醒消息原文并转发机器人自己的群消息；插件自身发出的消息仍由回声标记拦截
@@ -494,6 +568,19 @@ class ServerConfig:
         return self.ws_mode == WS_MODE_REVERSE
 
     @property
+    def enabled_directions(self) -> list[str]:
+        """「转发渠道」多选框的运行时视图：已启用的方向，顺序固定。
+
+        配置页只存一个多选列表（`prefix.enabled_directions`），运行时下游
+        仍读三个独立布尔；这个属性把两边对上，供回显与自检使用。
+        """
+        return [
+            direction
+            for direction, flat in PREFIX_DIRECTION_FLAGS.items()
+            if getattr(self, flat)
+        ]
+
+    @property
     def prefixes_conflict(self) -> bool:
         """游戏→群前缀与 AI 前缀是否冲突（互相包含即视为冲突）。
 
@@ -503,8 +590,16 @@ class ServerConfig:
 
         若两者互相包含（例如同为 `*`，或一个是另一个的前缀），
         同一条游戏内消息可能同时命中两个语义，因此在读取时告警。
+
+        前缀语义统一为「留空 = 全部命中」后：
+        - AI 前缀留空 = 所有游戏聊天都交给 AI，转发方向被整体吞掉，
+          这是需要提醒的配置（否则用户只看到群消息变少却不知原因）
+        - 游戏→群前缀留空 = 全部转发到群，本就是默认行为；AI 命中的消息
+          在 main 层就已 return，不会重复，因此不算冲突
         """
-        if not self.forward_chat_prefix or not self.ai_chat_prefix:
+        if not self.ai_chat_prefix:
+            return True
+        if not self.forward_chat_prefix:
             return False
         return (
             self.forward_chat_prefix.startswith(self.ai_chat_prefix)
@@ -633,7 +728,7 @@ class ServerConfig:
             ),
             enable_ai_chat=_to_bool(data.get("enable_ai_chat"), True),
             ai_persona_id=_to_str(data.get("ai_persona_id"), ""),
-            ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "ai"),
+            ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "#"),
             text2image=_to_bool(data.get("text2image"), True),
             terminal_days=_to_int_clamped(
                 data.get("terminal_days"), DEFAULT_TERMINAL_DAYS, 0, 30
@@ -688,6 +783,7 @@ class ServerConfig:
                 message.get("enable_local_translation"), False
             ),
             target_sessions=target_sessions,
+            enable_relay_to_mc=_to_bool(message.get("enable_relay_to_mc"), True),
             auto_forward_prefix=_to_str(message.get("auto_forward_prefix"), ""),
             forward_bot_self_messages=_to_bool(
                 message.get("forward_bot_self_messages"),

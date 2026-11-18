@@ -749,7 +749,10 @@ class DashboardApp {
     this.bindServerManageActions();
     // 玩家进出/卡片高度变化后立即同步右侧监控面板高度（等一帧布局结算，
     // 避免 innerHTML 重建后读到旧高度）
-    requestAnimationFrame(() => this.syncMonitorPanelHeight());
+    requestAnimationFrame(() => {
+      this.syncMonitorPanelHeight();
+      this.syncDrawerHeight();
+    });
   }
 
   // 配置里存在、但运行时没有实例的条目：未启用（enabled=false）或启用了
@@ -2747,6 +2750,7 @@ class DashboardApp {
     else if (enabled) this.updateMonitorStatusLine(server);
     // 监控面板高度双向等高：与左侧服务器面板同高（服务器面板不被动拉伸）
     this.syncMonitorPanelHeight();
+    this.syncDrawerHeight();
     if (this.monitorSeriesCache.has(server.server_name)) {
       this.renderMonitorCharts(
         server.server_name,
@@ -3227,17 +3231,24 @@ class DashboardApp {
     });
     window.addEventListener('resize', () => {
       this.syncMonitorPanelHeight();
+      this.syncDrawerHeight();
       this.redrawMonitorCharts();
       this.hideChartTooltip();
     });
     // 高度随时跟随：任一面板尺寸变化（玩家列表/图表渲染/服务器卡增减）
     // 都自动重新做监控面板等高钳制，避免异步渲染后只因一次同步就失效
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => this.syncMonitorPanelHeight());
+      const ro = new ResizeObserver(() => {
+        this.syncMonitorPanelHeight();
+        this.syncDrawerHeight();
+      });
       const sp = document.querySelector('.servers-panel');
       const mp = document.getElementById('monitor-panel');
+      const mc = document.querySelector('.main-content');
       if (sp) ro.observe(sp);
       if (mp) ro.observe(mp);
+      // 抽屉开合会改变主内容宽度（图表随之伸缩），观察它触发重绘
+      if (mc) ro.observe(mc);
       this._panelResizeObserver = ro;
     }
     // 玩家进出/卡片 innerHTML 重建等 DOM 变更即时触发跟随：MutationObserver
@@ -3249,6 +3260,7 @@ class DashboardApp {
         this._panelSyncFrame = requestAnimationFrame(() => {
           this._panelSyncFrame = 0;
           this.syncMonitorPanelHeight();
+          this.syncDrawerHeight();
         });
       });
       const sc = document.getElementById('servers-container');
@@ -3266,7 +3278,7 @@ class DashboardApp {
     const serversPanel = document.querySelector('.servers-panel');
     if (!panel || !serversPanel) return;
     if (window.innerWidth <= 900) {
-      // 单列布局：各面板自然高度，无需钳制
+      // 窄屏：卡片与监控上下堆叠，各面板自然高度，无需钳制
       panel.style.minHeight = '';
       panel.style.height = '';
       return;
@@ -3284,6 +3296,35 @@ class DashboardApp {
     }
   }
 
+  // 抽屉开合 / 面板尺寸变化后按新宽度重绘图表：过渡动画期间宽度每帧都在
+  // 变，直接重绘会读到中间值，因此延后到过渡结束（与 CSS transition 对齐）
+  scheduleChartResize() {
+    if (this._chartResizeTimer) clearTimeout(this._chartResizeTimer);
+    this._chartResizeTimer = setTimeout(() => {
+      this._chartResizeTimer = null;
+      this.syncMonitorPanelHeight();
+      this.syncDrawerHeight();
+      this.redrawMonitorCharts();
+    }, 200);
+  }
+
+  // 「功能设置」抽屉高度钳制到主内容高度：抽屉里分组很多时内容比主内容高，
+  // 若放任它撑开，整行会被拉高、左侧下方留出一大片空白。这里把高度上限钉在
+  // 主内容上，超出部分在抽屉内部滚动（标题栏固定）。
+  syncDrawerHeight() {
+    const panel = document.getElementById('settings-panel');
+    const mainContent = document.querySelector('.main-content');
+    if (!panel || !mainContent) return;
+    if (window.innerWidth <= 900 || panel.classList.contains('hidden')) {
+      // 窄屏抽屉落在主内容下方，自然高度即可
+      panel.style.maxHeight = '';
+      return;
+    }
+    const h = mainContent.offsetHeight;
+    const next = h > 0 ? h + 'px' : '';
+    if (panel.style.maxHeight !== next) panel.style.maxHeight = next;
+  }
+
   // ---------- 「功能设置」折叠面板（AI 对话 / 面板偏好） ----------
   // 折叠状态由后端 panel_prefs.json 记忆（换设备 / 刷新后保持）
   setSettingsCollapsed(collapsed, { persist = true } = {}) {
@@ -3296,6 +3337,9 @@ class DashboardApp {
     if (caret) caret.textContent = on ? '▸' : '▾';
     const toggle = document.getElementById('settings-toggle');
     if (toggle) toggle.setAttribute('aria-expanded', on ? 'false' : 'true');
+    // 抽屉开合会改变主内容宽度（图表 canvas 跟着变宽/变窄），等过渡结束后
+    // 按新尺寸重绘，否则曲线会被拉伸/压扁
+    this.scheduleChartResize();
     if (!persist) return;
     // 后端为权威；写失败只记日志，不阻塞交互（下次加载以后端为准）
     this.apiPost('panel/prefs', { settings_collapsed: on }).catch((e) => {
@@ -3313,9 +3357,15 @@ class DashboardApp {
     // 全局视图不展示也不可保存（自动刷新间隔已迁至右上角「⚙ 设置」弹窗）
     if (!server) {
       panel.classList.add('hidden');
+      // 抽屉隐藏时右列整体收掉，主内容独占整行（不依赖 :has() 的兼容性）
+      document.querySelector('.layout-main')?.classList.add('drawer-hidden');
       return;
     }
     panel.classList.remove('hidden');
+    document.querySelector('.layout-main')?.classList.remove('drawer-hidden');
+    // 抽屉刚由隐藏转可见时 offsetHeight 还不可靠，等一帧再钉高度，
+    // 否则 maxHeight 拿不到主内容高度、正文不会出现滚动条
+    requestAnimationFrame(() => this.syncDrawerHeight());
     if (typeof this.settingsCollapsed === 'boolean') {
       panel.classList.toggle('collapsed', this.settingsCollapsed);
       const caret = document.getElementById('settings-caret');
@@ -3325,23 +3375,16 @@ class DashboardApp {
         toggle.setAttribute('aria-expanded', this.settingsCollapsed ? 'false' : 'true');
       }
     }
-    const aiGroup = document.getElementById('settings-group-ai');
     const enabledBox = document.getElementById('st-ai-enabled');
     const prefixBox = document.getElementById('st-ai-prefix');
     const saveBtn = document.getElementById('settings-save');
     const status = document.getElementById('settings-status');
     const confItem = (this.configServers || [])
       .find((s) => s.server_name === server.server_name) || null;
-    if (enabledBox && prefixBox) {
-      enabledBox.checked = confItem && typeof confItem.enable_ai_chat === 'boolean'
-        ? confItem.enable_ai_chat
-        : server.enable_ai_chat !== false;
+    if (prefixBox) {
       prefixBox.value = confItem && typeof confItem.ai_chat_prefix === 'string'
         ? confItem.ai_chat_prefix
         : (server.ai_chat_prefix || '');
-      enabledBox.disabled = false;
-      prefixBox.disabled = false;
-      if (aiGroup) aiGroup.classList.remove('disabled');
       if (saveBtn) saveBtn.disabled = false;
       if (status) status.textContent = '';
     }
@@ -3432,15 +3475,39 @@ class DashboardApp {
       image: document.getElementById('st-fwd-image'),
       imageToMc: document.getElementById('st-fwd-image-to-mc'),
       imageFromMc: document.getElementById('st-fwd-image-from-mc'),
+      relay: document.getElementById('st-relay-enabled'),
       prefix: document.getElementById('st-fwd-prefix'),
       chatPrefix: document.getElementById('st-fwd-chat-prefix'),
       sessions: document.getElementById('st-fwd-sessions'),
     };
     const fwdFocused = Object.values(fwdBoxes)
       .some((el) => el && document.activeElement === el);
+    // 「转发渠道」多选框：以 enabled_directions 为准，老配置回落三个独立布尔
+    const routeBoxes = Array.from(document.querySelectorAll('.st-route'));
+    // 用户正点在某个方向勾选框上时不回写，避免自动刷新把刚点的那一下改回去
+    const routeFocused = routeBoxes.some((el) => document.activeElement === el);
+    if (routeBoxes.length && !routeFocused) {
+      const chosen = Array.isArray(confItem && confItem.enabled_directions)
+        ? confItem.enabled_directions
+        : null;
+      for (const box of routeBoxes) {
+        if (chosen) {
+          box.checked = chosen.includes(box.value);
+        } else if (box.value === 'group_to_game') {
+          box.checked = confItem ? confItem.enable_relay_to_mc !== false : true;
+        } else if (box.value === 'game_to_group') {
+          box.checked = !!(confItem && confItem.message
+            ? confItem.message.forward_chat_to_astrbot !== false
+            : true);
+        } else {
+          box.checked = confItem && typeof confItem.enable_ai_chat === 'boolean'
+            ? confItem.enable_ai_chat
+            : server.enable_ai_chat !== false;
+        }
+      }
+    }
     if (!fwdFocused) {
       const msg = (confItem && confItem.message) || {};
-      if (fwdBoxes.chat) fwdBoxes.chat.checked = msg.forward_chat_to_astrbot !== false;
       if (fwdBoxes.format) {
         fwdBoxes.format.value = typeof msg.forward_chat_format === 'string'
           ? msg.forward_chat_format
@@ -3472,6 +3539,23 @@ class DashboardApp {
           : [];
         fwdBoxes.sessions.value = sessions.join('\n');
       }
+    }
+    this.syncPrefixEnabledState();
+  }
+
+  // 开关关闭时把对应的前缀输入框置灰：避免用户改了前缀却因为总闸没开而不生效
+  syncPrefixEnabledState() {
+    const pairs = [
+      ['st-relay-enabled', 'st-fwd-prefix'],
+      ['st-fwd-chat', 'st-fwd-chat-prefix'],
+      ['st-ai-enabled', 'st-ai-prefix'],
+    ];
+    for (const [swId, inputId] of pairs) {
+      const sw = document.getElementById(swId);
+      const input = document.getElementById(inputId);
+      if (!sw || !input) continue;
+      input.disabled = !sw.checked;
+      input.title = sw.checked ? '' : '对应的方向开关已关闭，前缀暂不生效';
     }
   }
 
@@ -3526,7 +3610,9 @@ class DashboardApp {
         const fwdPrefixBox = document.getElementById('st-fwd-prefix');
         const chatPrefixBox = document.getElementById('st-fwd-chat-prefix');
         const payload = {
-          enable_ai_chat: aiEnabled,
+          // 「转发渠道」多选框 + 三个前缀：勾选的方向才启用，前缀只负责筛消息
+          enabled_directions: Array.from(document.querySelectorAll('.st-route:checked'))
+            .map((box) => box.value),
           prefix: {
             group_to_game: fwdPrefixBox ? fwdPrefixBox.value.trim() : '',
             game_to_group: chatPrefixBox ? chatPrefixBox.value.trim() : '',
@@ -3585,7 +3671,6 @@ class DashboardApp {
         const fwdImageFromMc = document.getElementById('st-fwd-image-from-mc');
         const fwdSessions = document.getElementById('st-fwd-sessions');
         if (fwdChat && fwdFormat && fwdJoin && fwdDeath && fwdAch && fwdImage && fwdPrefix && fwdSessions) {
-          msg.forward_chat_to_astrbot = !!fwdChat.checked;
           msg.forward_chat_format = fwdFormat.value.trim();
           msg.forward_join_leave_to_astrbot = !!fwdJoin.checked;
           msg.forward_death_to_astrbot = !!fwdDeath.checked;
@@ -3642,6 +3727,12 @@ class DashboardApp {
     document.getElementById('settings-toggle')?.addEventListener('click', () => {
       this.setSettingsCollapsed(!this.settingsCollapsed);
     });
+    // 三个方向开关：勾选状态即时决定对应前缀输入框是否可用
+    for (const id of ['st-relay-enabled', 'st-fwd-chat', 'st-ai-enabled']) {
+      document.getElementById(id)?.addEventListener('change', () => {
+        this.syncPrefixEnabledState();
+      });
+    }
     document.getElementById('settings-save')?.addEventListener('click', () => {
       this.saveSettingsPanel();
     });

@@ -415,18 +415,17 @@ class MessageBridge:
     def should_forward(self, config: ServerConfig, event: QueQiaoEvent) -> bool:
         """依据事件类型与配置判断是否需要转发。"""
         if event.is_chat:
+            # 总开关优先：关闭后整条「游戏 → 群」链路静音，不看前缀
+            if not config.forward_chat_to_astrbot:
+                return False
             message = component_to_text(event.raw_message) or component_to_text(
                 event.message
             )
-            # 图片转发不受文本前缀约束：否则关闭全量转发后带图消息会被整条丢弃
+            # 图片转发不受文本前缀约束：否则前缀没命中时带图消息会被整条丢弃
             image_enabled = config.forward_image_from_mc and bool(
                 extract_image_refs(message)
             )
-            return (
-                config.forward_chat_to_astrbot
-                or prefix_matches(config.forward_chat_prefix, message)
-                or image_enabled
-            )
+            return prefix_matches(config.forward_chat_prefix, message) or image_enabled
         if event.is_join or event.is_quit:
             return config.forward_join_leave_to_astrbot
         if event.is_death:
@@ -641,13 +640,13 @@ class MessageBridge:
     def should_relay(self, config: ServerConfig, text: str) -> bool:
         """判断外部消息是否应转发到 MC（按前缀过滤）。
 
-        与 AI 前缀不同：转发前缀留空表示**全部转发**，
-        因此这里不能用 `prefix_matches` 的「空即不匹配」语义。
+        总开关优先：`enable_relay_to_mc` 关闭后该方向整条链路静音。
+        前缀留空 = 全部转发，由 `prefix_matches` 统一处理（三个方向的
+        前缀都是「留空 = 全部命中」），这里不再单独分支。
         """
-        prefix = config.auto_forward_prefix
-        if not prefix:
-            return True
-        return prefix_matches(prefix, text)
+        if not config.enable_relay_to_mc:
+            return False
+        return prefix_matches(config.auto_forward_prefix, text)
 
     def strip_relay_prefix(self, config: ServerConfig, text: str) -> str:
         """去掉转发前缀。"""

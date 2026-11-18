@@ -97,9 +97,11 @@
     </div>
   </section>
 
-  <!-- 主体：标题单独一行通栏 + 服务器卡片网格 + 单服务器视图下的互通终端。
+  <!-- 主体：左侧主内容（标题 / 服务器卡片 + 监控 / 终端）+ 右侧「功能设置」
+     抽屉。抽屉展开时挤压主内容（不覆盖），折叠时收成一条竖排窄栏。
      monitor-hidden 与 monitor-panel 初始 hidden 对应：JS 渲染后按需切换 -->
   <main class="layout-main monitor-hidden">
+    <div class="main-content">
     <div class="servers-section-title" id="servers-section-title">
       <span>🌐 服务器实例状态</span>
       <!-- 面板内直接改 conf：新建条目写入 mc_servers 后热重载生效 -->
@@ -107,6 +109,7 @@
         ＋ 新建服务器
       </button>
     </div>
+    <div class="main-row">
     <section class="servers-panel">
       <div class="servers-container" id="servers-container">
         <div class="loading-box">
@@ -162,10 +165,41 @@
         </div>
       </div>
     </section>
+    </div>
 
-    <!-- 功能设置面板（可折叠）：承载 AI 对话开关与互通终端天数。自动刷新间隔
-         已迁至右上角「⚙ 设置」弹窗（全局偏好）；监控参数仍只在「⚙ 性能监控
-         设置」弹窗里维护，三边职责互不重叠。全局视图下本面板整体隐藏 -->
+    <section class="terminal-panel hidden" id="terminal-panel">
+      <div class="terminal-header">
+        <div class="terminal-title" id="terminal-title">互通终端</div>
+        <div class="terminal-actions">
+          <button id="terminal-autoscroll" class="btn btn-sm active" title="新消息自动滚动到底部；点击暂停">📌 自动滚动</button>
+          <button id="terminal-refresh" class="btn btn-sm" title="重新拉取终端日志">↻ 刷新</button>
+          <button id="terminal-clear" class="btn btn-sm" title="清空当前终端输出">清屏</button>
+        </div>
+      </div>
+      <div class="terminal-body" id="terminal-body"></div>
+      <div class="terminal-input-row">
+        <input
+          type="text"
+          id="terminal-input"
+          class="terminal-input"
+          placeholder="输入内容回车 = 广播；以 / 开头回车 = 执行指令 (如 /list)"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <select id="terminal-color" class="select-color" title="广播颜色">
+          <option value="white" selected>白</option>
+          <option value="gold">金</option>
+          <option value="green">绿</option>
+          <option value="aqua">青</option>
+          <option value="red">红</option>
+          <option value="light_purple">粉</option>
+        </select>
+        <button id="terminal-broadcast" class="btn btn-primary btn-sm">📢 广播</button>
+        <button id="terminal-cmd" class="btn btn-sm">⚡ 指令</button>
+      </div>
+    </section>
+    </div>
+
     <section class="settings-panel collapsed" id="settings-panel">
       <div class="settings-header">
         <button class="settings-toggle" id="settings-toggle" type="button"
@@ -176,23 +210,24 @@
         </button>
         <span class="settings-spacer"></span>
         <span class="settings-status" id="settings-status"></span>
+        <button class="btn btn-primary btn-sm settings-save" id="settings-save"
+          title="保存功能设置（改动落盘后即时生效、不重连）">💾 保存并生效</button>
       </div>
       <div class="settings-body" id="settings-body">
-        <div class="settings-group" id="settings-group-ai">
-          <div class="settings-group-head">
-            <span class="settings-group-title">🤖 AI 对话</span>
-          </div>
-          <label class="settings-row">
-            <span class="settings-row-label">启用 AI 对话</span>
-            <span class="settings-row-control">
-              <input type="checkbox" id="st-ai-enabled" />
-            </span>
-            <span class="settings-row-hint">游戏内聊天以 AI 前缀开头时与 AI 对话，回复以私聊发给该玩家；不影响群服互通转发</span>
-          </label>
-        </div>
         <div class="settings-group" id="settings-group-prefix">
           <div class="settings-group-head">
             <span class="settings-group-title">🔤 触发前缀</span>
+          </div>
+          <!-- 三个方向的启停合成一行多选框：勾选 = 该方向启用，取消 = 整条链路
+               静音。对应的前缀输入框会随之置灰 -->
+          <div class="settings-row">
+            <span class="settings-row-label">转发渠道</span>
+            <span class="settings-row-control route-items">
+              <label class="route-item"><input type="checkbox" class="st-route" value="group_to_game" id="st-relay-enabled" /> 群 → 游戏</label>
+              <label class="route-item"><input type="checkbox" class="st-route" value="game_to_group" id="st-fwd-chat" /> 游戏 → 群</label>
+              <label class="route-item"><input type="checkbox" class="st-route" value="game_to_ai" id="st-ai-enabled" /> 游戏 → AI</label>
+            </span>
+            <span class="settings-row-hint">勾选启用该方向；取消后整条链路静音，对应前缀不再生效</span>
           </div>
           <label class="settings-row">
             <span class="settings-row-label">群 → 游戏 触发前缀</span>
@@ -204,29 +239,22 @@
           <label class="settings-row">
             <span class="settings-row-label">游戏 → 群 触发前缀</span>
             <span class="settings-row-control">
-              <input type="text" id="st-fwd-chat-prefix" placeholder="留空 = 不转发普通聊天" autocomplete="off" spellcheck="false" />
+              <input type="text" id="st-fwd-chat-prefix" placeholder="留空 = 全部转发" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">关闭「全量转发游戏聊天」后，游戏聊天以此开头才转发到群（转发时去掉前缀）；图片转发不受此前缀限制</span>
+            <span class="settings-row-hint">游戏聊天以此开头才转发到群（转发时去掉前缀）；留空 = 全部转发；图片转发不受此前缀限制</span>
           </label>
           <label class="settings-row">
             <span class="settings-row-label">游戏 → AI 触发前缀</span>
             <span class="settings-row-control">
-              <input type="text" id="st-ai-prefix" placeholder="ai" autocomplete="off" spellcheck="false" />
+              <input type="text" id="st-ai-prefix" placeholder="#" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群；留空 = 不触发 AI</span>
+            <span class="settings-row-hint">命中该前缀的消息只走 AI，不再转发到群；留空 = 全部触发（所有游戏聊天都交给 AI，不再转发到群）</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-forward">
           <div class="settings-group-head">
             <span class="settings-group-title">📡 消息转发</span>
           </div>
-          <label class="settings-row">
-            <span class="settings-row-label">转发聊天到外部会话</span>
-            <span class="settings-row-control">
-              <input type="checkbox" id="st-fwd-chat" />
-            </span>
-            <span class="settings-row-hint">玩家游戏内聊天转发到绑定的目标会话（群/私聊）</span>
-          </label>
           <label class="settings-row">
             <span class="settings-row-label">聊天消息格式</span>
             <span class="settings-row-control">
@@ -390,42 +418,6 @@
             <span class="settings-row-hint">互通终端展示最近几天的日志（1～30，0 = 全部保留分片，默认 2：今天 + 昨天），每台服务器独立</span>
           </label>
         </div>
-        <div class="settings-footer">
-          <button class="btn btn-primary btn-sm" id="settings-save"
-            title="保存功能设置（改动落盘后即时生效、不重连）">保存并生效</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="terminal-panel hidden" id="terminal-panel">
-      <div class="terminal-header">
-        <div class="terminal-title" id="terminal-title">互通终端</div>
-        <div class="terminal-actions">
-          <button id="terminal-autoscroll" class="btn btn-sm active" title="新消息自动滚动到底部；点击暂停">📌 自动滚动</button>
-          <button id="terminal-refresh" class="btn btn-sm" title="重新拉取终端日志">↻ 刷新</button>
-          <button id="terminal-clear" class="btn btn-sm" title="清空当前终端输出">清屏</button>
-        </div>
-      </div>
-      <div class="terminal-body" id="terminal-body"></div>
-      <div class="terminal-input-row">
-        <input
-          type="text"
-          id="terminal-input"
-          class="terminal-input"
-          placeholder="输入内容回车 = 广播；以 / 开头回车 = 执行指令 (如 /list)"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <select id="terminal-color" class="select-color" title="广播颜色">
-          <option value="white" selected>白</option>
-          <option value="gold">金</option>
-          <option value="green">绿</option>
-          <option value="aqua">青</option>
-          <option value="red">红</option>
-          <option value="light_purple">粉</option>
-        </select>
-        <button id="terminal-broadcast" class="btn btn-primary btn-sm">📢 广播</button>
-        <button id="terminal-cmd" class="btn btn-sm">⚡ 指令</button>
       </div>
     </section>
   </main>

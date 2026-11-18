@@ -80,9 +80,9 @@ Every save is **partial-effect** (only the image-transfer subsystem is rebuilt; 
 
 ### Dashboard feature-settings panel
 
-Below the server cards and the performance-monitoring panel, the dashboard has a collapsible “⚙ 功能设置” (feature settings) panel that groups everything **not** monitoring-related; its collapsed state is remembered by the backend (and the panel is hidden in the “全部服务器” all-servers view):
+The dashboard has an expandable “⚙ 功能设置” (feature settings) drawer on the right that groups everything **not** monitoring-related; its expanded/collapsed state is remembered by the backend (and the drawer is hidden in the “全部服务器” all-servers view). When expanded it takes the whole right side of the page and the content on the left narrows to fill the rest, scrolling inside the drawer if the settings overflow; when collapsed it shrinks to a slim strip on the right that you click to reopen:
 
-- **AI chat** (per server): turn in-game AI chat on / off and set its trigger prefix. A chat message starting with the prefix goes to the AI only — the reply is sent to that player as a private message and the message is not forwarded to the group; an empty prefix disables AI triggering and leaves normal chat untouched. Saving writes the plugin config and takes effect immediately without rebuilding connections, so it is the same setting as `enable_ai_chat` / `ai_chat_prefix` in the WebUI
+- **Trigger prefixes** (per server): the three directions (group → game, game → group, game → AI) are enabled or disabled together from a single “转发渠道” checkbox row — tick a direction to turn it on. Each direction has its own trigger prefix, and the matching prefix input greys out when that direction is off. An empty prefix matches everything (no threshold). Saving writes the plugin config and takes effect immediately without rebuilding connections, so it is the same settings as the `prefix` group in the WebUI. The save button sits in the drawer header, so you never have to scroll to the bottom
 - **Message forwarding** (per server): toggles for chat / join-leave / death / achievement forwarding, the chat message format (`{player}` `{message}` `{display_name}` placeholders), the group→MC trigger prefix (empty = forward everything) and the target sessions (one UMO per line). These are the same settings as in the “Message-forwarding configuration” table; saving takes effect immediately without rebuilding connections
 - **Connection notification** (per server): send a notice to the target sessions when the server connects or fails to connect, with independent switches for the two cases and templates supporting the `{display_name}` `{server_name}` placeholders; the failure notice only fires once the outage outlasts the disconnect quiet period, and only for the first failure of that outage. The same settings as in the “Server-connection notification” table; saving takes effect immediately without rebuilding connections
 - **Terminal window** (per server): how many days of interop-terminal logs to load (0–30, default 2 = today plus yesterday, 0 = keep all shards). Stored at the top level of the config entry — the same setting as `terminal_days` in the WebUI; saving takes effect immediately without rebuilding connections
@@ -120,8 +120,8 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `forward_chat_to_astrbot` | bool | `true` | Relay all in-game chat to target sessions; when off, only chat matching `forward_chat_prefix` is relayed, image forwarding ignores the text prefix |
-| `forward_chat_prefix` | string | empty | Game → group trigger prefix; with full forwarding off, only chat starting with it is relayed (prefix removed) |
+| `forward_chat_to_astrbot` | bool | `true` | Relay all in-game chat to target sessions; when off, only chat matching `forward_chat_prefix` is relayed (an empty prefix still relays everything), image forwarding ignores the text prefix |
+| `forward_chat_prefix` | string | empty | Game → group trigger prefix: only chat starting with it is relayed to the group (prefix removed); empty relays everything |
 | `forward_chat_format` | string | `[{display_name}]{player}: {message}` | Chat format; supports `{player}` `{message}` `{display_name}` |
 | `forward_join_leave_to_astrbot` | bool | `false` | Forward join/quit messages (server display name appended, so the source is clear when several servers share a group) |
 | `forward_death_to_astrbot` | bool | `false` | Forward death messages (unsupported on Vanilla/Velocity) |
@@ -294,17 +294,23 @@ Example: `display_name` = `生存服`, format `[{display_name}] <{player}> {mess
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enable_ai_chat` | bool | `true` | Master switch for in-game AI chat |
-| `ai_chat_prefix` | string | `ai` | Trigger prefix: in-game chat like `ai hello` goes to the AI, replied privately; empty disables the trigger |
+| `ai_chat_prefix` | string | `#` | Game → AI trigger prefix: in-game chat like `#hello` goes to the AI, replied privately; empty triggers on everything (all in-game chat goes to the AI) |
 
 The three prefixes act in different directions and are configured independently; a given in-game message matches only one of them:
+
+Each direction has one switch and one prefix: **the switch is the master gate, the prefix only filters messages**. With the switch off the whole direction is silenced and the prefix has no effect no matter how wide it is.
+
+| Setting | Direction | Effect |
+|---------|-----------|--------|
+| `prefix.enabled_directions` | all three | Checkbox group: only ticked directions are active; unticking one silences that whole direction. The config page and the dashboard share this single switch |
 
 | Prefix | Direction | Effect |
 |--------|-----------|--------|
 | `prefix.group_to_game` | group → game | Group messages starting with it are relayed into the game; empty = all are relayed |
-| `prefix.game_to_group` | game → group | With full forwarding off, only in-game chat starting with it is relayed to the group (prefix removed); empty = ordinary chat is not relayed; image forwarding ignores this prefix |
-| `prefix.game_to_ai` | game → AI | In-game chat starting with it triggers the AI and is **not** relayed to the group; empty = not triggered |
+| `prefix.game_to_group` | game → group | Only in-game chat starting with it is relayed to the group (prefix removed); empty = everything is relayed; image forwarding ignores this prefix |
+| `prefix.game_to_ai` | game → AI | In-game chat starting with it triggers the AI and is **not** relayed to the group; empty = everything triggers (all in-game chat goes to the AI) |
 
-> Matching does word-boundary checks: a prefix ending in a letter/digit must be followed by a space or the end of the message, so `ai` will not misfire on `aim`/`airport`; letter matching is case-insensitive. Do not let `forward_chat_prefix` and `ai_chat_prefix` contain one another, or a message's routing becomes ambiguous (a startup warning is logged). Leaving `ai_chat_prefix` empty does **not** make every message trigger the AI.
+> All three prefixes share one rule: **empty means "match everything"** (no threshold is applied in that direction). Matching does word-boundary checks: a prefix ending in a letter/digit must be followed by a space or the end of the message, so `ai` will not misfire on `aim`/`airport`; letter matching is case-insensitive. Do not let `forward_chat_prefix` and `ai_chat_prefix` contain one another, or a message's routing becomes ambiguous (a startup warning is logged). Leaving `ai_chat_prefix` empty means every in-game message triggers the AI, so nothing is forwarded to the group.
 
 </details>
 
