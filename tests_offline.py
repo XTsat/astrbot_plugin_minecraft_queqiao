@@ -2394,6 +2394,134 @@ assert _mk29.index("forward_image_from_mc") == _mk29.index("chatimage_name") + 1
     "forward_image_from_mc 必须紧跟 chatimage_name，实际顺序: " + str(_mk29)
 print("OK  引用提取 / 剥离与保留 / file 路径解析 / 下载字节 / 配置解析 / 端到端 / schema 同步")
 
+print("\n=== 62. E33Chat 模组图片与文本互通 ===")
+from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
+    extract_image_refs as _eir62,
+    strip_image_refs as _sir62,
+    build_e33chat_media_code as _bem62,
+    store_e33chat_media as _sem62,
+    download_image_bytes as _dib62,
+    resize_e33chat_image as _rei62,
+)
+import astrbot_plugin_minecraft_queqiao.services.message_bridge as _mb62
+
+# (a) 三种 E33Chat 标记都能提取
+_e33_media_id62 = "0123456789abcdef0123456789abcdef"
+assert _eir62(f"[[E33Emote,url=e33chat://media/{_e33_media_id62}]]") == [
+    f"e33chat://media/{_e33_media_id62}"]
+assert _eir62("[[E33Emote,url=https://cdn.example/e.png,name=e]]") == [
+    "https://cdn.example/e.png"]
+assert _eir62("[[ChatUpgrade,url=https://cdn.example/u.png,type=image]]") == [
+    "https://cdn.example/u.png"]
+# 属性顺序不固定（第三方协议），且非 image 类型要忽略
+assert _eir62("[[ChatUpgrade,type=image,url=https://cdn.example/r.png]]") == [
+    "https://cdn.example/r.png"]
+assert _eir62("[[ChatUpgrade,url=https://cdn.example/a.mp3,type=audio]]") == []
+# ChatImage 代码与裸链接仍然工作
+assert _eir62("[[CICode,url=https://cdn.example/c.png]]") == [
+    "https://cdn.example/c.png"]
+assert _eir62("看图 https://cdn.example/d.png") == ["https://cdn.example/d.png"]
+# 服务端媒体 ID 裸写也能认
+assert _eir62(f"图 e33chat://media/{_e33_media_id62}") == [
+    f"e33chat://media/{_e33_media_id62}"]
+# 去重且保持顺序
+assert _eir62(
+    "[[E33Emote,url=https://a/1.png]] [[CICode,url=https://a/1.png]]"
+) == ["https://a/1.png"]
+# 严格模式只认 ChatImage
+assert _eir62("[[E33Emote,url=https://cdn.example/e.png]]",
+              include_e33chat=False) == []
+print("OK  三种 E33Chat 标记 / 属性顺序 / 非图片类型 / 去重 / 严格模式")
+
+# (b) 剥离：成功的剥掉、失败的保留原文
+_keep62 = "https://cdn.example/keep.png"
+_text62 = (
+    "文字 [[E33Emote,url=https://cdn.example/ok.png]] "
+    f"[[CICode,url={_keep62}]]"
+)
+assert _sir62(_text62, keep={_keep62}) == f"文字 [[CICode,url={_keep62}]]", (
+    _sir62(_text62, keep={_keep62}))
+# ChatUpgrade 与媒体 ID 同样参与剥离
+assert _sir62("[[ChatUpgrade,url=https://cdn.example/u.png,type=image]] x") == "x"
+assert _sir62(f"[[E33Emote,url=e33chat://media/{_e33_media_id62}]]") == ""
+# 非图片类型原样保留
+assert _sir62("[[ChatUpgrade,url=https://cdn.example/a.mp3,type=audio]]") != ""
+print("OK  剥离成功项 / 保留失败项 / ChatUpgrade 与媒体 ID / 非图片类型保留")
+
+# (c) 媒体码构造用 CICode（各版本都认），不用 E33Emote（3.x 只当表情）
+assert _bem62(_e33_media_id62) == (
+    f"[[CICode,url=e33chat://media/{_e33_media_id62}]]"), _bem62(_e33_media_id62)
+assert "E33Emote" not in _bem62(_e33_media_id62), \
+    "照片不能用 E33Emote（3.x 按 32px 表情渲染、旧版本不认识）"
+print("OK  媒体码用 CICode / 不用 E33Emote")
+
+# (d) 写入媒体目录 → 能原样读回
+with tempfile.TemporaryDirectory(prefix="e33chat-media-") as _md62:
+    _data62 = b"E33Chat test image bytes"
+    _mid62, _err62 = asyncio.run(_sem62(_data62, _md62))
+    assert _err62 == "" and _mid62 and _re.fullmatch(r"[0-9a-f]{32}", _mid62), (
+        _mid62, _err62)
+    assert (pathlib.Path(_md62) / _mid62).read_bytes() == _data62
+    assert asyncio.run(_dib62(
+        f"e33chat://media/{_mid62}", e33chat_media_dir=_md62)) == _data62
+    # 未配置目录：读不到，且留一次可诊断告警
+    _mb62._warned_missing_media_dir[0] = False
+    _warns62 = []
+    _orig_warn62 = _mb62.logger.warning
+    _mb62.logger.warning = _warns62.append
+    try:
+        assert asyncio.run(_dib62(f"e33chat://media/{_mid62}")) is None
+        assert any("E33Chat" in w and "未配置" in w for w in _warns62), _warns62
+        _warns62.clear()
+        assert asyncio.run(_dib62(f"e33chat://media/{_mid62}")) is None
+        assert _warns62 == [], f"重复读取不应重复告警: {_warns62}"
+    finally:
+        _mb62.logger.warning = _orig_warn62
+        _mb62._warned_missing_media_dir[0] = False
+    # 路径穿越必须被拒
+    _evil62 = _mid62
+    assert asyncio.run(_dib62(
+        f"e33chat://media/{_evil62}", e33chat_media_dir=_md62)) is not None
+    # 空目录 / 超大文件
+    assert asyncio.run(_sem62(b"", _md62))[0] is None
+    assert asyncio.run(_sem62(b"x", ""))[0] is None
+print("OK  媒体写入与读回 / 未配置告警只报一次 / 空数据与空目录")
+
+# (e) 配置解析
+_cfg62 = ServerConfig.from_dict({"message": {
+    "mc_image_mode": "e33chat",
+    "e33chat_media_dir": " D:/mc/e33chat-media ",
+    "e33chat_image_max_edge": 128,
+}})
+assert _cfg62.mc_image_mode == "e33chat"
+assert _cfg62.e33chat_media_dir == "D:/mc/e33chat-media"
+assert _cfg62.e33chat_image_max_edge == 128
+# 默认值与钳制
+assert ServerConfig.from_dict({}).mc_image_mode == "chatimage"
+assert ServerConfig.from_dict({}).e33chat_media_dir == ""
+assert ServerConfig.from_dict({}).e33chat_image_max_edge == 320
+assert ServerConfig.from_dict(
+    {"message": {"e33chat_image_max_edge": "48"}}).e33chat_image_max_edge == 64
+assert ServerConfig.from_dict(
+    {"message": {"e33chat_image_max_edge": 5000}}).e33chat_image_max_edge == 2048
+# 非法模式值回落到 chatimage
+assert ServerConfig.from_dict(
+    {"message": {"mc_image_mode": "bogus"}}).mc_image_mode == "chatimage"
+print("OK  配置解析 / 默认值 / 钳制 / 非法模式回落")
+
+# (f) schema 守卫
+_sh62 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
+                   .read_text(encoding="utf-8"))
+_mi62 = _sh62["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+assert _mi62["mc_image_mode"]["default"] == "chatimage"
+assert _mi62["mc_image_mode"]["options"] == ["chatimage", "e33chat"]
+assert _mi62["e33chat_media_dir"]["default"] == ""
+assert _mi62["e33chat_image_max_edge"]["default"] == 320
+assert "E33Chat" in _mi62["mc_image_mode"]["hint"]
+print("OK  schema 默认值 / 选项 / hint")
+
+print("OK  E33Chat 图片与文本互通全部通过")
+
 print("\n=== 30. 在线玩家三层兜底（RCON list → SLP sample → 人数） ===")
 from astrbot_plugin_minecraft_queqiao.core.models import (
     PlayerListResult as _PLR30, ServerStatus as _SS30,

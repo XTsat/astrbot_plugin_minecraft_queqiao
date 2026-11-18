@@ -141,6 +141,9 @@
 | `forward_image_to_mc` | bool | `false` | 群消息和已开启转发的 Bot 回复/自身群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
 | `chatimage_name` | string | `图片` | 图片在游戏聊天栏的显示名称 |
 | `forward_image_from_mc` | bool | `false` | 游戏内图片（CICode / 链接）自动下载后作为图片发回群 |
+| `mc_image_mode` | string | `chatimage` | 游戏图片模式：`chatimage` 只认 ChatImage 的图片代码与链接；`e33chat` 额外识别 E33Chat 的图片标记与服务端媒体 |
+| `e33chat_media_dir` | string | 空 | E33Chat 服务端图片缓存目录；仅 `e33chat` 模式且需要收发服务端媒体图片时填写，AstrBot 必须能直接读到该路径 |
+| `e33chat_image_max_edge` | int | `320` | E33Chat 模式发往游戏的群图最大边长（像素），超过则等比缩小 |
 
 > 目标会话可用 AstrBot 自带的 `/sid` 指令获取：在目标群聊/私聊发送 `/sid`，回复中的 `UMO` 就是要填的值（如 `aiocqhttp:GroupMessage:123456789`）。该列表同时决定：MC 消息转发到哪些会话、哪些会话的消息转发进 MC、以及该会话的 `mc` 指令归属哪台服务器。
 
@@ -214,6 +217,24 @@
 - `http(s)://` 链接直接下载；`file://` 本地文件仅在 AstrBot 与游戏端同机时才能读取
 - 下载失败（链接失效、本地文件不可见等）时保留原始代码/链接文本
 - 单张图片上限 5 MB、下载超时 15 秒
+
+#### E33Chat 模组支持
+
+E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/NereaFantasia/E33Chat)），聊天里用图片标记表示图片。把「游戏图片模式」(`mc_image_mode`) 设为 `e33chat` 后，插件会额外识别这些标记：
+
+| 标记 | 说明 |
+|---|---|
+| `[[E33Emote,url=...]]` | E33Chat 自己的表情 / 图片标记 |
+| `[[ChatUpgrade,url=...,type=image]]` | 第三方富文本模组标记（`type` 非 image 时忽略） |
+| `e33chat://media/<32 位十六进制>` | E33Chat 服务端媒体托管的图片 |
+
+- **游戏 → 群**：以上标记都会被识别并下载成图片发到群；`http(s)` 链接直接下载
+- **群 → 游戏**：图片写入 E33Chat 服务端媒体目录后，以 `[[CICode,url=e33chat://media/<ID>]]` 发进游戏（CICode 是各版本 E33Chat 都认的格式）
+- **服务端媒体目录**（`e33chat_media_dir`）：E33Chat 的服务端媒体**没有 HTTP 端点**，图片就存在服务端磁盘上，所以 AstrBot 必须能直接读到该目录（同机部署直接填路径；跨机需共享挂载）。**留空时**只能收发第三方图床链接，服务端媒体的图片会跳过并在日志提示一次
+- **不想配共享目录？** 在 E33Chat 客户端设置里关闭服务端媒体托管，它会回退到第三方图床（默认 uguu.se），发出的是公网链接，插件无需任何额外配置即可读取
+- E33Chat 按图片原始像素尺寸渲染，群图默认缩到最长边 320 像素（`e33chat_image_max_edge`，可调 64–2048），避免撑满聊天面板
+
+> 装了 ChatImage 的老版本 E33Chat（≤2.3.9）本身不渲染图片，图片仍由 ChatImage 显示，此时用默认的 `chatimage` 模式即可。
 
 #### 内置图片 HTTP 服务
 

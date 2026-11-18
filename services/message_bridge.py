@@ -8,9 +8,14 @@
   模组渲染（https://github.com/kitUIN/ChatImage）
 """
 
+import asyncio
+import io
 import json
+import os
 import re
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
@@ -20,6 +25,8 @@ from astrbot.api import logger
 from ..core.constants import (
     API_SET_MSG_EMOJI_LIKE,
     DEFAULT_CHATIMAGE_NAME,
+    E33CHAT_MEDIA_MAX_FILE_BYTES,
+    E33CHAT_MEDIA_SCHEME,
     ECHO_SUPPRESS_WINDOW,
     EMOJI_OK_GESTURE,
     IMAGE_DOWNLOAD_TIMEOUT,
@@ -143,6 +150,102 @@ async def resolve_image_url(
     return None, reason
 
 
+def build_e33chat_media_code(media_id: str) -> str:
+    """构造 E33Chat 客户端能解析的服务端媒体图片标记。
+
+    用 `[[CICode,...]]` 而非 `[[E33Emote,...]]`：CICode 是 ChatImage 协议，
+    E33Chat 从 2.3.10 起原生解析、也带服务端媒体托管；E33Emote 是较新版本
+    才有的「无气泡表情」（约 32 像素），只适合表情，发照片会缩成小图，
+    旧版本更不认识、会原样显示成文本。
+    """
+    return f"[[CICode,url={E33CHAT_MEDIA_SCHEME}{media_id}]]"
+
+
+def _store_e33chat_media_sync(
+    data: bytes, media_dir: str
+) -> tuple[str | None, str]:
+    """把图片原子写入 E33Chat 服务端媒体目录，返回 `(media_id, 失败原因)`。
+
+    E33Chat 按 `<媒体目录>/<32 位十六进制>` 读取，文件名即媒体 ID；
+    写入用临时文件 + rename，避免客户端读到半截文件。
+    """
+    if not media_dir:
+        return None, "未配置 E33Chat 服务端图片缓存目录"
+    if not data:
+        return None, "图片内容为空"
+    if len(data) > E33CHAT_MEDIA_MAX_FILE_BYTES:
+        return None, (
+            f"图片超过 E33Chat 单文件上限 {E33CHAT_MEDIA_MAX_FILE_BYTES} 字节"
+        )
+
+    temporary_path: Path | None = None
+    try:
+        root = Path(media_dir).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        media_id = uuid.uuid4().hex
+        final_path = root / media_id
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix=".astrbot-upload-", dir=root, delete=False
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(data)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, final_path)
+        temporary_path = None
+        return media_id, ""
+    except OSError as exc:
+        return None, f"写入 E33Chat 媒体目录失败: {exc}"
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+async def store_e33chat_media(
+    data: bytes, media_dir: str
+) -> tuple[str | None, str]:
+    """把图片写入 E33Chat 媒体目录（阻塞 IO 放线程里，避免卡事件循环）。"""
+    return await asyncio.to_thread(_store_e33chat_media_sync, data, media_dir)
+
+
+def resize_e33chat_image(
+    data: bytes, max_edge: int
+) -> tuple[bytes, bool, str | None]:
+    """按 E33Chat 的原图像素渲染方式缩小群图，保持长宽比。
+
+    E33Chat 按图片真实像素尺寸绘制，不缩放的群图会撑满聊天面板。
+    Pillow 是可选依赖：缺失时原图返回（`changed=False`），不阻断转发。
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return data, False, None
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            source_format = (source.format or "").upper()
+            image = ImageOps.exif_transpose(source)
+            if max(image.size) <= max_edge:
+                return data, False, None
+            image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            if source_format in ("JPEG", "JPG"):
+                image.convert("RGB").save(
+                    output, format="JPEG", quality=88, optimize=True
+                )
+            else:
+                if image.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+                    image = image.convert(
+                        "RGBA" if "A" in image.getbands() else "RGB"
+                    )
+                image.save(output, format="PNG", optimize=True)
+            return output.getvalue(), True, None
+    except Exception as exc:
+        return data, False, str(exc)
+
+
 async def acquire_image_bytes(comp: Any) -> tuple[bytes | None, str]:
     """把图片组件解析为本地字节，返回 `(bytes, fail_reason)`。
 
@@ -175,6 +278,38 @@ _CICODE_RE = re.compile(r"\[\[CICode,url=([^\],\s]+)(?:,[^\]]*)?\]\]", re.IGNORE
 # 裸链接：http(s) / file（file:// 一般只出现在 CICode 内，这里兼容裸写）
 _URL_RE = re.compile(r"(?:https?|file)://[^\s]+", re.IGNORECASE)
 
+# E33Chat 自有标记（E33Emote 是 3.x 的无气泡表情；ChatUpgrade 是第三方富文本）
+_E33EMOTE_RE = re.compile(
+    r"\[\[E33Emote,url=([^\],\s]+)(?:,[^\]]*)?\]\]", re.IGNORECASE
+)
+_CHATUPGRADE_RE = re.compile(r"\[\[ChatUpgrade,([^\]]+)\]\]", re.IGNORECASE)
+# 服务端媒体托管形态：e33chat://media/<32 位十六进制>
+_E33CHAT_MEDIA_RE = re.compile(
+    r"e33chat://media/[0-9a-f]{32}", re.IGNORECASE
+)
+
+
+def _chatupgrade_image_url(attrs: str) -> str | None:
+    """解析 ChatUpgrade 属性；只接受 type 缺省或为 image 的图片标记。
+
+    该标记是第三方富文本模组的协议，属性顺序不固定，因此按 key=value 逐个解析，
+    不能像 CICode 那样假定 url 是第一个参数。
+    """
+    values: dict[str, str] = {}
+    for item in attrs.split(","):
+        key, separator, value = item.partition("=")
+        if separator and value.strip():
+            values[key.strip().lower()] = value.strip()
+    url = values.get("url")
+    image_type = values.get("type", "").lower()
+    if not url or (image_type and image_type != "image"):
+        return None
+    return url
+
+
+# 「未配置 E33Chat 媒体目录」只告警一次：否则玩家每发一张图都会刷一条
+_warned_missing_media_dir: list[bool] = [False]
+
 
 def _is_image_url(url: str) -> bool:
     """判断裸链接是否按图片处理（按路径扩展名，忽略 query/fragment）。"""
@@ -182,23 +317,43 @@ def _is_image_url(url: str) -> bool:
     return bool(_IMAGE_EXT_RE.search(path))
 
 
-def extract_image_refs(text: str) -> list[str]:
-    """从游戏内聊天文本中提取图片引用（CICode url 与裸图片链接），去重保持顺序。"""
+def extract_image_refs(text: str, *, include_e33chat: bool = True) -> list[str]:
+    """从游戏内聊天文本中提取图片引用，去重并保持出现顺序。
+
+    默认同时识别 ChatImage 与 E33Chat 的标记：游戏内发什么标记取决于**玩家
+    装了什么模组**，而不是服务端配置，只认一种会让另一类玩家的图片整个丢失。
+    `include_e33chat=False` 仅用于需要严格区分两种链路的场景。
+    """
     if not text:
         return []
     refs: list[str] = []
     seen: set[str] = set()
-    for match in _CICODE_RE.finditer(text):
-        url = match.group(1).strip()
+
+    def _add(url: str) -> None:
         if url and url not in seen:
             seen.add(url)
             refs.append(url)
-    for match in _URL_RE.finditer(text):
-        raw = match.group(0)
-        url = raw.rstrip(".,;!?)]}'\"")
-        if url and url not in seen and _is_image_url(url):
-            seen.add(url)
-            refs.append(url)
+
+    if include_e33chat:
+        for match in _E33EMOTE_RE.finditer(text):
+            _add(match.group(1).strip())
+        for match in _CHATUPGRADE_RE.finditer(text):
+            _add(_chatupgrade_image_url(match.group(1)) or "")
+        for match in _E33CHAT_MEDIA_RE.finditer(text):
+            _add(match.group(0))
+
+    for match in _CICODE_RE.finditer(text):
+        _add(match.group(1).strip())
+
+    # 标记类 URL 上面已提取；先把标记整体删掉再扫裸链接，否则可选的 name
+    # 参数会被当成第二个畸形 URL 的尾巴
+    url_text = _CICODE_RE.sub("", _E33EMOTE_RE.sub("", text))
+    if include_e33chat:
+        url_text = _CHATUPGRADE_RE.sub("", url_text)
+    for match in _URL_RE.finditer(url_text):
+        url = match.group(0).rstrip(".,;!?)]}'\"")
+        if _is_image_url(url):
+            _add(url)
     return refs
 
 
@@ -224,7 +379,22 @@ def strip_image_refs(text: str, keep: set[str] | None = None) -> str:
             return raw
         return "" if _is_image_url(url) else raw
 
+    def _e33emote(match: re.Match) -> str:
+        url = match.group(1).strip()
+        return match.group(0) if url in keep else ""
+
+    def _chatupgrade(match: re.Match) -> str:
+        url = _chatupgrade_image_url(match.group(1))
+        if not url:
+            return match.group(0)
+        return match.group(0) if url in keep else ""
+
+    text = _E33EMOTE_RE.sub(_e33emote, text)
+    text = _CHATUPGRADE_RE.sub(_chatupgrade, text)
     text = _CICODE_RE.sub(_cic, text)
+    text = _E33CHAT_MEDIA_RE.sub(
+        lambda match: match.group(0) if match.group(0) in keep else "", text
+    )
     text = _URL_RE.sub(_url, text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
@@ -248,12 +418,45 @@ async def download_image_bytes(
     url: str,
     timeout: float = IMAGE_DOWNLOAD_TIMEOUT,
     max_bytes: int = MAX_IMAGE_DOWNLOAD_BYTES,
+    e33chat_media_dir: str = "",
 ) -> bytes | None:
-    """把图片引用（http(s)/file 链接）取成本地字节；失败返回 None。
+    """把图片引用（http(s)/file 链接或 E33Chat 服务端媒体）取成本地字节。
 
     file:// 仅当文件存在于本机（AstrBot 与游戏同机、或文件可访问）时有效；
-    http(s) 用 aiohttp 下载并限制大小。任何异常都不外抛，由调用方决定降级。
+    http(s) 用 aiohttp 下载并限制大小。E33Chat 服务端媒体（e33chat://media/<ID>）
+    的图片实际落在服务端媒体目录，必须配置 `e33chat_media_dir` 且该目录对
+    AstrBot 可见——E33Chat 服务端不提供 HTTP 端点，只能读文件。
+    任何异常都不外抛，由调用方决定降级。
     """
+    media_match = _E33CHAT_MEDIA_RE.fullmatch(url)
+    if media_match:
+        media_id = url.rsplit("/", 1)[-1].lower()
+        if not e33chat_media_dir:
+            if not _warned_missing_media_dir[0]:
+                _warned_missing_media_dir[0] = True
+                logger.warning(
+                    f"[{PLUGIN_NAME}] ⚠️ 收到 E33Chat 服务端媒体图片"
+                    f"（e33chat://media/{media_id}），但未配置「E33Chat 服务端"
+                    "图片缓存目录」，无法读取该图片。请在面板「功能设置 → "
+                    "转发功能」里填写该目录（AstrBot 需能直接访问）"
+                )
+            return None
+        media_max = min(max_bytes, E33CHAT_MEDIA_MAX_FILE_BYTES)
+        try:
+            root = Path(e33chat_media_dir).expanduser().resolve()
+            path = (root / media_id).resolve()
+            # 只允许读媒体目录下的直接子文件，防止 ../ 穿越
+            if path.parent != root:
+                return None
+            if path.stat().st_size > media_max:
+                return None
+            with path.open("rb") as media_file:
+                data = media_file.read(media_max + 1)
+        except OSError as exc:
+            logger.debug(f"[{PLUGIN_NAME}] 读取 E33Chat 媒体失败 {media_id}: {exc}")
+            return None
+        return data if 0 < len(data) <= media_max else None
+
     if url.startswith(("file://", "file:/")):
         path = file_uri_to_local_path(url)
         if not path:
@@ -529,7 +732,9 @@ class MessageBridge:
         images: list = []
         converted: list[str] = []
         for ref in refs:
-            data = await download_image_bytes(ref)
+            data = await download_image_bytes(
+                ref, e33chat_media_dir=config.e33chat_media_dir
+            )
             if data is None:
                 continue
             try:

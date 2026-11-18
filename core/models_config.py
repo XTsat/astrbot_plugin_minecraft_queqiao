@@ -20,6 +20,7 @@ from .constants import (
     DEFAULT_CONNECT_FAIL_NOTIFY_FORMAT,
     DEFAULT_CONNECT_NOTIFY_FORMAT,
     DEFAULT_DISPLAY_NAME,
+    DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
     DEFAULT_LOW_FREQUENCY_INTERVAL,
     DEFAULT_LOW_FREQUENCY_THRESHOLD,
     DEFAULT_MONITOR_INTERVAL,
@@ -27,6 +28,8 @@ from .constants import (
     DEFAULT_MONITOR_TPS_COMMAND,
     DEFAULT_PLATFORM_NAMES,
     DEFAULT_QUIET_HOURS_ENABLED,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_QUIET_HOURS_END,
     DEFAULT_QUIET_HOURS_ITEMS,
     DEFAULT_QUIET_HOURS_START,
@@ -434,6 +437,13 @@ class ServerConfig:
     chatimage_name: str = DEFAULT_CHATIMAGE_NAME
     # 游戏内聊天消息中的图片（ChatImage CICode 代码 / 图片链接）下载后作为图片转发到外部
     forward_image_from_mc: bool = False
+    # 游戏图片模式：chatimage = 只认 ChatImage 代码与图片链接；
+    # e33chat = 额外识别 E33Chat 的 E33Emote / ChatUpgrade 标记与服务端媒体 ID
+    mc_image_mode: str = "chatimage"
+    # E33Chat 服务端媒体目录（AstrBot 可访问的路径）；留空时 e33chat://media 读不到
+    e33chat_media_dir: str = ""
+    # E33Chat 群图发往游戏前的最大像素边长；E33Chat 按原图像素尺寸渲染
+    e33chat_image_max_edge: int = DEFAULT_E33CHAT_IMAGE_MAX_EDGE
 
     # ---- 远程指令 ----
     cmd_enabled: bool = True
@@ -809,6 +819,19 @@ class ServerConfig:
             ).strip()
             or DEFAULT_CHATIMAGE_NAME,
             forward_image_from_mc=_to_bool(message.get("forward_image_from_mc"), False),
+            mc_image_mode=(
+                "e33chat"
+                if _to_str(message.get("mc_image_mode"), "chatimage").strip().lower()
+                == "e33chat"
+                else "chatimage"
+            ),
+            e33chat_media_dir=_to_str(message.get("e33chat_media_dir"), "").strip(),
+            e33chat_image_max_edge=_to_int_clamped(
+                message.get("e33chat_image_max_edge"),
+                DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                E33CHAT_IMAGE_MAX_EDGE_MIN,
+                E33CHAT_IMAGE_MAX_EDGE_MAX,
+            ),
             cmd_enabled=_to_bool(cmd.get("enabled"), True),
             cmd_white_black_list=list_mode,
             cmd_list=_to_list(

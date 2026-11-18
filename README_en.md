@@ -136,6 +136,9 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 | `forward_image_to_mc` | bool | `false` | Relay group images and enabled bot reply/self-message images into the game (requires ChatImage on the client to render; otherwise the CICode text is shown) |
 | `chatimage_name` | string | `图片` | In-game display name for the image |
 | `forward_image_from_mc` | bool | `false` | In-game images (CICode / links) downloaded and sent back as images |
+| `mc_image_mode` | string | `chatimage` | Game image mode: `chatimage` only understands ChatImage codes and links; `e33chat` additionally understands E33Chat image tags and server media |
+| `e33chat_media_dir` | string | empty | E33Chat server image cache directory; only needed in `e33chat` mode when relaying server-media images, and AstrBot must be able to read the path directly |
+| `e33chat_image_max_edge` | int | `320` | Max edge length (px) for group images sent into the game in E33Chat mode; larger images are scaled down |
 
 > Get a session's UMO with **AstrBot's built-in `/sid` command**: send `/sid` in the target group/DM, and the `UMO` field in the reply is the value to fill in (e.g. `aiocqhttp:GroupMessage:123456789`). This list drives three things at once: which sessions receive MC messages, which sessions' messages are relayed into MC, and which server the `mc` commands issued in that session belong to.
 
@@ -211,6 +214,24 @@ With `forward_image_from_mc` enabled, ChatImage `[[CICode,url=...]]` codes or im
 - `http(s)://` links are downloaded directly; `file://` local files are only readable when AstrBot runs on the same machine as the game
 - On download failure (dead link, invisible local file, etc.) the original code/link text is kept
 - 5 MB per image, 15 s download timeout
+
+#### E33Chat support
+
+E33Chat is a separate chat mod ([NereaFantasia/E33Chat](https://github.com/NereaFantasia/E33Chat)) that represents images with tags in chat. Setting the game image mode (`mc_image_mode`) to `e33chat` makes the plugin understand these tags:
+
+| Tag | Meaning |
+|---|---|
+| `[[E33Emote,url=...]]` | E33Chat's own emote / image tag |
+| `[[ChatUpgrade,url=...,type=image]]` | Third-party rich-message tag (ignored when `type` is not image) |
+| `e33chat://media/<32 hex chars>` | Image hosted by the E33Chat server |
+
+- **Game → group**: all of the above are recognised, downloaded and sent to the group; `http(s)` links are downloaded directly
+- **Group → game**: the image is written into the E33Chat server media directory and sent into the game as `[[CICode,url=e33chat://media/<ID>]]` (CICode is understood by every E33Chat version)
+- **Server media directory** (`e33chat_media_dir`): E33Chat server media has **no HTTP endpoint** — the image sits on the server's disk, so AstrBot must be able to read that directory directly (a plain path when co-located; a shared mount when on separate machines). When left **empty**, only third-party image-bed links work, and server-media images are skipped with a single log hint
+- **Prefer not to set up a shared directory?** Turn off server media hosting in the E33Chat client and it falls back to a third-party host (uguu.se by default), emitting a public link the plugin can read with no extra configuration
+- E33Chat renders images at their native pixel size, so group images are scaled to a 320px longest edge by default (`e33chat_image_max_edge`, adjustable 64–2048) to avoid filling the chat panel
+
+> Older E33Chat (≤2.3.9) does not render images itself — they are still displayed by ChatImage, so keep the default `chatimage` mode there.
 
 #### Built-in image HTTP service
 

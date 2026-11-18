@@ -23,6 +23,7 @@ from ..core.constants import (
     DEFAULT_CONNECT_FAIL_NOTIFY_DELAY,
     DEFAULT_CONNECT_FAIL_NOTIFY_FORMAT,
     DEFAULT_CONNECT_NOTIFY_FORMAT,
+    DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
     DEFAULT_QUIET_HOURS_ENABLED,
     DEFAULT_QUIET_HOURS_END,
@@ -33,6 +34,8 @@ from ..core.constants import (
     DEFAULT_REVERSE_PORT,
     DEFAULT_TERMINAL_DAYS,
     DEFAULT_WS_URL,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     PLUGIN_NAME,
     QUIET_HOURS_ITEM_KEYS,
     TERMINAL_DAYS_MAX,
@@ -1432,6 +1435,18 @@ class WebApiController:
             ),
             "forward_image_to_mc": _as_bool(msg.get("forward_image_to_mc"), False),
             "forward_image_from_mc": _as_bool(msg.get("forward_image_from_mc"), False),
+            "mc_image_mode": (
+                "e33chat"
+                if str(msg.get("mc_image_mode") or "").strip().lower() == "e33chat"
+                else "chatimage"
+            ),
+            "e33chat_media_dir": str(msg.get("e33chat_media_dir") or ""),
+            "e33chat_image_max_edge": _as_int_clamped(
+                msg.get("e33chat_image_max_edge"),
+                DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                E33CHAT_IMAGE_MAX_EDGE_MIN,
+                E33CHAT_IMAGE_MAX_EDGE_MAX,
+            ),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
         }
 
@@ -1716,6 +1731,9 @@ class WebApiController:
                 "forward_achievement_to_astrbot",
                 "forward_image_to_mc",
                 "forward_image_from_mc",
+                "mc_image_mode",
+                "e33chat_media_dir",
+                "e33chat_image_max_edge",
                 "auto_forward_prefix",
             ):
                 if key not in message_payload:
@@ -1729,6 +1747,20 @@ class WebApiController:
                     msg[key] = _as_bool(
                         message_payload[key],
                         True if key in ("forward_chat_to_astrbot", "enable_relay_to_mc") else False,
+                    )
+                elif key == "e33chat_image_max_edge":
+                    msg[key] = _as_int_clamped(
+                        message_payload[key],
+                        DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+                        E33CHAT_IMAGE_MAX_EDGE_MIN,
+                        E33CHAT_IMAGE_MAX_EDGE_MAX,
+                    )
+                elif key == "mc_image_mode":
+                    msg[key] = (
+                        "e33chat"
+                        if str(message_payload[key] or "").strip().lower()
+                        == "e33chat"
+                        else "chatimage"
                     )
                 else:
                     msg[key] = str(message_payload[key] or "").strip()

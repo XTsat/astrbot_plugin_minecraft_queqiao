@@ -20,6 +20,8 @@ from astrbot.core.star.filter.command import GreedyStr
 from .core.constants import (
     CONNECT_FAIL_NOTIFY_DELAY_MAX,
     CONNECT_FAIL_NOTIFY_DELAY_MIN,
+    E33CHAT_IMAGE_MAX_EDGE_MAX,
+    E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_IMAGE_HTTP_HOST,
     DEFAULT_IMAGE_HTTP_PORT,
     DEFAULT_IMAGE_UPLOAD_TIMEOUT,
@@ -47,8 +49,12 @@ from .services.image_bed import (
 )
 from .services.message_bridge import (
     MessageBridge,
+    acquire_image_bytes,
     build_chatimage_code,
+    build_e33chat_media_code,
+    resize_e33chat_image,
     resolve_image_url,
+    store_e33chat_media,
 )
 from .services.metrics import MetricsCollector
 from .services.monitor import MonitorCollector
@@ -237,6 +243,9 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_achievement_to_astrbot",
         "forward_image_to_mc",
         "forward_image_from_mc",
+        "mc_image_mode",
+        "e33chat_media_dir",
+        "e33chat_image_max_edge",
         "auto_forward_prefix",
         "target_sessions",
         "terminal_days",
@@ -292,6 +301,15 @@ class MinecraftQueQiaoPlugin(Star):
                 else:
                     # 类型不合法（如字符串）不应用，避免破坏运行时列表
                     continue
+            elif key == "e33chat_image_max_edge":
+                # 群图最大边长：按 schema 的范围钳制，避免面板传入越界值
+                config.e33chat_image_max_edge = max(
+                    E33CHAT_IMAGE_MAX_EDGE_MIN,
+                    min(
+                        E33CHAT_IMAGE_MAX_EDGE_MAX,
+                        _to_int(fields.get(key), config.e33chat_image_max_edge),
+                    ),
+                )
             elif key == "terminal_days":
                 # 互通终端加载天数（每台服务器独立）：0~30 钳制
                 config.terminal_days = max(
@@ -1690,6 +1708,30 @@ class MinecraftQueQiaoPlugin(Star):
         path = brief(getattr(comp, "path", ""))
         return f"url={url!r} file={file_!r} path={path!r}"
 
+    async def _store_group_image_for_e33chat(
+        self, comp: object, config: ServerConfig
+    ) -> tuple[str | None, str]:
+        """把群图片写入 E33Chat 服务端媒体目录，返回 `(media_id, 失败原因)`。
+
+        仅在 E33Chat 模式且配置了媒体目录时使用；拿不到字节、目录未配置、
+        写入失败都返回 `(None, 原因)`，由调用方回退到图床链接。
+        """
+        if not config.e33chat_media_dir:
+            return None, "未配置 E33Chat 服务端图片缓存目录"
+        data, reason = await acquire_image_bytes(comp)
+        if not data:
+            return None, reason
+        # E33Chat 按原图像素尺寸渲染，不缩放会撑满聊天面板
+        data, _, resize_error = await asyncio.to_thread(
+            resize_e33chat_image, data, config.e33chat_image_max_edge
+        )
+        if resize_error:
+            logger.warning(
+                f"[{PLUGIN_NAME}][{config.server_name}] "
+                f"E33Chat 图片缩小失败，保留原图: {resize_error}"
+            )
+        return await store_e33chat_media(data, config.e33chat_media_dir)
+
     async def _relay_to_minecraft(
         self,
         event: AstrMessageEvent,
@@ -1758,6 +1800,15 @@ class MinecraftQueQiaoPlugin(Star):
             skip_reason: str | None = None
             if images and config.forward_image_to_mc:
                 for comp in images:
+                    if config.mc_image_mode == "e33chat":
+                        media_id, reason = await self._store_group_image_for_e33chat(
+                            comp, config
+                        )
+                        if media_id:
+                            image_codes.append(
+                                build_e33chat_media_code(media_id)
+                            )
+                            continue
                     url, reason = await resolve_image_url(
                         comp, self.image_bed
                     )

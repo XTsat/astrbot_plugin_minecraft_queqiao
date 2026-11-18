@@ -10,3 +10,6 @@ venv/
 .DS_Store
 .notes/
 .dsh-vision-router/
+
+.runs/
+RUN_REPORT.md

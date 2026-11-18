@@ -244,6 +244,25 @@
                 "description": "转发游戏内图片到外部会话",
                 "hint": "游戏内聊天消息中的图片（ChatImage 的 [[CICode,url=...]] 代码或直接贴出的图片链接）自动下载后作为图片发送到外部会话。默认关闭。下载失败（如 file:// 本地文件不在本机、链接失效）时保留原始文本（代码/链接），不静默丢失",
                 "default": false
+              },
+              "mc_image_mode": {
+                "type": "string",
+                "description": "游戏图片模式",
+                "hint": "ChatImage（默认）：只认 ChatImage 的 [[CICode,url=...]] 代码与图片链接；E33Chat：额外识别 E33Chat 的 E33Emote / ChatUpgrade 图片标记与服务端媒体 ID（e33chat://media/...）。装了 E33Chat 的服务端选 E33Chat",
+                "options": ["chatimage", "e33chat"],
+                "default": "chatimage"
+              },
+              "e33chat_media_dir": {
+                "type": "string",
+                "description": "E33Chat 服务端图片缓存目录",
+                "hint": "仅 E33Chat 模式且需要收发服务端媒体图片时填写：E33Chat 把图片存在服务端的 e33chat-media 目录（如 world/serverconfig/e33chat-media），AstrBot 必须能直接读到该路径。留空则只能收发第三方图床链接",
+                "default": ""
+              },
+              "e33chat_image_max_edge": {
+                "type": "int",
+                "description": "E33Chat 群图最大边长",
+                "hint": "仅 E33Chat 模式生效：E33Chat 按图片原始像素尺寸渲染，发送前把超过此像素边长的群图等比缩小，默认 320。ChatImage 模式不受影响",
+                "default": 320
               }
             }
           },

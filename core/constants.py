@@ -200,6 +200,21 @@ DEFAULT_IMAGE_HTTP_PORT = 8765
 IMAGE_HOST_TTL = 1800  # 30 分钟
 IMAGE_HOST_MAX_IMAGES = 500
 
+# ---- E33Chat 模组图片 ----
+
+# E33Chat 自带图片上传：客户端把图传到图床（默认 uguu.se，可自定义）或服务端
+# 媒体托管，聊天里留下图片标记。两种标记都要认：
+#   [[CICode,url=...]]        与 ChatImage 共用（E33Chat 2.3.10+ 原生解析）
+#   [[E33Emote,url=...]]      E33Chat 3.x 的无气泡表情
+#   [[ChatUpgrade,url=...]]   第三方富文本模组
+# 服务端媒体托管形态为 e33chat://media/<32 位十六进制>，图片实际落在服务端
+# 媒体目录里，AstrBot 必须能读到该目录才能取出字节
+E33CHAT_MEDIA_SCHEME = "e33chat://media/"
+E33CHAT_MEDIA_MAX_FILE_BYTES = 8 * 1024 * 1024  # 与服务端单文件上限一致
+DEFAULT_E33CHAT_IMAGE_MAX_EDGE = 320
+E33CHAT_IMAGE_MAX_EDGE_MIN = 64
+E33CHAT_IMAGE_MAX_EDGE_MAX = 2048
+
 # ---- MC → 外部：游戏内图片转发 ----
 
 # 游戏内聊天消息里的图片（ChatImage [[CICode,url=...]] 代码或直接贴出的图片链接）
