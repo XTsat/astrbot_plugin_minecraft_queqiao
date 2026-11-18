@@ -210,8 +210,8 @@ IMAGE_DOWNLOAD_TIMEOUT = 15  # 秒
 # ---- 性能监控（TPS / 延迟） ----
 # 监控采样按天分片持久化到 data_dir/monitor/<server>/YYYY-MM-DD.jsonl；
 # TPS 通过 RCON 执行 TPS 指令获取（Bukkit 系 tps / forge tps / spark tps 等），
-# 默认 "auto"：按 get_status 返回的服务端类型自动选择指令（见
-# services/monitor.resolve_tps_command）；显式填写具体指令则固定使用。
+# 默认 "auto"：按 get_status / SLP / 实测指令多源识别的服务端品牌给出候选
+# 指令并依次尝试（见 services/monitor.tps_command_candidates）；显式填写则固定使用。
 # 延迟为鹊桥 API（get_status）往返耗时，无需服务端安装额外插件、无需 RCON。
 DEFAULT_MONITOR_INTERVAL = 60  # 采集间隔（秒）
 DEFAULT_MONITOR_RETENTION_DAYS = 7  # 历史采样保留天数，超出自动清理
@@ -241,6 +241,12 @@ MONITOR_AUTO_REFRESH_MAX = 3600
 # 延迟采样专用的 get_status 响应超时。比 API_TIMEOUT(10s) 更短：
 # 延迟采不到时不值得为一个指标干等 10 秒（TPS 与状态另有来源）
 MONITOR_API_TIMEOUT = 5
+# 品牌识别与 TPS 指令试错的节流间隔（秒）：
+# - 品牌未知时经 get_status 探测服务端类型，失败后隔这么久再试
+# - auto 模式下全部候选 TPS 指令都执行失败后隔这么久再重试，避免为没有
+#   TPS 指令的服务端（原版 / 未装 Spark 的 Fabric）每轮连发多条无效指令
+MONITOR_BRAND_PROBE_RETRY_SECONDS = 300
+MONITOR_TPS_RETRY_SECONDS = 300
 
 
 def prefix_matches(prefix: str, text: str) -> bool:

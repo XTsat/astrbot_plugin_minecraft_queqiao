@@ -45,26 +45,46 @@ from ..core.constants import (
     MONITOR_API_TIMEOUT,
     MONITOR_AUTO_REFRESH_MAX,
     MONITOR_AUTO_REFRESH_MIN,
+    MONITOR_BRAND_PROBE_RETRY_SECONDS,
     MONITOR_MIN_INTERVAL,
     MONITOR_REALTIME_MAX,
     MONITOR_REALTIME_MIN,
+    MONITOR_TPS_RETRY_SECONDS,
     PLUGIN_NAME,
 )
 from ..core.models_config import ServerConfig
-from .slp_ping import brand_from_slp, mc_ping
+from .slp_ping import brand_from_slp, brand_from_text, mc_ping
 
 if TYPE_CHECKING:
     from ..core.server_manager import ServerManager
 
 # TPS 标准输出：`TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0`
-# Paper/Spigot/spark 均含该行；前缀可能带颜色代码或其它装饰
+# Paper/Spigot/spark 均含该行；前缀可能带颜色代码或其它装饰。窗口列表可能
+# 更长（`1m, 5m, 15m, 1h, 6h, 24h`），值可能带 `*` 标记（spark 标注采样未满）
 _TPS_RE = re.compile(
-    r"TPS from last 1m, 5m, 15m:\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)",
+    r"TPS\s+from\s+last\s+1m[^:\r\n]*:\s*([\d.]+)\*?\s*,\s*([\d.]+)\*?\s*,"
+    r"\s*([\d.]+)\*?",
     re.IGNORECASE,
 )
 # 兜底：无前缀的旧版输出（行内恰好三个逗号分隔的浮点数），但必须处于
 # TPS 语境，避免把玩家名/其它数字行误判为 TPS
 _TPS_BARE_RE = re.compile(r"([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)")
+# Forge / NeoForge 的 tps 指令没有 1m/5m/15m 三档：每维度一行，末尾一行
+# Overall 汇总，形如：
+#   Dim minecraft:overworld (minecraft:overworld): Mean tick time: 2.793 ms. Mean TPS: 20.000
+#   Overall: Mean tick time: 4.424 ms. Mean TPS: 18.750
+# 优先取 Overall 汇总行；无 Overall（输出被截断 / 旧版）时取首条维度行。
+# 非英文语言的服务端会输出本地化文本（NeoForge 中文：概述：…平均 TPS：…），
+# 因此关键字同时匹配中文。
+_FORGE_OVERALL_RE = re.compile(
+    r"(?:Overall|概述)\s*[:：][^\r\n]*?(?:Mean\s*TPS|平均\s*TPS)\s*[:：]\s*([\d.]+)",
+    re.IGNORECASE,
+)
+_FORGE_TPS_RE = re.compile(
+    r"(?:Mean\s*TPS|平均\s*TPS)\s*[:：]\s*([\d.]+)", re.IGNORECASE
+)
+# § 后跟一位格式/颜色代码：RCON 回传可能带颜色码，匹配前先剥离
+_SECTION_RE = re.compile(r"§.")
 # server_name 转安全文件名：仅保留字母数字、_、-、.，其余替换为 _
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.\-]+")
 
@@ -76,21 +96,31 @@ METRIC_LATENCY = "latency"
 MONITOR_METRICS = (METRIC_TPS, METRIC_TPS_5M, METRIC_TPS_15M, METRIC_LATENCY)
 
 
-def parse_tps(output: str | None) -> tuple[float, float, float] | None:
+def parse_tps(
+    output: str | None,
+) -> tuple[float | None, float | None, float | None] | None:
     """解析服务端 tps 指令输出为 ``(1m, 5m, 15m)``；无法解析返回 None。
 
     兼容格式：
     - Paper/Spigot：``TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0``
     - spark：前缀带装饰（如 ``⏱  TPS from last...``），同一正则命中
+    - Forge/NeoForge：``Overall: Mean tick time: 4.4 ms. Mean TPS: 18.750``
+      （只有单值均值，没有三档窗口；返回 ``(18.75, None, None)``，
+      无 Overall 行时取首条维度行）
     - 旧版裸三数（前提是行内含 "TPS" 字样，避免误伤其它输出）
     - 原版端 ``Unknown command`` / 指令被拒 → None
     """
     if not output:
         return None
-    text = output.strip()
+    text = _SECTION_RE.sub("", output).strip()
     matched = _TPS_RE.search(text)
     if matched:
-        return tuple(float(group) for group in matched.groups())
+        values = matched.groups()
+        return (float(values[0]), float(values[1]), float(values[2]))
+    # Forge / NeoForge 只提供单个 Mean TPS（无 1m/5m/15m 三档）
+    forge = _FORGE_OVERALL_RE.search(text) or _FORGE_TPS_RE.search(text)
+    if forge:
+        return float(forge.group(1)), None, None
     if "TPS" in text.upper():
         bare = _TPS_BARE_RE.search(text)
         if bare:
@@ -104,37 +134,65 @@ def safe_server_name(server_name: str) -> str:
     return cleaned or "server"
 
 
-# 布克特系服务端品牌：均原生支持 tps 指令
-_BUKKIT_BRANDS = (
-    "paper", "spigot", "bukkit", "purpur", "pufferfish", "leaves",
-    "sponge", "folia",
-)
+# auto 模式的通用兜底指令：品牌识别可能被 MOTD 广告误导，或用户换过服务端
+# 核心，品牌指令失败后依次尝试这些常用指令（去重后追加在品牌候选之后）。
+# 原版端没有 TPS 指令，全部失败后进入冷却（见 MONITOR_TPS_RETRY_SECONDS），
+# 不会每轮都连发无效指令。
+_AUTO_FALLBACK_COMMANDS = ("tps", "forge tps", "neoforge tps", "spark tps")
+# 品牌来源优先级：get_status（服务端自报，最权威）> TPS 指令实测 > SLP
+# 版本名/MOTD（可被伪造或混入广告文本）。高优先级可覆盖低优先级，反向不覆盖。
+_BRAND_SOURCE_PRIORITY = {"status": 3, "command": 2, "slp": 1}
 
 
-def resolve_tps_command(server_type: str | None, preference: str) -> str:
-    """解析最终要执行的 TPS 指令。
+def tps_command_candidates(server_type: str | None, preference: str) -> list[str]:
+    """auto 模式下按服务端品牌给出候选 TPS 指令（按尝试顺序）。
 
-    ``preference`` 为 ``auto``/空时按 ``server_type``（get_status 返回的
-    服务端核心，如 ``forge 1.20.1``、``Paper 1.20.4``）自动选择：
-    - Forge → ``forge tps``（Forge 自带指令）
-    - Fabric/Quilt → ``spark tps``（无内置 tps 指令，须装 Spark 模组）
-    - Paper/Spigot/Bukkit 等布克特系 → ``tps``
-    - 未知/无缓存 → ``tps``（默认尝试，解析失败时状态行会提示）
-    显式填写具体指令时固定使用，不受服务端类型影响。
+    - NeoForge：``neoforge tps`` → ``forge tps``（NeoForge 1.20.1 仍是
+      旧命令根，1.20.2+ 才改为 ``neoforge``，两条都要覆盖）
+    - Forge：``forge tps``
+    - Fabric/Quilt：``spark tps``（无内置 tps 指令，须装 Spark 模组）
+    - Paper/Spigot/Bukkit 等布克特系：``tps``
+    - 未知/无缓存：从 ``tps`` 起步
+
+    末尾统一追加通用兜底指令（去重）：采集侧执行到能解析出数值的指令为止，
+    品牌识别错误时仍有机会采到 TPS。显式填写具体指令时只返回该指令，不做
+    自动回退，保证行为可预期。
     """
     pref = (preference or "").strip()
     if pref and pref.lower() != "auto":
-        return pref
-    if server_type:
-        brand = server_type.lower()
-        if "forge" in brand:
-            return "forge tps"
-        if "fabric" in brand or "quilt" in brand:
-            return "spark tps"
-        if any(key in brand for key in _BUKKIT_BRANDS):
-            return "tps"
-    # auto 且未识别出类型：默认尝试 Bukkit 系 tps（覆盖面最广，失败会在状态行提示）
-    return "tps"
+        return [pref]
+    brand = brand_from_text(server_type) if server_type else None
+    if brand == "neoforge":
+        first = ["neoforge tps", "forge tps"]
+    elif brand == "forge":
+        first = ["forge tps"]
+    elif brand in ("fabric", "quilt"):
+        first = ["spark tps"]
+    elif brand:
+        # 其余布克特系品牌（paper/spigot/purpur/folia 等）原生支持 tps
+        first = ["tps"]
+    else:
+        first = []
+    return first + [cmd for cmd in _AUTO_FALLBACK_COMMANDS if cmd not in first]
+
+
+def resolve_tps_command(server_type: str | None, preference: str) -> str:
+    """auto 模式下优先执行的 TPS 指令（候选列表首个）；显式指令原样返回。"""
+    return tps_command_candidates(server_type, preference)[0]
+
+
+def brand_from_tps_command(command: str) -> str | None:
+    """从实测成功的 TPS 指令反推服务端品牌；仅 forge/neoforge 可唯一确定。
+
+    ``spark tps`` 在 Fabric/Quilt/Paper 上都可能可用，``tps`` 覆盖整个布克特
+    系，均不足以反推具体品牌。
+    """
+    normalized = " ".join((command or "").lower().split())
+    if normalized == "neoforge tps":
+        return "neoforge"
+    if normalized == "forge tps":
+        return "forge"
+    return None
 
 
 @dataclass
@@ -661,9 +719,21 @@ class MonitorCollector:
         self._configs: dict[str, ServerConfig] = {}
         # SLP 直连 ping 实现；测试可替换注入
         self._ping = mc_ping
-        # server_name -> 最近一次 SLP ping 识别到的服务端品牌（如 "forge"），
-        # 供 auto 模式的 TPS 指令解析使用；随时间推移自动更新
+        # server_name -> 最近一次识别到的服务端品牌（如 "forge"），供 auto
+        # 模式的 TPS 指令解析与状态展示使用；由 get_status / 实测成功的
+        # TPS 指令 / SLP ping 多源合并（见 _remember_brand 的来源优先级）
         self._server_types: dict[str, str] = {}
+        # server_name -> 品牌来源（status / command / slp），决定覆盖优先级
+        self._brand_sources: dict[str, str] = {}
+        # server_name -> 下次允许经 get_status 探测品牌的 monotonic 时刻
+        self._brand_probe_after: dict[str, float] = {}
+        # server_name -> 实测能解析出数值的 TPS 指令，后续轮次优先复用
+        self._tps_commands: dict[str, str] = {}
+        # server_name -> 全部候选指令都失败后的下次重试时刻，以及上次失败
+        # 描述：避免为没有 TPS 指令的服务端（原版 / 未装 Spark 的 Fabric）
+        # 每轮连发多条无效指令
+        self._tps_retry_after: dict[str, float] = {}
+        self._tps_last_errors: dict[str, str] = {}
         # server_name -> 当前生效参数（持久化设置 > 配置文件字段 > 代码默认）
         self._settings: dict[str, MonitorSettings] = {}
         # server_name -> 采样互斥锁：正常周期 _loop 与「实时模式/立即采集」
@@ -750,6 +820,11 @@ class MonitorCollector:
         merged.update(fields)
         updated = MonitorSettings.from_dict(merged)
         self._settings[server_name] = updated
+        # 设置变化后立即按新指令重试：清掉失败冷却与指令缓存，避免用户改完
+        # 指令还要等冷却，或继续复用旧核心时代的指令
+        self._tps_retry_after.pop(server_name, None)
+        self._tps_last_errors.pop(server_name, None)
+        self._tps_commands.pop(server_name, None)
 
         all_settings = {
             name: settings.to_dict() for name, settings in self._settings.items()
@@ -826,20 +901,80 @@ class MonitorCollector:
             if wait > 0:
                 await asyncio.sleep(wait)
 
+    # ---- 品牌识别（多源合并） ----
+
+    def _remember_brand(self, name: str, brand: str | None, source: str) -> None:
+        """记录服务端品牌；仅不低于已有来源优先级的来源可覆盖。
+
+        slp 来自版本名/MOTD（MOTD 常写别的品牌名，最不可靠），command 来自
+        实测成功的 TPS 指令，status 来自 get_status 自报的核心类型。品牌变化
+        时清掉 TPS 失败冷却与指令缓存，让下一轮立即按新的候选指令重试。
+        """
+        if not brand:
+            return
+        priority = _BRAND_SOURCE_PRIORITY.get(source, 0)
+        current = _BRAND_SOURCE_PRIORITY.get(self._brand_sources.get(name, ""), 0)
+        if current > priority:
+            return
+        if (
+            self._server_types.get(name) == brand
+            and self._brand_sources.get(name) == source
+        ):
+            return
+        changed = self._server_types.get(name) != brand
+        self._server_types[name] = brand
+        self._brand_sources[name] = source
+        if changed:
+            self._tps_retry_after.pop(name, None)
+            self._tps_last_errors.pop(name, None)
+            self._tps_commands.pop(name, None)
+
+    async def _ensure_brand(self, name: str, instance: Any) -> None:
+        """品牌未知时经鹊桥 get_status 识别服务端类型（不依赖延迟探测地址）。
+
+        此前品牌只从 SLP ping 学习，而延迟探测地址默认为空、留空时不 ping，
+        于是 Forge/NeoForge 服永远拿不到品牌、auto 一直执行不存在的 ``tps``。
+        get_status 返回的是服务端自报的核心类型（QueQiao >= v0.5.0），未配置
+        延迟探测地址时也能识别。失败按 MONITOR_BRAND_PROBE_RETRY_SECONDS
+        节流重试，不阻塞/不影响采样本身。
+        """
+        if self._brand_sources.get(name) in ("status", "command"):
+            return
+        now = time.monotonic()
+        if now < self._brand_probe_after.get(name, 0.0):
+            return
+        probe = getattr(instance, "get_status_model", None)
+        if probe is None:
+            return
+        self._brand_probe_after[name] = now + MONITOR_BRAND_PROBE_RETRY_SECONDS
+        try:
+            status = await probe()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}][{name}] ⚠️ 获取服务端类型失败: {exc}")
+            return
+        if status is None:
+            return
+        self._remember_brand(
+            name,
+            brand_from_text(status.server_type)
+            or brand_from_text(status.server_version),
+            "status",
+        )
+
     async def _sample_once(self, name: str, settings: MonitorSettings) -> None:
         instance = self.server_manager.get(name)
         if instance is None or not instance.connected:
             self._errors[name] = "服务器未连接，跳过本次采样"
             return
 
-        # auto 模式：按最近一次识别到的服务端品牌选指令（首轮无缓存用默认）
-        tps_command = resolve_tps_command(
-            self._server_types.get(name), settings.tps_command
-        )
+        # 品牌未知时先经 get_status 补探（有节流；已知时立即返回）。放在
+        # 开采样任务之前，TPS 候选指令取自本轮确定下来的品牌，结果可预期
+        await self._ensure_brand(name, instance)
         # TPS（RCON）与延迟（直连 SLP ping）走不同通道，并行采样互不拖累
-        tps_task = asyncio.create_task(self._sample_tps(instance, tps_command))
         lat_task = asyncio.create_task(self._sample_latency(name, settings))
-        tps, tps_error = await tps_task
+        tps, tps_error = await self._sample_tps(name, instance, settings)
         ping, latency_ms, latency_error = await lat_task
 
         sample = MonitorSample(
@@ -859,19 +994,55 @@ class MonitorCollector:
             self._errors.pop(name, None)
 
     async def _sample_tps(
-        self, instance: Any, tps_command: str
-    ) -> tuple[tuple[float, float, float] | None, str | None]:
-        """经 RCON 执行 tps 指令并解析；失败返回 (None, 错误描述)。"""
-        output, _ = await instance.execute_command_with_channel(tps_command)
-        if output is None:
-            return None, (
-                f"TPS 不可用：{tps_command!r} 执行失败"
-                "（需服务端支持该指令且 RCON 通道可用，或指令执行超时）"
-            )
-        parsed = parse_tps(output)
-        if parsed is None:
-            return None, f"TPS 输出无法解析: {output[:60]!r}"
-        return parsed, None
+        self, name: str, instance: Any, settings: MonitorSettings
+    ) -> tuple[tuple[float | None, float | None, float | None] | None, str | None]:
+        """按候选列表执行 TPS 指令并解析；全部失败返回 (None, 错误描述)。
+
+        执行到能解析出数值的指令为止：品牌识别可能被 MOTD 误导，靠实测兜底。
+        成功的指令缓存到 _tps_commands，后续轮次优先复用，避免重复试错。
+        **通道失败（超时/未连接）不换指令重试**——按「超时 ≠ 失败」语义，
+        换一条指令重发只会在服务器上多执行一条命令；仅「拿到了输出但解析
+        不出 TPS」才继续试下一个候选。
+        """
+        candidates = tps_command_candidates(
+            self._server_types.get(name), settings.tps_command
+        )
+        cached = self._tps_commands.get(name)
+        if cached and cached in candidates:
+            candidates.remove(cached)
+            candidates.insert(0, cached)
+        # 全部候选刚失败过：直接返回上次错误，避免每轮连发多条无效指令刷屏
+        if time.monotonic() < self._tps_retry_after.get(name, 0.0):
+            return None, self._tps_last_errors.get(name) or "TPS 输出无法解析"
+
+        tried: list[str] = []
+        last_output: str | None = None
+        for command in candidates:
+            tried.append(command)
+            output, _ = await instance.execute_command_with_channel(command)
+            if output is None:
+                return None, (
+                    f"TPS 不可用：{command!r} 执行失败"
+                    "（需服务端支持该指令且 RCON 通道可用，或指令执行超时）"
+                )
+            parsed = parse_tps(output)
+            if parsed is not None:
+                self._remember_brand(name, brand_from_tps_command(command), "command")
+                self._tps_commands[name] = command
+                self._tps_retry_after.pop(name, None)
+                self._tps_last_errors.pop(name, None)
+                return parsed, None
+            last_output = output
+
+        self._tps_retry_after[name] = time.monotonic() + MONITOR_TPS_RETRY_SECONDS
+        attempted = "、".join(f"{command!r}" for command in tried)
+        message = (
+            f"TPS 输出无法解析（已尝试 {attempted}）："
+            f"{_SECTION_RE.sub('', last_output or '')[:80]!r}"
+            "——请在设置里显式填写该服务端的 TPS 指令"
+        )
+        self._tps_last_errors[name] = message
+        return None, message
 
     def _resolve_ping_target(self, name: str, settings: MonitorSettings) -> tuple[str, int] | None:
         """解析直连延迟探测目标 (host, port)。
@@ -946,9 +1117,11 @@ class MonitorCollector:
                 "响应不是 MC 状态协议（请确认该端口是 MC 游戏端口，且服务端"
                 "未禁用状态查询 enable-status=false）"
             )
-        brand = brand_from_slp(ping.version_name, ping.description)
-        if brand:
-            self._server_types[name] = brand
+        # SLP 品牌是低优先级来源（版本名/MOTD 可被伪造或混入广告文本），
+        # 不覆盖 get_status / 实测指令得到的品牌
+        self._remember_brand(
+            name, brand_from_slp(ping.version_name, ping.description), "slp"
+        )
         return ping, ping.rtt_ms, None
 
     # ---- 状态查询 ----
@@ -994,14 +1167,18 @@ class MonitorCollector:
         task = self._tasks.get(name)
         latest = self.store.latest(name)
         server_type = self._server_types.get(name)
+        candidates = tps_command_candidates(server_type, settings.tps_command)
+        cached_command = self._tps_commands.get(name)
         ping_target = self._resolve_ping_target(name, settings)
         return {
             "enabled": settings.enabled,
             "interval": settings.interval,
             "retention_days": settings.retention_days,
             "tps_command": settings.tps_command,
-            # auto 模式下实际生效的指令（按已识别到的服务端类型解析）
-            "tps_command_resolved": resolve_tps_command(server_type, settings.tps_command),
+            # auto 模式下实际生效的指令：优先取实测成功的缓存，否则首个候选
+            "tps_command_resolved": (
+                cached_command if cached_command in candidates else candidates[0]
+            ),
             "server_type": server_type,
             "ping_host": settings.ping_host,
             "ping_port": settings.ping_port,

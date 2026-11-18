@@ -219,20 +219,34 @@ async def mc_ping(
     )
 
 
+# 品牌关键字：按词边界匹配，避免把 MOTD 广告里的子串当成品牌名
+# （"newspaper" 不算 paper）。neoforge 必须排在 forge 之前——NeoForge 的
+# TPS 指令是 ``neoforge tps``，先匹配 forge 会选中不存在的指令。
+_BRAND_RE = re.compile(
+    r"(?<![a-z0-9])(neoforge|pufferfish|purpur|paper|folia|spigot|bukkit|"
+    r"sponge|leaves|fabric|quilt|forge)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def brand_from_text(text: str) -> str | None:
+    """从任意文本（版本名 / MOTD / 鹊桥 get_status 的 server_type）识别品牌。
+
+    返回小写品牌关键字（neoforge / forge / fabric / quilt / paper / spigot /
+    bukkit / purpur / pufferfish / leaves / sponge / folia）；识别不到返回 None。
+    """
+    cleaned = _strip_format_codes(text or "")
+    matched = _BRAND_RE.search(cleaned)
+    return matched.group(1).lower() if matched else None
+
+
 def brand_from_slp(version_name: str, description: str = "") -> str | None:
     """从状态响应的版本名 / MOTD 中识别服务端品牌，供 TPS 指令 auto 选择。
 
-    返回小写品牌关键字（forge / fabric / quilt / paper / spigot / bukkit /
-    purpur / pufferfish / leaves / sponge / folia）；识别不到返回 None。
+    版本名由服务端自报、最可靠，优先匹配；识别不到再看 MOTD——MOTD 是服主
+    自由填写的介绍/广告文本，最容易混入其它品牌名（如宣传语里的 "Paper"）。
     """
-    text = f"{version_name} {description}".lower()
-    for brand in (
-        "pufferfish", "purpur", "paper", "spigot", "bukkit", "folia",
-        "sponge", "leaves", "fabric", "quilt", "forge",
-    ):
-        if brand in text:
-            return brand
-    return None
+    return brand_from_text(version_name) or brand_from_text(description)
 
 
 def parse_host_port(

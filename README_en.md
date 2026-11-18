@@ -370,10 +370,10 @@ TPS and latency monitoring are **enabled by default, zero-config**: a background
 | Enable switch | `on` | Stops sampling when off |
 | Sample interval | `60` s | Minimum `10` s |
 | Retention | `7` days | Older samples pruned automatically |
-| TPS command | `auto` | Auto-picks by server brand (Forge → `forge tps`; Fabric/Quilt → `spark tps`; Bukkit forks → `tps`); may be pinned manually |
+| TPS command | `auto` | Auto-picks by server type (Forge → `forge tps`; NeoForge → `neoforge tps`, falling back to `forge tps`; Fabric/Quilt → `spark tps`; Paper/Spigot → `tps`). If the type cannot be identified, common commands are tried in order and the first working one is remembered; it may also be pinned manually |
 | Latency domain | empty | Public address of the MC server (may include a port, e.g. `mc.example.com:25565`) for player-perspective latency; empty disables latency probing |
 
-- **TPS**: parsed from a TPS command executed over RCON — the server must support the command (Vanilla reports it as unavailable)
+- **TPS**: parsed from a TPS command executed over RCON — the server must support the command (Vanilla reports it as unavailable); Forge/NeoForge output a single average TPS, so the panel shows one value (Bukkit forks / Spark still show the 1m/5m/15m windows)
 - **Latency**: direct-connect Minecraft SLP ping (no QueQiao relay, no RCON) — a public probe address must be filled in Settings; servers with SLP disabled or unreachable addresses report latency as unavailable
 - Samples are stored per-day under `data_dir/monitor/` and survive restarts; `/mc status` also shows the latest samples
 

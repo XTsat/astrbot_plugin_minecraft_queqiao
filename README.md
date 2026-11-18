@@ -373,10 +373,10 @@ TPS 与延迟监控**默认开启、无需配置**：后台定期采集并持久
 | 启用开关 | `on` | 关闭后停止采样 |
 | 采集间隔 | `60` 秒 | 最小 `10` 秒 |
 | 保留天数 | `7` 天 | 超期自动清理 |
-| TPS 指令 | `auto` | 自动按服务端品牌选择（Forge → `forge tps`；Fabric/Quilt → `spark tps`；Bukkit 系 → `tps`），也可手动指定 |
+| TPS 指令 | `auto` | 自动按服务端类型选择（Forge → `forge tps`；NeoForge → `neoforge tps`，未命中再试 `forge tps`；Fabric/Quilt → `spark tps`；Paper/Spigot 等 → `tps`）。识别不到时自动依次尝试常用指令，成功后记住该服务器可用的那条；也可手动指定 |
 | 延迟探测域名 | 留空 | 直连服务器的公网地址（可含端口，如 `mc.example.com:25565`），用于测玩家视角延迟；留空不采集延迟 |
 
-- **TPS**：经 RCON 执行 TPS 指令解析，需服务端支持对应指令（原版端不支持，显示为不可用）
+- **TPS**：经 RCON 执行 TPS 指令解析，需服务端支持对应指令（原版端不支持，显示为不可用）；Forge/NeoForge 只输出单个平均 TPS，面板显示单个值（Bukkit 系 / Spark 仍显示 1m/5m/15m 三档）
 - **延迟**：直连服务器做 Minecraft SLP ping（不经鹊桥中转、无需 RCON），须在设置中填写公网探测地址；服务器关闭 SLP 或地址不可达时延迟显示不可用
 - 采样按天分片存储于 `data_dir/monitor/`，重启不丢；`/mc status` 会附带最近采样值
 

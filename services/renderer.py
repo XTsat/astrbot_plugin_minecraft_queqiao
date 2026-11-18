@@ -49,10 +49,13 @@ class InfoRenderer:
             f"在线：{status.players_text}",
         ]
         if tps is not None and any(value is not None for value in tps):
-            tps_text = " / ".join(
-                f"{value:.1f}" if value is not None else "-" for value in tps
-            )
-            lines.append(f"TPS：{tps_text}（1m/5m/15m）")
+            present = [value for value in tps if value is not None]
+            tps_text = " / ".join(f"{value:.1f}" for value in present)
+            if len(present) == 3:
+                lines.append(f"TPS：{tps_text}（1m/5m/15m）")
+            else:
+                # Forge/NeoForge 只给单个 Mean TPS，没有三档窗口，不能标 1m/5m/15m
+                lines.append(f"TPS：{tps_text}")
         if latency_ms is not None:
             lines.append(f"延迟：{latency_ms:.0f}ms")
         if status.description:
