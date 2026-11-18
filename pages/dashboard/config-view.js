@@ -114,6 +114,41 @@ function displayPathValue(entry, path) {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+/* 按 AstrBot 的人格文件夹分组填充下拉框：根目录排最前，其余按路径排序。
+   文件夹可嵌套，后端已展平成「父/子」路径 */
+function fillPersonaOptions(selectEl, personas) {
+  const items = (Array.isArray(personas) ? personas : [])
+    .map((p) => (typeof p === 'string'
+      ? { name: p, folder: '' }
+      : { name: p && p.name, folder: (p && p.folder) || '' }))
+    .filter((it) => it.name);
+  const groups = new Map();
+  for (const it of items) {
+    const key = it.folder || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it.name);
+  }
+  const orderedKeys = [...groups.keys()].sort((a, b) => {
+    if (!a) return -1;
+    if (!b) return 1;
+    return a.localeCompare(b, 'zh-CN');
+  });
+  for (const key of orderedKeys) {
+    let host = selectEl;
+    if (key) {
+      host = document.createElement('optgroup');
+      host.label = key;
+      selectEl.appendChild(host);
+    }
+    for (const name of groups.get(key)) {
+      const o = document.createElement('option');
+      o.value = name;
+      o.textContent = name;
+      host.appendChild(o);
+    }
+  }
+}
+
 /* ---------- 控件 ---------- */
 // 兼容旧版 schema 的 integer 写法，统一归一化为 int 后走控件分支。
 function createControl(spec, onchange) {
@@ -142,20 +177,16 @@ function createControl(spec, onchange) {
       };
     }
     case 'string': {
-      // persona_select：从后端获取人格列表并渲染下拉框
-      if (spec.render_type === 'persona_select') {
+      // 人格选择：AstrBot 用 _special=select_persona 标记（render_type 是旧写法，
+      // 保留兼容）。从后端拉人格列表渲染成下拉框，而不是让人手填人格 ID
+      if (spec._special === 'select_persona' || spec.render_type === 'persona_select') {
         const el = document.createElement('select');
         el.className = 'cfg-select';
         const emptyOpt = document.createElement('option');
         emptyOpt.value = '';
         emptyOpt.textContent = '(使用会话默认人格)';
         el.appendChild(emptyOpt);
-        for (const p of (state.personas || [])) {
-          const o = document.createElement('option');
-          o.value = p.name;
-          o.textContent = p.name;
-          el.appendChild(o);
-        }
+        fillPersonaOptions(el, state.personas);
         el.addEventListener('change', () => onchange());
         return {
           el,

@@ -175,6 +175,7 @@ class DashboardApp {
     // 此前在这块面板上完全不可见，只能改配置文件才能启用。现在以灰色卡片
     // 呈现，点进去即可启用/编辑/删除
     this.configServers = [];
+    this.personas = [];
     this.serverFormMode = null; // 'create' | 'edit'：服务器弹窗当前模式
     // 图床面板状态：status 为 /image_bed/status 的原始响应；entries 为
     // /config/image_bed 的原始条目（含 __template_key，表单编辑回显用）。
@@ -480,6 +481,21 @@ class DashboardApp {
         this.configServers = confServers?.servers || [];
       } catch (e) {
         console.warn('Failed to fetch config servers:', e);
+      }
+
+      // 1c. AstrBot 人格列表：供「功能设置」的 AI 对话人格下拉框使用。
+      // 失败只影响该下拉框（退回「使用会话默认人格」），不阻断主流程
+      try {
+        const personasData = await Promise.race([
+          this.apiGet('personas'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('人格列表请求超时')), 6000)
+          ),
+        ]);
+        this.personas = personasData?.personas || [];
+      } catch (e) {
+        console.warn('Failed to fetch personas:', e);
+        this.personas = this.personas || [];
       }
 
       // 2. 获取统计数据（独立超时，失败不影响列表渲染）
@@ -3388,6 +3404,60 @@ class DashboardApp {
       if (saveBtn) saveBtn.disabled = false;
       if (status) status.textContent = '';
     }
+    // AI 对话人格：选项来自 AstrBot 人格列表，当前值按配置回显。
+    // 配置里存的人格若已被删除，补一个占位项，避免下拉框静默跳回默认值
+    const personaBox = document.getElementById('st-ai-persona');
+    if (personaBox) {
+      const current = confItem && typeof confItem.ai_persona_id === 'string'
+        ? confItem.ai_persona_id
+        : '';
+      const items = (Array.isArray(this.personas) ? this.personas : [])
+        .map((p) => (typeof p === 'string'
+          ? { name: p, folder: '' }
+          : { name: p && p.name, folder: (p && p.folder) || '' }))
+        .filter((it) => it.name);
+      const names = items.map((it) => it.name);
+      personaBox.innerHTML = '';
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = '';
+      defaultOpt.textContent = '（使用会话默认人格）';
+      personaBox.appendChild(defaultOpt);
+      // 按 AstrBot 的人格文件夹分组（optgroup）：根目录排最前，其余按路径排序。
+      // 文件夹可嵌套，后端已展平成「父/子」路径
+      const groups = new Map();
+      for (const it of items) {
+        const key = it.folder || '';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it.name);
+      }
+      const orderedKeys = [...groups.keys()].sort((a, b) => {
+        if (!a) return -1;
+        if (!b) return 1;
+        return a.localeCompare(b, 'zh-CN');
+      });
+      for (const key of orderedKeys) {
+        let host = personaBox;
+        if (key) {
+          host = document.createElement('optgroup');
+          host.label = key;
+          personaBox.appendChild(host);
+        }
+        for (const name of groups.get(key)) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          host.appendChild(opt);
+        }
+      }
+      if (current && !names.includes(current)) {
+        const staleOpt = document.createElement('option');
+        staleOpt.value = current;
+        staleOpt.textContent = `${current}（已不存在）`;
+        personaBox.appendChild(staleOpt);
+      }
+      personaBox.value = current;
+      personaBox.disabled = false;
+    }
     // 互通终端天数（每台服务器独立，conf 条目顶层；缺省 2）：
     // 正在编辑的输入框不回写，避免打断输入
     const daysBox = document.getElementById('st-terminal-days');
@@ -3609,10 +3679,13 @@ class DashboardApp {
       {
         const fwdPrefixBox = document.getElementById('st-fwd-prefix');
         const chatPrefixBox = document.getElementById('st-fwd-chat-prefix');
+        const personaSelect = document.getElementById('st-ai-persona');
         const payload = {
           // 「转发渠道」多选框 + 三个前缀：勾选的方向才启用，前缀只负责筛消息
           enabled_directions: Array.from(document.querySelectorAll('.st-route:checked'))
             .map((box) => box.value),
+          // AI 对话人格：空串 = 使用会话默认人格
+          ai_persona_id: personaSelect ? personaSelect.value : '',
           prefix: {
             group_to_game: fwdPrefixBox ? fwdPrefixBox.value.trim() : '',
             game_to_group: chatPrefixBox ? chatPrefixBox.value.trim() : '',

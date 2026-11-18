@@ -1314,6 +1314,7 @@ body {
 }
 
 .settings-row-control input[type='text'],
+.settings-row-control select,
 .settings-row-control textarea {
   width: 100%;
   box-sizing: border-box;

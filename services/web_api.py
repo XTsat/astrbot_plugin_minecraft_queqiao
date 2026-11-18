@@ -431,25 +431,84 @@ class WebApiController:
         return json_response(data)
 
     async def get_personas(self) -> Any:
-        """获取 AstrBot 框架中所有可用人格列表。
+        """获取 AstrBot 中所有可用人格，并带上所属文件夹路径。
 
-        用于 AI 聊天人格选择下拉/复选框。
+        面板与配置页按文件夹分下拉分组显示。AstrBot 的人格文件夹可递归嵌套，
+        这里展平成「父/子」一级路径（多数人只建一层，够用且好读）。
         """
-        personas = []
+        personas: list[dict[str, str]] = []
         try:
             pm = getattr(self.context, "persona_manager", None)
-            if pm is not None:
-                all_personas = getattr(pm, "personas_v3", None) or []
-                for p in all_personas:
-                    # 兼容 dict 或对象
-                    name = p.get("name") if isinstance(p, dict) else getattr(
-                        p, "name", None
-                    ) or getattr(p, "prompt_name", None) or str(p)
-                    if name:
-                        personas.append({"name": name})
+            if pm is None:
+                return json_response({"personas": personas})
+
+            # 人格名 → 文件夹路径。DB 侧才有 folder_id；取不到就全部落在根目录
+            folder_paths = await self._persona_folder_paths(pm)
+            name_to_folder: dict[str, str] = {}
+            try:
+                db_personas = await pm.get_all_personas()
+            except Exception:
+                db_personas = []
+            for item in db_personas:
+                name = str(getattr(item, "persona_id", "") or "").strip()
+                if not name:
+                    continue
+                folder_id = getattr(item, "folder_id", None)
+                name_to_folder[name] = folder_paths.get(folder_id, "") if folder_id else ""
+
+            # 以 personas_v3 为准（它才是运行时真正可用的人格集合，含系统默认人格）
+            all_personas = getattr(pm, "personas_v3", None) or []
+            for p in all_personas:
+                # 兼容 dict 或对象
+                name = p.get("name") if isinstance(p, dict) else getattr(
+                    p, "name", None
+                ) or getattr(p, "prompt_name", None) or str(p)
+                name = str(name or "").strip()
+                if not name:
+                    continue
+                personas.append(
+                    {"name": name, "folder": name_to_folder.get(name, "")}
+                )
         except Exception as exc:
             logger.warning(f"[{PLUGIN_NAME}] 获取人格列表失败: {exc}")
         return json_response({"personas": personas})
+
+    async def _persona_folder_paths(self, pm: Any) -> dict[str, str]:
+        """把人格文件夹树展开成「文件夹 ID → 父/子 路径」。
+
+        取不到文件夹（老版本 AstrBot / 非 SQLite 后端）时返回空 dict，
+        调用方据此把所有人格归到根目录，不影响下拉框可用。
+        """
+        try:
+            folders = await pm.get_all_folders()
+        except Exception:
+            return {}
+        if not isinstance(folders, list):
+            return {}
+        by_id: dict[str, Any] = {}
+        for folder in folders:
+            folder_id = str(getattr(folder, "folder_id", "") or "").strip()
+            if folder_id:
+                by_id[folder_id] = folder
+        paths: dict[str, str] = {}
+
+        def resolve(folder_id: str, seen: set[str]) -> str:
+            if folder_id in paths:
+                return paths[folder_id]
+            if folder_id in seen or folder_id not in by_id:
+                return ""
+            seen.add(folder_id)
+            folder = by_id[folder_id]
+            name = str(getattr(folder, "name", "") or "").strip()
+            parent_id = str(getattr(folder, "parent_id", "") or "").strip()
+            parent_path = resolve(parent_id, seen) if parent_id else ""
+            path = f"{parent_path}/{name}" if parent_path and name else (name or parent_path)
+            paths[folder_id] = path
+            return path
+
+        for folder_id in by_id:
+            resolve(folder_id, set())
+        return paths
 
     async def get_servers(self) -> Any:
         """获取所有服务器列表及其连接状态，并附带各服务器的实时状态与在线玩家。
@@ -1293,6 +1352,8 @@ class WebApiController:
                     # 注意落在条目顶层（与 server 子对象平级，ServerConfig 读整条）
                     "enable_ai_chat": _as_bool(entry.get("enable_ai_chat"), True),
                     "ai_chat_prefix": str(entry.get("ai_chat_prefix") or ""),
+                    # AI 对话人格（条目顶层，与 ai_chat_prefix 平级）：面板下拉框回显
+                    "ai_persona_id": str(entry.get("ai_persona_id") or ""),
                     # 「转发渠道」多选框：三个方向统一由这一个列表表示
                     "enabled_directions": _enabled_directions_of(entry),
                     # 互通终端加载天数（每台服务器独立，条目顶层；缺省回落默认）
@@ -1554,6 +1615,13 @@ class WebApiController:
             entry["message"] = msg_box
         if "ai_chat_prefix" in payload:
             entry["ai_chat_prefix"] = str(payload.get("ai_chat_prefix") or "").strip()
+        if "ai_persona_id" in payload:
+            # 人格 ID 落在条目顶层（与 ai_chat_prefix 平级）；空串 = 用会话默认人格
+            entry["ai_persona_id"] = str(payload.get("ai_persona_id") or "").strip()
+        # 配置页的 ai 分组（payload.ai）：人格项按显式出现合并
+        ai_payload = payload.get("ai")
+        if isinstance(ai_payload, dict) and "persona_id" in ai_payload:
+            entry["ai_persona_id"] = str(ai_payload.get("persona_id") or "").strip()
         # 面板的「触发前缀」分组（payload.prefix）：三个前缀 + 三个方向开关。
         # 按「显式出现」合并，漏传不清空；叶子键名与 ServerConfig 属性对齐
         prefix_payload = payload.get("prefix")
