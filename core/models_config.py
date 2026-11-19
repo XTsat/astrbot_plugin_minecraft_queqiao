@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from astrbot.api import logger
+
 from .constants import (
     DEFAULT_BROADCAST_FORMAT,
     DEFAULT_CHAT_FORMAT,
@@ -28,6 +30,7 @@ from .constants import (
     DEFAULT_MONITOR_TPS_COMMAND,
     DEFAULT_PLATFORM_NAMES,
     DEFAULT_QUIET_HOURS_ENABLED,
+    PLUGIN_NAME,
     E33CHAT_IMAGE_MAX_EDGE_MAX,
     E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_QUIET_HOURS_END,
@@ -396,6 +399,35 @@ def fold_entry(entry: dict) -> dict:
     return data
 
 
+class _KeepUnknownPlaceholders(dict):
+    """`format_map` 的字段表：未提供的占位符原样返回 `{name}` 而不是抛错。"""
+
+    def __init__(self, mapping: dict[str, str]) -> None:
+        super().__init__(mapping)
+        # 记录被访问但没提供的名字，供调用方决定是否告警
+        self.missing: list[str] = []
+
+    def __missing__(self, key: str) -> str:
+        self.missing.append(key)
+        return "{" + key + "}"
+
+
+# 同一条模板只告警一次：否则每条转发消息都会刷一行
+_warned_formats: set[str] = set()
+
+
+def _warn_unknown_placeholders(template: str, missing: list[str]) -> None:
+    """记录「模板里有本方向用不了的占位符」，同一模板只报一次。"""
+    if template in _warned_formats:
+        return
+    _warned_formats.add(template)
+    names = "、".join(sorted({"{" + name + "}" for name in missing}))
+    logger.warning(
+        f"[{PLUGIN_NAME}] ⚠️ 消息格式里含本方向不提供的占位符 {names}，"
+        f"已原样保留。模板: {template!r}"
+    )
+
+
 @dataclass
 class ServerConfig:
     """单台 MC 服务器的完整配置（对应 conf 中一个模板项）。"""
@@ -539,18 +571,29 @@ class ServerConfig:
 
     @staticmethod
     def render_format(template: str, fallback: str, **fields: str) -> str:
-        """按模板渲染消息，模板非法时回退 `fallback` 而不是抛异常。
+        """按模板渲染消息；本方向没有的占位符原样保留，语法错误才回退。
 
-        用户在面板里可能把两个方向的占位符写混（如群 → 游戏格式里写了
-        `{player}`），也可能漏写右花括号。直接 `str.format` 会抛 KeyError /
-        ValueError，让整条转发链路在这一条消息上崩掉——宁可退回默认格式
-        发出去，也不要整条消息丢失。
+        两个方向各自只有一部分占位符（群 → 游戏有 `{platform}`，游戏 → 群
+        有 `{player}`）。用户把两边写混时，直接 `str.format` 会抛 KeyError，
+        让整条转发链路在这一条消息上崩掉。这里分两类处理：
+
+        - **未知占位符**（如群 → 游戏里写了 `{player}`）：保留原文 `{player}`，
+          用户自定义的其余排版（`【{sender}】{message}`）不受影响，游戏里也能
+          一眼看出哪个名字写错了
+        - **语法错误**（漏写右花括号等）：无法解析，退回 `fallback`，
+          避免把半截模板发进游戏
+
+        转义语义与 `str.format` 一致：`{{` / `}}` 仍输出单个花括号。
         """
+        holder = _KeepUnknownPlaceholders(fields)
         try:
-            return template.format(**fields)
-        except (KeyError, IndexError, ValueError):
+            rendered = template.format_map(holder)
+        except (ValueError, IndexError):
             # 回退时用同样的字段再渲染一次；fallback 是内置常量，不会失败
             return fallback.format(**fields)
+        if holder.missing:
+            _warn_unknown_placeholders(template, holder.missing)
+        return rendered
 
     @property
     def display_label(self) -> str:

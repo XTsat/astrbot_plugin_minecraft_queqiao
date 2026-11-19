@@ -2614,8 +2614,10 @@ assert _c_rt63.forward_image_to_mc is True
 assert _c_rt63.mc_image_mode == "e33chat"
 print("OK  schema 三分组 / 旧配置兼容 / 新配置解析 / 新分组优先 / 落盘搬家 / 往返不丢")
 
-# 格式模板写错不得让整条转发链路崩掉：用户在面板里很容易把两个方向的
-# 占位符写混（群 → 游戏格式里写 {player}），或漏写右花括号
+# 格式模板写错不得让整条转发链路崩掉。两个方向占位符不同：群 → 游戏有
+# {platform}、游戏 → 群有 {player}，写混时未知的那个**原样保留**，
+# 用户自定义的其余排版不受影响（B 方案）
+import astrbot_plugin_minecraft_queqiao.core.models_config as models_config_module
 _fmt_cfg63 = ServerConfig.from_dict({"message": {"broadcast_format": "[{player}] {message}"}})
 _rendered63 = _fmt_cfg63.render_format(
     _fmt_cfg63.broadcast_format,
@@ -2623,31 +2625,64 @@ _rendered63 = _fmt_cfg63.render_format(
     platform="QQ", sender="群友A", message="你好",
     display_name="MC", server_name="S",
 )
-assert _rendered63 == "[QQ]群友A: 你好", _rendered63
+assert _rendered63 == "[{player}] 你好", _rendered63
 
-# 未闭合花括号同样回退
+# 自定义排版完整保留，只替换认识的名字
+_custom63 = ServerConfig.from_dict({"message": {
+    "broadcast_format": "【{sender}】{message}（{server_name}/{platform}）{player}"}})
+assert _custom63.render_format(
+    _custom63.broadcast_format, "FALLBACK",
+    platform="QQ", sender="群友A", message="你好",
+    display_name="MC", server_name="S",
+) == "【群友A】你好（S/QQ）{player}"
+
+# 语法错误（漏写右花括号）无法解析 → 回退默认格式
 _broken63 = ServerConfig.from_dict({"message": {"broadcast_format": "{message"}})
 assert _broken63.render_format(
     _broken63.broadcast_format, "[{sender}] {message}",
     platform="QQ", sender="A", message="hi", display_name="MC", server_name="S",
 ) == "[A] hi"
 
-# 合法模板正常渲染（兜底不能影响正常路径）
+# 合法模板正常渲染
 _ok63 = ServerConfig.from_dict({"message": {"broadcast_format": "<{sender}> {message}"}})
 assert _ok63.render_format(
     _ok63.broadcast_format, "FALLBACK",
     platform="QQ", sender="A", message="hi", display_name="MC", server_name="S",
 ) == "<A> hi"
 
-# 游戏 → 群方向的格式同样兜底
-_chat63 = ServerConfig.from_dict({"message": {"forward_chat_format": "{bogus}"}})
+# 转义语义与 str.format 一致：{{ }} 输出单个花括号
+_esc63 = ServerConfig.from_dict({"message": {"broadcast_format": "{{{sender}}}"}})
+assert _esc63.render_format(
+    _esc63.broadcast_format, "FALLBACK",
+    platform="QQ", sender="A", message="hi", display_name="MC", server_name="S",
+) == "{A}"
+
+# 游戏 → 群方向：未知占位符同样保留
+_chat63 = ServerConfig.from_dict({"message": {"forward_chat_format": "{bogus} {message}"}})
 from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
     MessageBridge as _MB63,
 )
-assert _MB63._format_chat(_chat63, "Alex", "你好") == (
-    "[{display_name}]Alex: 你好".replace("{display_name}", "MC")), (
+assert _MB63._format_chat(_chat63, "Alex", "你好") == "{bogus} 你好", (
     _MB63._format_chat(_chat63, "Alex", "你好"))
-print("OK  格式模板非法时回退默认 / 未闭合花括号 / 合法模板不受影响 / 双向都兜底")
+
+# 未知占位符只告警一次（同一模板重复转发不刷屏）
+_warns63 = []
+_orig_warn63 = models_config_module.logger.warning
+models_config_module.logger.warning = _warns63.append
+try:
+    models_config_module._warned_formats.clear()
+    for _ in range(3):
+        _fmt_cfg63.render_format(
+            _fmt_cfg63.broadcast_format, "F",
+            platform="QQ", sender="A", message="hi",
+            display_name="MC", server_name="S",
+        )
+    assert len(_warns63) == 1, _warns63
+    assert "{player}" in _warns63[0], _warns63
+finally:
+    models_config_module.logger.warning = _orig_warn63
+    models_config_module._warned_formats.clear()
+print("OK  未知占位符原样保留 / 自定义排版不丢 / 语法错误回退 / 转义 / 双向 / 告警只一次")
 
 print("\n=== 30. 在线玩家三层兜底（RCON list → SLP sample → 人数） ===")
 from astrbot_plugin_minecraft_queqiao.core.models import (
