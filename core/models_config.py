@@ -537,6 +537,21 @@ class ServerConfig:
         """
         return self.display_name or self.display_name_default
 
+    @staticmethod
+    def render_format(template: str, fallback: str, **fields: str) -> str:
+        """按模板渲染消息，模板非法时回退 `fallback` 而不是抛异常。
+
+        用户在面板里可能把两个方向的占位符写混（如群 → 游戏格式里写了
+        `{player}`），也可能漏写右花括号。直接 `str.format` 会抛 KeyError /
+        ValueError，让整条转发链路在这一条消息上崩掉——宁可退回默认格式
+        发出去，也不要整条消息丢失。
+        """
+        try:
+            return template.format(**fields)
+        except (KeyError, IndexError, ValueError):
+            # 回退时用同样的字段再渲染一次；fallback 是内置常量，不会失败
+            return fallback.format(**fields)
+
     @property
     def display_label(self) -> str:
         """带兜底的展示名称，用于状态/列表等孤立文案。

@@ -151,13 +151,13 @@
               "broadcast_format": {
                 "type": "string",
                 "description": "外部消息转发到MC的格式",
-                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{display_name} 服务器显示名称（可中文；未填则用显示名称默认值，默认 MC），{server_name} 服务器名称（始终有值）",
+                "hint": "群 → 游戏的消息格式。可用占位符：{platform} {sender} {message} {display_name} {server_name}",
                 "default": "[{platform}]{sender}: {message}"
               },
               "platform_names": {
                 "type": "list",
                 "description": "平台名称映射",
-                "hint": "把 {platform} 的原始平台名替换为自定义展示名，例如 aiocqhttp=QQ、telegram=电报。每项格式：原始平台名=显示名。默认自带示例 aiocqhttp=QQ（开箱即用）；未命中的平台保持原名，删空则不改写",
+                "hint": "把 {platform} 换成自定义名称，每项一行「原始平台名=显示名」，如 aiocqhttp=QQ；删空则不改写",
                 "default": [
                   "aiocqhttp=QQ"
                 ]
@@ -165,19 +165,19 @@
               "forward_chat_format": {
                 "type": "string",
                 "description": "聊天消息格式",
-                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容，{display_name} 替换为服务器显示名称（可中文，如 生存服；未填则用显示名称默认值，默认 MC）。示例：<{player}> {message}",
+                "hint": "游戏 → 群的消息格式。可用占位符：{player} {message} {display_name}",
                 "default": "[{display_name}]{player}: {message}"
               },
               "broadcast_color": {
                 "type": "string",
                 "description": "转发消息颜色",
-                "hint": "MC 颜色名（如 aqua、green、white）或 #RRGGBB 格式",
+                "hint": "MC 颜色名（如 aqua、green）或 #RRGGBB",
                 "default": "white"
               },
               "mark_option": {
                 "type": "string",
                 "description": "转发提醒方式",
-                "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
+                "hint": "转发成功后给原消息的回执方式",
                 "options": [
                   "text",
                   "emoji",
@@ -188,7 +188,7 @@
               "mark_emoji_id": {
                 "type": "int",
                 "description": "回执表情 ID",
-                "hint": "转发成功后所贴的表情（仅 mark_option=emoji 且平台为 aiocqhttp 时生效）。填 QQ 表情 ID，默认 124 为 👌、76 为 👍、66 为 ❤️、63 为 🌹",
+                "hint": "回执表情 ID，仅「贴表情」生效。124=👌 76=👍 66=❤️",
                 "default": 124
               }
             }
@@ -200,13 +200,13 @@
               "forward_chat_to_astrbot": {
                 "type": "bool",
                 "description": "全量转发游戏聊天到指定会话",
-                "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后只有以「游戏→群触发前缀」开头的聊天才转发（该前缀留空则仍全部转发）。已开启的图片转发不受该前缀限制",
+                "hint": "关闭后，只有带「游戏→群触发前缀」的聊天才转发；图片转发不受影响",
                 "default": true
               },
               "forward_join_leave_to_astrbot": {
                 "type": "bool",
                 "description": "转发玩家进出消息",
-                "hint": "将玩家加入/离开服务器的消息转发到指定会话。多台服务器指向同一会话时，消息末尾会自动附上该服务器的显示名称（如「🟢 Alex 加入了服务器[生存服]」）以区分来源",
+                "hint": "玩家加入 / 离开服务器的提示转发到目标会话",
                 "default": false
               },
               "forward_death_to_astrbot": {
@@ -224,13 +224,13 @@
               "enable_local_translation": {
                 "type": "bool",
                 "description": "本地翻译",
-                "hint": "内置翻译库，专给死亡/成就转发翻译：无需服务端开翻译",
+                "hint": "死亡 / 成就消息自动转中文，无需服务端开翻译",
                 "default": false
               },
               "forward_bot_self_messages": {
                 "type": "bool",
                 "description": "转发机器人自己的消息，不剥离唤醒词",
-                "hint": "默认关闭。开启后机器人唤醒消息按原文转发（含被 OneBot 省略的 @机器人），并转发消息管道回复与机器人自身的群消息；图片与表情按转发配置处理",
+                "hint": "机器人自己的群消息也转发进游戏，不剥离唤醒词",
                 "default": false
               }
             }
@@ -242,38 +242,38 @@
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",
-                "hint": "外部会话与机器人自身消息中的图片转发到 MC 游戏内。需游戏端安装 ChatImage 模组（https://github.com/kitUIN/ChatImage）才会渲染成图片，否则显示为 [[CICode,...]] 文本；图片 URL 需对玩家客户端可达，无公开 URL 时可启用根级图床配置",
+                "hint": "外部图片转发进游戏。ChatImage 模式需游戏端装 ChatImage；E33Chat 模式见「游戏图片模式」",
                 "default": false
               },
               "chatimage_name": {
                 "type": "string",
                 "description": "游戏内图片显示名称",
-                "hint": "ChatImage 在聊天栏显示图片时使用的名称（CICode 的 name 参数），默认「图片」，可改成自己习惯的显示名",
+                "hint": "图片在聊天栏的显示名称（CICode 的 name 参数）",
                 "default": "图片"
               },
               "forward_image_from_mc": {
                 "type": "bool",
                 "description": "转发游戏内图片到外部会话",
-                "hint": "游戏内聊天消息中的图片（ChatImage 的 [[CICode,url=...]] 代码或直接贴出的图片链接）自动下载后作为图片发送到外部会话。默认关闭。下载失败（如 file:// 本地文件不在本机、链接失效）时保留原始文本（代码/链接），不静默丢失",
+                "hint": "游戏内图片（ChatImage 的 CICode 代码或图片链接）自动下载后发到外部会话；下载失败保留原文",
                 "default": false
               },
               "mc_image_mode": {
                 "type": "string",
                 "description": "游戏图片模式",
-                "hint": "ChatImage（默认）：只认 ChatImage 的 [[CICode,url=...]] 代码与图片链接；E33Chat：额外识别 E33Chat 的 E33Emote / ChatUpgrade 图片标记与服务端媒体 ID（e33chat://media/...）。装了 E33Chat 的服务端选 E33Chat",
+                "hint": "ChatImage：图片 URL 链路；E33Chat：额外识别 E33Emote / ChatUpgrade / 服务端媒体",
                 "options": ["chatimage", "e33chat"],
                 "default": "chatimage"
               },
               "e33chat_media_dir": {
                 "type": "string",
                 "description": "E33Chat 服务端图片缓存目录",
-                "hint": "仅 E33Chat 模式且需要收发服务端媒体图片时填写：E33Chat 把图片存在服务端的 e33chat-media 目录（如 world/serverconfig/e33chat-media），AstrBot 必须能直接读到该路径。留空则只能收发第三方图床链接",
+                "hint": "E33Chat 服务端图片缓存目录，AstrBot 需能直接读取；留空则只能用第三方图床链接",
                 "default": ""
               },
               "e33chat_image_max_edge": {
                 "type": "int",
                 "description": "E33Chat 群图最大边长",
-                "hint": "仅 E33Chat 模式生效：E33Chat 按图片原始像素尺寸渲染，发送前把超过此像素边长的群图等比缩小，默认 320。ChatImage 模式不受影响",
+                "hint": "群图发往游戏前等比缩小到该边长（像素）",
                 "default": 320
               }
             }

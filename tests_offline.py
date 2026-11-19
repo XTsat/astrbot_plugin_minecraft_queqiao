@@ -2614,6 +2614,41 @@ assert _c_rt63.forward_image_to_mc is True
 assert _c_rt63.mc_image_mode == "e33chat"
 print("OK  schema 三分组 / 旧配置兼容 / 新配置解析 / 新分组优先 / 落盘搬家 / 往返不丢")
 
+# 格式模板写错不得让整条转发链路崩掉：用户在面板里很容易把两个方向的
+# 占位符写混（群 → 游戏格式里写 {player}），或漏写右花括号
+_fmt_cfg63 = ServerConfig.from_dict({"message": {"broadcast_format": "[{player}] {message}"}})
+_rendered63 = _fmt_cfg63.render_format(
+    _fmt_cfg63.broadcast_format,
+    "[{platform}]{sender}: {message}",
+    platform="QQ", sender="群友A", message="你好",
+    display_name="MC", server_name="S",
+)
+assert _rendered63 == "[QQ]群友A: 你好", _rendered63
+
+# 未闭合花括号同样回退
+_broken63 = ServerConfig.from_dict({"message": {"broadcast_format": "{message"}})
+assert _broken63.render_format(
+    _broken63.broadcast_format, "[{sender}] {message}",
+    platform="QQ", sender="A", message="hi", display_name="MC", server_name="S",
+) == "[A] hi"
+
+# 合法模板正常渲染（兜底不能影响正常路径）
+_ok63 = ServerConfig.from_dict({"message": {"broadcast_format": "<{sender}> {message}"}})
+assert _ok63.render_format(
+    _ok63.broadcast_format, "FALLBACK",
+    platform="QQ", sender="A", message="hi", display_name="MC", server_name="S",
+) == "<A> hi"
+
+# 游戏 → 群方向的格式同样兜底
+_chat63 = ServerConfig.from_dict({"message": {"forward_chat_format": "{bogus}"}})
+from astrbot_plugin_minecraft_queqiao.services.message_bridge import (
+    MessageBridge as _MB63,
+)
+assert _MB63._format_chat(_chat63, "Alex", "你好") == (
+    "[{display_name}]Alex: 你好".replace("{display_name}", "MC")), (
+    _MB63._format_chat(_chat63, "Alex", "你好"))
+print("OK  格式模板非法时回退默认 / 未闭合花括号 / 合法模板不受影响 / 双向都兜底")
+
 print("\n=== 30. 在线玩家三层兜底（RCON list → SLP sample → 人数） ===")
 from astrbot_plugin_minecraft_queqiao.core.models import (
     PlayerListResult as _PLR30, ServerStatus as _SS30,

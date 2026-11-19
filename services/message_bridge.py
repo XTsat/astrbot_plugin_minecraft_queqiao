@@ -24,6 +24,7 @@ from astrbot.api import logger
 
 from ..core.constants import (
     API_SET_MSG_EMOJI_LIKE,
+    DEFAULT_CHAT_FORMAT,
     DEFAULT_CHATIMAGE_NAME,
     E33CHAT_MEDIA_MAX_FILE_BYTES,
     E33CHAT_MEDIA_SCHEME,
@@ -700,8 +701,12 @@ class MessageBridge:
         {display_name} 取显示名称：display_name 留空时用 display_name_default（默认 MC），
         两者都显式留空才输出空串（无前缀）；均不回退 server_name。
         """
-        return config.forward_chat_format.format(
-            player=player, message=message, display_name=config.server_label
+        return ServerConfig.render_format(
+            config.forward_chat_format,
+            DEFAULT_CHAT_FORMAT,
+            player=player,
+            message=message,
+            display_name=config.server_label,
         )
 
     async def _resolve_forward_images(

@@ -20,6 +20,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from .core.constants import (
     CONNECT_FAIL_NOTIFY_DELAY_MAX,
     CONNECT_FAIL_NOTIFY_DELAY_MIN,
+    DEFAULT_BROADCAST_FORMAT,
     E33CHAT_IMAGE_MAX_EDGE_MAX,
     E33CHAT_IMAGE_MAX_EDGE_MIN,
     DEFAULT_IMAGE_HTTP_HOST,
@@ -1884,7 +1885,9 @@ class MinecraftQueQiaoPlugin(Star):
             if image_codes:
                 message = (message + " " if message else "") + " ".join(image_codes)
 
-            formatted = config.broadcast_format.format(
+            formatted = config.render_format(
+                config.broadcast_format,
+                DEFAULT_BROADCAST_FORMAT,
                 # {platform} 先经平台名称映射（platform_names，如 aiocqhttp→QQ）；
                 # 未配置或未命中时原样保留
                 platform=config.platform_display_name(platform),

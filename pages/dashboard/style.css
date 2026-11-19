@@ -1313,17 +1313,31 @@ body {
   opacity: 0.85;
 }
 
+/* 与「⚙️ 配置管理」页的 .cfg-input 保持同一套视觉规格：
+   同一种输入框在抽屉里更窄小、还没有 focus 高亮，会让人以为是两种控件 */
 .settings-row-control input[type='text'],
+.settings-row-control input[type='number'],
 .settings-row-control select,
 .settings-row-control textarea {
   width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input, var(--bg-tertiary));
+  border-radius: 8px;
+  background: var(--bg-secondary);
   color: var(--text-primary);
   font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-row-control input[type='text']:focus,
+.settings-row-control input[type='number']:focus,
+.settings-row-control select:focus,
+.settings-row-control textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
 }
 
 .settings-row-control textarea {
