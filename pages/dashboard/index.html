@@ -260,17 +260,61 @@
             <span class="settings-row-hint">游戏内 AI 对话使用该人格的提示词，不受会话默认人格影响；留空 = 用会话默认人格</span>
           </label>
         </div>
-        <div class="settings-group" id="settings-group-forward">
+        <div class="settings-group" id="settings-group-format">
           <div class="settings-group-head">
-            <span class="settings-group-title">📡 消息转发</span>
+            <span class="settings-group-title">✍️ 消息格式</span>
           </div>
           <label class="settings-row">
-            <span class="settings-row-label">聊天消息格式</span>
+            <span class="settings-row-label">游戏内聊天格式</span>
             <span class="settings-row-control">
               <input type="text" id="st-fwd-chat-format" placeholder="[{display_name}]{player}: {message}" autocomplete="off" spellcheck="false" />
             </span>
-            <span class="settings-row-hint">可用占位符 {player} {message} {display_name}；留空 = 用默认格式</span>
+            <span class="settings-row-hint">游戏 → 群：可用 {player} {message} {display_name}；留空 = 用默认格式</span>
           </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发到游戏内格式</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-broadcast-format" placeholder="[{platform}]{sender}: {message}" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">群 → 游戏：可用 {platform} {sender} {message} {display_name} {server_name}；留空 = 用默认格式</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">平台名称映射</span>
+            <span class="settings-row-control">
+              <textarea id="st-fwd-platform-names" rows="2" placeholder="aiocqhttp=QQ" autocomplete="off" spellcheck="false"></textarea>
+            </span>
+            <span class="settings-row-hint">每行一条「原始平台名=显示名」，替换 {platform} 的取值；留空 = 不改写</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发消息颜色</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-broadcast-color" placeholder="white" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">MC 颜色名（如 aqua、green、white）或 #RRGGBB</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">转发提醒方式</span>
+            <span class="settings-row-control">
+              <select id="st-fwd-mark-option">
+                <option value="emoji">贴表情</option>
+                <option value="text">文本回复</option>
+                <option value="none">不提醒</option>
+              </select>
+            </span>
+            <span class="settings-row-hint">转发成功后给原消息的回执方式</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">回执表情 ID</span>
+            <span class="settings-row-control">
+              <input type="number" id="st-fwd-mark-emoji-id" min="1" step="1" placeholder="124" />
+            </span>
+            <span class="settings-row-hint">仅「贴表情」生效；124=👌、76=👍、66=❤️</span>
+          </label>
+        </div>
+        <div class="settings-group" id="settings-group-forward">
+          <div class="settings-group-head">
+            <span class="settings-group-title">📡 转发内容</span>
+          </div>
           <label class="settings-row">
             <span class="settings-row-label">转发进出消息</span>
             <span class="settings-row-control">
@@ -299,40 +343,78 @@
             </span>
             <span class="settings-row-hint">给死亡 / 成就转发做翻译：鹊桥英文 / 翻译键自动转中文，无需服务端开翻译、不用重启</span>
           </label>
-          <div class="settings-row" id="image-fwd-toggle-row">
-            <span class="settings-row-label">转发图片消息</span>
+          <label class="settings-row">
+            <span class="settings-row-label">转发机器人自己的消息</span>
             <span class="settings-row-control">
-              <input type="checkbox" id="st-fwd-image" />
+              <input type="checkbox" id="st-fwd-bot-self" />
             </span>
-            <span class="settings-row-hint">
-              勾选 = 同时开启两个方向的图片转发（MC ↔ 外部会话），默认关闭；
-              点「展开」可分别控制每个方向
-              <button type="button" class="settings-inline-toggle" id="st-fwd-image-toggle"
-                aria-expanded="false" aria-controls="st-fwd-image-subgroup">展开 ⯈</button>
-            </span>
-          </div>
-          <div class="settings-subgroup hidden" id="st-fwd-image-subgroup">
-            <label class="settings-row">
-              <span class="settings-row-label">外部 → MC 图片转发</span>
-              <span class="settings-row-control">
-                <input type="checkbox" id="st-fwd-image-to-mc" />
-              </span>
-              <span class="settings-row-hint">外部会话图片转发到游戏内，需游戏端装 ChatImage 模组（https://github.com/kitUIN/ChatImage），否则显示为 [[CICode,...]] 文本</span>
-            </label>
-            <label class="settings-row">
-              <span class="settings-row-label">MC → 外部 图片转发</span>
-              <span class="settings-row-control">
-                <input type="checkbox" id="st-fwd-image-from-mc" />
-              </span>
-              <span class="settings-row-hint">游戏内图片（ChatImage 的 [[CICode,url=...]] 代码或直贴链接）自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
-            </label>
-          </div>
+            <span class="settings-row-hint">开启后机器人自己的群消息也会转发进游戏，不剥离唤醒词</span>
+          </label>
           <label class="settings-row">
             <span class="settings-row-label">目标会话（每行一个）</span>
             <span class="settings-row-control">
               <textarea id="st-fwd-sessions" rows="2" placeholder="default:GroupMessage:123456789" autocomplete="off" spellcheck="false"></textarea>
             </span>
             <span class="settings-row-hint">仅这些会话参与群 → MC 转发；可用 AstrBot 的 /sid 指令查看</span>
+          </label>
+        </div>
+        <div class="settings-group" id="settings-group-image">
+          <div class="settings-group-head">
+            <span class="settings-group-title">🖼️ 图片转发</span>
+          </div>
+          <div class="settings-row" id="image-fwd-toggle-row">
+            <span class="settings-row-label">转发图片消息</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-image" />
+            </span>
+            <span class="settings-row-hint">
+              勾选 = 同时开启两个方向的图片转发（MC ↔ 外部会话），默认关闭
+            </span>
+          </div>
+          <label class="settings-row">
+            <span class="settings-row-label">外部 → MC 图片转发</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-image-to-mc" />
+            </span>
+            <span class="settings-row-hint">外部会话图片转发到游戏内</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">MC → 外部 图片转发</span>
+            <span class="settings-row-control">
+              <input type="checkbox" id="st-fwd-image-from-mc" />
+            </span>
+            <span class="settings-row-hint">游戏内图片自动下载后作为图片发送到外部会话，下载失败保留原始文本</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏图片模式</span>
+            <span class="settings-row-control">
+              <select id="st-fwd-mc-image-mode">
+                <option value="chatimage">ChatImage 模组（图片 URL）</option>
+                <option value="e33chat">E33Chat 模组（含服务端媒体）</option>
+              </select>
+            </span>
+            <span class="settings-row-hint">装 ChatImage 选前者；装 E33Chat 选后者，额外识别 E33Emote / ChatUpgrade / 服务端媒体图片</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">游戏内图片显示名称</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-chatimage-name" placeholder="图片" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">ChatImage 在聊天栏显示图片时用的名称（CICode 的 name 参数）</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">E33Chat 服务端图片缓存目录</span>
+            <span class="settings-row-control">
+              <input type="text" id="st-fwd-e33chat-media-dir" placeholder="AstrBot 可访问的 e33chat-media 路径" autocomplete="off" spellcheck="false" />
+            </span>
+            <span class="settings-row-hint">仅 E33Chat 模式需要：E33Chat 的服务端媒体没有对外地址，AstrBot 必须能直接读到该目录。留空则只能用第三方图床链接</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">E33Chat 群图最大边长</span>
+            <span class="settings-row-control">
+              <input type="number" id="st-fwd-e33chat-image-max-edge" min="64" max="2048" step="1" placeholder="320" />
+            </span>
+            <span class="settings-row-hint">E33Chat 按原图像素渲染，发往游戏前把群图等比缩到该边长（64–2048）</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-notify">

@@ -455,14 +455,28 @@ assert _c.target_sessions == ["aiocqhttp:GroupMessage:1", "aiocqhttp:GroupMessag
 
 # (f) schema 结构守卫：target_sessions 必须在模板项顶层、紧随 enabled 之后，
 #     且 message 子对象内不得残留同名键（否则 WebUI 会出现两个同名输入框）
+def _msg_items(server_items):
+    """把消息类配置的分组（format / forward / image）合并成一个视图。
+
+    配置页把原先的 message 分组按功能拆成了三个分组，运行时仍按 message
+    读取；测试里要按扁平键查找时用这个合并视图，避免逐个分组点名。
+    """
+    merged = {}
+    for group in ("format", "forward", "image"):
+        node = server_items.get(group)
+        if isinstance(node, dict):
+            merged.update(node.get("items") or {})
+    return merged
+
+
 _schema = _json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8"))
 _items = _schema["mc_servers"]["templates"]["server"]["items"]
 _keys = list(_items.keys())
 assert "target_sessions" in _items, "模板项顶层缺少 target_sessions"
 assert _keys.index("target_sessions") == _keys.index("enabled") + 1, \
     f"target_sessions 必须紧跟 enabled 之后，实际顺序: {_keys}"
-assert "target_sessions" not in _items["message"]["items"], \
-    "message 子对象内不应残留 target_sessions"
+assert "target_sessions" not in _msg_items(_items), \
+    "消息类分组内不应残留 target_sessions"
 print("OK  新位置生效、旧位置兼容、顶层优先、schema 顺序正确且无重复键")
 
 print("\n全部离线逻辑校验通过 ✅（含目标会话位置）")
@@ -818,7 +832,7 @@ assert _sk.index("display_name_default") == _sk.index("display_name") + 1, \
     f"display_name_default 必须紧跟 display_name，实际顺序: {_sk}"
 assert _sitems["display_name_default"]["default"] == "MC", \
     "显示名称默认值必须与代码默认一致（MC）"
-_mitems = _sh["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+_mitems = _msg_items(_sh["mc_servers"]["templates"]["server"]["items"])
 assert "{display_name}" in _mitems["forward_chat_format"]["hint"], \
     "forward_chat_format 的 hint 必须说明 {display_name}"
 assert "{display_name}" in _mitems["broadcast_format"]["hint"], \
@@ -1112,7 +1126,7 @@ assert _out6 == "[QQ]群友A: 你好", _out6
 # (e) schema 守卫：platform_names 在 message 分组内紧随 broadcast_format，
 #     hint 必须说明条目格式与 {platform}，默认自带 aiocqhttp=QQ（删空 = 不改写）
 _sh6 = json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8"))
-_mitems6 = _sh6["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+_mitems6 = _msg_items(_sh6["mc_servers"]["templates"]["server"]["items"])
 assert "platform_names" in _mitems6, "message 分组缺少 platform_names"
 _mk6 = list(_mitems6.keys())
 assert _mk6.index("platform_names") == _mk6.index("broadcast_format") + 1, \
@@ -1384,16 +1398,17 @@ assert len(_P26._extract_images(_ev_mixed)) == 1
 # d7) schema 守卫：新配置项在 message 分组内、默认值 = 关闭/图片，hint 提到 ChatImage
 _sh26 = json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json")
                    .read_text(encoding="utf-8"))
-_mi26 = _sh26["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+_mi26 = _msg_items(_sh26["mc_servers"]["templates"]["server"]["items"])
 assert "forward_image_to_mc" in _mi26 and "chatimage_name" in _mi26
 assert _mi26["forward_image_to_mc"]["default"] is False
 assert _mi26["chatimage_name"]["default"] == "图片"
 assert "ChatImage" in _mi26["forward_image_to_mc"]["hint"], \
     "forward_image_to_mc 的 hint 必须说明依赖 ChatImage 模组"
 _mk26 = list(_mi26.keys())
-assert _mk26.index("forward_image_to_mc") == _mk26.index("mark_emoji_id") + 1, \
-    f"forward_image_to_mc 必须紧跟 mark_emoji_id，实际顺序: {_mk26}"
-assert _mk26.index("chatimage_name") == _mk26.index("forward_image_to_mc") + 1
+# 图片类配置已独立成 image 分组，判据改为「同组且顺序正确」
+_img26 = _sh26["mc_servers"]["templates"]["server"]["items"]["image"]["items"]
+assert list(_img26.keys())[:2] == ["forward_image_to_mc", "chatimage_name"], (
+    list(_img26.keys()))
 print("OK  CICode 生成 / URL 解析优先级 / 配置解析 / 端到端转发 / 前缀过滤 / schema 同步")
 
 print("\n=== 28. 图片转存服务（内置 HTTP 与第三方图床统一条目列表） ===")
@@ -2385,13 +2400,15 @@ assert "[[CICode" in _sent29[0][1][0].text, "关闭开关应原样保留文本"
 # (g) schema 守卫：message 分组内、默认关闭、hint 提到 CICode
 _sh29 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
                    .read_text(encoding="utf-8"))
-_mi29 = _sh29["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+_mi29 = _msg_items(_sh29["mc_servers"]["templates"]["server"]["items"])
 assert "forward_image_from_mc" in _mi29
 assert _mi29["forward_image_from_mc"]["default"] is False
 assert "CICode" in _mi29["forward_image_from_mc"]["hint"]
 _mk29 = list(_mi29.keys())
-assert _mk29.index("forward_image_from_mc") == _mk29.index("chatimage_name") + 1, \
-    "forward_image_from_mc 必须紧跟 chatimage_name，实际顺序: " + str(_mk29)
+_img29 = _sh29["mc_servers"]["templates"]["server"]["items"]["image"]["items"]
+assert list(_img29.keys())[:3] == [
+    "forward_image_to_mc", "chatimage_name", "forward_image_from_mc",
+], list(_img29.keys())
 print("OK  引用提取 / 剥离与保留 / file 路径解析 / 下载字节 / 配置解析 / 端到端 / schema 同步")
 
 print("\n=== 62. E33Chat 模组图片与文本互通 ===")
@@ -2512,7 +2529,7 @@ print("OK  配置解析 / 默认值 / 钳制 / 非法模式回落")
 # (f) schema 守卫
 _sh62 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
                    .read_text(encoding="utf-8"))
-_mi62 = _sh62["mc_servers"]["templates"]["server"]["items"]["message"]["items"]
+_mi62 = _msg_items(_sh62["mc_servers"]["templates"]["server"]["items"])
 assert _mi62["mc_image_mode"]["default"] == "chatimage"
 assert _mi62["mc_image_mode"]["options"] == ["chatimage", "e33chat"]
 assert _mi62["e33chat_media_dir"]["default"] == ""
@@ -2521,6 +2538,81 @@ assert "E33Chat" in _mi62["mc_image_mode"]["hint"]
 print("OK  schema 默认值 / 选项 / hint")
 
 print("OK  E33Chat 图片与文本互通全部通过")
+
+print("\n=== 63. 配置分组重构（format / forward / image） ===")
+from astrbot_plugin_minecraft_queqiao.core.models_config import (
+    MESSAGE_GROUP_ALIASES as _MGA63,
+    normalize_entry as _norm63,
+    fold_entry as _fold63,
+)
+
+# (a) schema 形状：message 已拆成三个分组，键集合与别名表一致
+_sh63 = json.loads(pathlib.Path(__file__).with_name("_conf_schema.json")
+                   .read_text(encoding="utf-8"))
+_srv63 = _sh63["mc_servers"]["templates"]["server"]["items"]
+assert "message" not in _srv63, "message 分组应已被 format/forward/image 取代"
+for _g63, _keys63 in _MGA63.items():
+    assert _g63 in _srv63, f"schema 缺少分组 {_g63}"
+    assert list(_srv63[_g63]["items"].keys()) == list(_keys63), (
+        f"{_g63} 分组键不一致: {list(_srv63[_g63]['items'].keys())}")
+
+# (b) 旧配置（键仍在 message）继续可用
+_old63 = {"message": {
+    "broadcast_format": "OLD {message}",
+    "platform_names": ["a=B"],
+    "forward_image_to_mc": True,
+    "mc_image_mode": "e33chat",
+    "e33chat_media_dir": "/tmp/x",
+    "e33chat_image_max_edge": 111,
+}}
+_c_old63 = ServerConfig.from_dict(_old63)
+assert _c_old63.broadcast_format == "OLD {message}"
+assert _c_old63.platform_names == {"a": "B"}
+assert _c_old63.forward_image_to_mc is True
+assert _c_old63.mc_image_mode == "e33chat"
+assert _c_old63.e33chat_media_dir == "/tmp/x"
+assert _c_old63.e33chat_image_max_edge == 111
+
+# (c) 新配置（键在三个新分组）同样可解析
+_new63 = {
+    "format": {"broadcast_format": "NEW {message}", "platform_names": ["x=Y"]},
+    "forward": {"forward_image_to_mc": True},
+    "image": {"mc_image_mode": "e33chat", "e33chat_media_dir": "/tmp/y",
+              "e33chat_image_max_edge": 222},
+}
+_c_new63 = ServerConfig.from_dict(_new63)
+assert _c_new63.broadcast_format == "NEW {message}"
+assert _c_new63.platform_names == {"x": "Y"}
+assert _c_new63.forward_image_to_mc is True
+assert _c_new63.mc_image_mode == "e33chat"
+assert _c_new63.e33chat_media_dir == "/tmp/y"
+assert _c_new63.e33chat_image_max_edge == 222
+
+# (d) 新旧同时存在：新分组优先（用户在新结构里改的值不被旧键覆盖）
+_both63 = {"message": {"broadcast_format": "OLD"}, "format": {"broadcast_format": "NEW"}}
+assert ServerConfig.from_dict(_both63).broadcast_format == "NEW"
+
+# (e) 落盘：fold_entry 把扁平键搬进新分组，message 不残留同名字段
+# fold_entry 的输入是「扁平运行时视图」：消息类键在 message 子对象里
+_flat63 = {"message": {
+    "broadcast_format": "F",
+    "forward_image_to_mc": True,
+    "mc_image_mode": "e33chat",
+}}
+_folded63 = _fold63(_flat63)
+assert _folded63["format"]["broadcast_format"] == "F", _folded63
+assert _folded63["image"]["forward_image_to_mc"] is True, _folded63
+assert _folded63["image"]["mc_image_mode"] == "e33chat", _folded63
+_left63 = (_folded63.get("message") or {})
+assert "broadcast_format" not in _left63 and "mc_image_mode" not in _left63, (
+    f"message 残留同名字段: {_left63}")
+
+# (f) 往返：fold → 解析，值不丢
+_c_rt63 = ServerConfig.from_dict(_folded63)
+assert _c_rt63.broadcast_format == "F"
+assert _c_rt63.forward_image_to_mc is True
+assert _c_rt63.mc_image_mode == "e33chat"
+print("OK  schema 三分组 / 旧配置兼容 / 新配置解析 / 新分组优先 / 落盘搬家 / 往返不丢")
 
 print("\n=== 30. 在线玩家三层兜底（RCON list → SLP sample → 人数） ===")
 from astrbot_plugin_minecraft_queqiao.core.models import (
@@ -4760,7 +4852,10 @@ assert _new43["prefix"]["enabled_directions"] == [
 ], "新建条目默认三个方向都启用"
 assert _new43["server"]["reverse_port"] == 8080, "未指定的连接参数回落 schema 默认值"
 assert _new43["server"]["client_origin"] == "astrbot"
-assert isinstance(_new43["message"], dict) and _new43["message"]["forward_chat_format"]
+# 消息类配置已拆成 format / forward / image 三个分组，新建条目按新结构生成
+assert isinstance(_new43["format"], dict) and _new43["format"]["forward_chat_format"]
+assert isinstance(_new43["forward"], dict) and _new43["forward"]["forward_chat_to_astrbot"] is True
+assert isinstance(_new43["image"], dict) and _new43["image"]["mc_image_mode"] == "chatimage"
 assert _new43["server"]["display_name_default"] == "MC"
 assert list((_pl43.Path(_tmp43) / "conf_backups").glob("*.json")), "改配置前必须留备份"
 
@@ -4869,31 +4964,13 @@ from astrbot_plugin_minecraft_queqiao.core.constants import (
     QUIET_HOURS_ITEM_KEYS as _QIK44,
 )
 
-_plugin44.SOFT_CONFIG_KEYS = (
-    "enable_ai_chat",
-    "ai_chat_prefix",
-    "enable_local_translation",
-    "forward_chat_to_astrbot",
-    "enable_relay_to_mc",
-    "forward_chat_prefix",
-    "forward_chat_format",
-    "forward_join_leave_to_astrbot",
-    "forward_death_to_astrbot",
-    "forward_achievement_to_astrbot",
-    "auto_forward_prefix",
-    "target_sessions",
-    "terminal_days",
-    "notify_on_connect",
-    "notify_on_connect_format",
-    "notify_on_connect_fail",
-    "notify_on_connect_fail_format",
-    "connect_fail_notify_delay",
-    "slp_address",
-    "quiet_hours_enabled",
-    "quiet_hours_start",
-    "quiet_hours_end",
-    "quiet_hours_items",
+# 直接取真实类的软配置键表：硬编码副本会与 main.py 漂移，
+# 面板新加的键就可能在这条测试里「看起来能存、实际触发热重载」而测不出来
+from astrbot_plugin_minecraft_queqiao.main import (
+    MinecraftQueQiaoPlugin as _MQP44,
 )
+_plugin44.SOFT_CONFIG_KEYS = _MQP44.SOFT_CONFIG_KEYS
+_plugin44._SOFT_BOOL_DEFAULTS = _MQP44._SOFT_BOOL_DEFAULTS
 
 
 def _apply_soft44(server_name, fields):
@@ -4909,6 +4986,7 @@ def _apply_soft44(server_name, fields):
         "forward_join_leave_to_astrbot": False,
         "forward_death_to_astrbot": False,
         "forward_achievement_to_astrbot": False,
+        "forward_bot_self_messages": False,
         "notify_on_connect": False,
         "notify_on_connect_fail": False,
         "quiet_hours_enabled": False,
@@ -4953,6 +5031,32 @@ def _apply_soft44(server_name, fields):
                 continue
             _selq44 = {str(x).strip() for x in _rawq44 if str(x).strip()}
             cfg.quiet_hours_items = [k for k in _QIK44 if k in _selq44]
+        elif _key == "platform_names":
+            # 「原始平台名=显示名」列表 → 映射，与 main.py 同口径
+            _rawp44 = fields.get(_key)
+            _mapped44 = {}
+            if isinstance(_rawp44, list):
+                for _item44 in _rawp44:
+                    _k44, _sep44, _v44 = str(_item44).partition("=")
+                    if _sep44 and _k44.strip() and _v44.strip():
+                        _mapped44[_k44.strip()] = _v44.strip()
+            cfg.platform_names = _mapped44
+        elif _key == "mark_option":
+            _mo44 = str(fields.get(_key) or "").strip().lower()
+            if _mo44 not in ("emoji", "text", "none"):
+                continue
+            cfg.mark_option = _mo44
+        elif _key == "mark_emoji_id":
+            try:
+                cfg.mark_emoji_id = int(str(fields.get(_key)).strip())
+            except (TypeError, ValueError):
+                cfg.mark_emoji_id = 124
+        elif _key == "e33chat_image_max_edge":
+            try:
+                _me44 = int(str(fields.get(_key)).strip())
+            except (TypeError, ValueError):
+                _me44 = int(getattr(cfg, _key, 320))
+            cfg.e33chat_image_max_edge = max(64, min(2048, _me44))
         else:
             setattr(cfg, _key, str(fields.get(_key) or "").strip())
         applied = True
@@ -5153,6 +5257,74 @@ _set_payload44({"index": 0, "enabled_directions": [
 asyncio.run(_wac44.update_config_server())
 assert _cfg44_run.enable_relay_to_mc and _cfg44_run.forward_chat_to_astrbot \
     and _cfg44_run.enable_ai_chat
+
+# ---- 消息格式 / 图片 分组新增到面板的字段：回显 + 保存 + 就地生效 ----
+# 这些键此前只能改配置文件（面板根本没有控件），是「web 少一个可配置模板」的根因
+_m44f = _it44d["message"]
+assert _m44f["broadcast_format"] == _DBF4, _m44f
+assert _m44f["platform_names"] == ["aiocqhttp=QQ"], _m44f
+assert _m44f["broadcast_color"] == "white"
+assert _m44f["mark_option"] == "emoji"
+assert _m44f["mark_emoji_id"] == 124
+assert _m44f["chatimage_name"] == "图片"
+assert _m44f["forward_bot_self_messages"] is False
+assert _m44f["mc_image_mode"] == "chatimage"
+assert _m44f["e33chat_media_dir"] == ""
+assert _m44f["e33chat_image_max_edge"] == 320
+
+_set_payload44({
+    "index": 0,
+    "message": {
+        "broadcast_format": "<{sender}> {message}",
+        "platform_names": ["aiocqhttp=QQ", " telegram = 电报 ", "", "bad-entry"],
+        "broadcast_color": " aqua ",
+        "mark_option": "text",
+        "mark_emoji_id": 76,
+        "chatimage_name": "图",
+        "forward_bot_self_messages": True,
+        "mc_image_mode": "e33chat",
+        "e33chat_media_dir": " D:/mc/e33chat-media ",
+        "e33chat_image_max_edge": 5000,
+    },
+})
+_resp44f = asyncio.run(_wac44.update_config_server())
+assert _resp44f["data"]["saved"] is True
+assert _resp44f["data"]["reloaded"] is False, "格式 / 图片属软字段，不得热重载"
+_stored44f = _norm44(_plugin44.config["mc_servers"][0])["message"]
+assert _stored44f["broadcast_format"] == "<{sender}> {message}"
+# 非法条目（空行 / 无分隔符）丢弃，键值两侧空白去掉
+assert _stored44f["platform_names"] == ["aiocqhttp=QQ", "telegram=电报"], (
+    _stored44f["platform_names"])
+assert _stored44f["broadcast_color"] == "aqua"
+assert _stored44f["mark_option"] == "text"
+assert _stored44f["mark_emoji_id"] == 76
+assert _stored44f["chatimage_name"] == "图"
+assert _stored44f["forward_bot_self_messages"] is True
+assert _stored44f["mc_image_mode"] == "e33chat"
+assert _stored44f["e33chat_media_dir"] == "D:/mc/e33chat-media"
+assert _stored44f["e33chat_image_max_edge"] == 2048, "越界边长必须钳制到上限"
+# 运行时就地生效（不重新加载）
+assert _cfg44_run.broadcast_format == "<{sender}> {message}"
+assert _cfg44_run.platform_names["telegram"] == "电报"
+assert _cfg44_run.broadcast_color == "aqua"
+assert _cfg44_run.mark_option == "text"
+assert _cfg44_run.mark_emoji_id == 76
+assert _cfg44_run.chatimage_name == "图"
+assert _cfg44_run.forward_bot_self_messages is True
+assert _cfg44_run.mc_image_mode == "e33chat"
+assert _cfg44_run.e33chat_media_dir == "D:/mc/e33chat-media"
+assert _cfg44_run.e33chat_image_max_edge == 2048
+assert _plugin44.reloads == 0
+# 非法 mark_option 回落 emoji（面板 select 只给三个合法值，防脏提交）
+_set_payload44({"index": 0, "message": {"mark_option": "bogus"}})
+asyncio.run(_wac44.update_config_server())
+assert _norm44(_plugin44.config["mc_servers"][0])["message"]["mark_option"] == "emoji"
+assert _cfg44_run.mark_option == "emoji"
+# 回读一致（面板刷新后不得变回旧值）
+_m44fr = asyncio.run(_wac44.get_config_servers())["data"]["servers"][0]["message"]
+assert _m44fr["broadcast_format"] == "<{sender}> {message}"
+assert _m44fr["mc_image_mode"] == "e33chat"
+assert _m44fr["e33chat_image_max_edge"] == 2048
 
 # 服务器连通通知（条目顶层，与 enable_ai_chat 平级）：列表默认关闭 + 文案回落默认
 assert _it44d["notify_on_connect"] is False
@@ -5372,7 +5544,11 @@ for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"'
                 'id="st-fwd-chat"', 'id="st-fwd-chat-format"', 'id="st-fwd-joinleave"',
                 'id="st-fwd-death"', 'id="st-fwd-achievement"', 'id="st-fwd-image"',
                 'id="st-fwd-image-to-mc"', 'id="st-fwd-image-from-mc"',
-                'id="st-fwd-image-toggle"', 'id="st-fwd-image-subgroup"',
+                'id="st-fwd-mc-image-mode"', 'id="st-fwd-chatimage-name"',
+                'id="st-fwd-e33chat-media-dir"', 'id="st-fwd-e33chat-image-max-edge"',
+                'id="st-fwd-broadcast-format"', 'id="st-fwd-platform-names"',
+                'id="st-fwd-broadcast-color"', 'id="st-fwd-mark-option"',
+                'id="st-fwd-mark-emoji-id"', 'id="st-fwd-bot-self"',
                 'id="st-fwd-prefix"',
                 'id="st-fwd-sessions"',
                 'id="st-auto-refresh"', 'id="st-terminal-days"', 'id="settings-save"',
@@ -7016,7 +7192,7 @@ for _stale51 in ("notify_on_connect", "notify_on_connect_format",
                  "notify_on_connect_fail", "notify_on_connect_fail_format",
                  "connect_fail_notify_delay", "slp_address"):
     assert _stale51 not in _items51, f"旧扁平键 {_stale51} 应已迁入 notify 分组"
-    assert _stale51 not in _items51["message"]["items"]
+    assert _stale51 not in _msg_items(_items51)
 print("OK  默认关闭 / 模板渲染防异常 / 连接回调逐会话发送 / 失败隔离 / "
       "同一轮故障只通知首次失败 / 断连静默期（期间连回不通知）/ "
       "优雅关闭按断线处理 / 反向替换不误报 / 软更新即时生效 / schema 同步")
@@ -7459,7 +7635,7 @@ for _k58, _t58 in (
 for _stale58 in ("quiet_hours_enabled", "quiet_hours_start",
                  "quiet_hours_end", "quiet_hours_items"):
     assert _stale58 not in _items58, f"旧扁平键 {_stale58} 应已迁入 quiet_hours 分组"
-    assert _stale58 not in _items58["message"]["items"]
+    assert _stale58 not in _msg_items(_items58)
 assert "23:00" in _qh_items58["start"]["hint"]
 assert _qh_items58["items"]["default"] == list(_DQHI58)
 # AstrBot 插件配置页据 render_type=checkbox + options/labels 渲染多选框，
@@ -7634,7 +7810,7 @@ assert _slp59["type"] == "string"
 assert _slp59["default"] == ServerConfig.from_dict({}).slp_address == ""
 assert "25565" in _slp59["hint"]
 assert "slp_address" not in _items59, "应已迁入 notify 分组"
-assert "slp_address" not in _items59["message"]["items"]
+assert "slp_address" not in _msg_items(_items59)
 assert ServerConfig.from_dict({"slp_address": " 1.2.3.4:25566 "}).slp_address == (
     "1.2.3.4:25566"
 )

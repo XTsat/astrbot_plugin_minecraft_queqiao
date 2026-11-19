@@ -144,8 +144,57 @@
               }
             }
           },
-          "message": {
-            "description": "消息转发配置",
+          "format": {
+            "description": "消息格式",
+            "type": "object",
+            "items": {
+              "broadcast_format": {
+                "type": "string",
+                "description": "外部消息转发到MC的格式",
+                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{display_name} 服务器显示名称（可中文；未填则用显示名称默认值，默认 MC），{server_name} 服务器名称（始终有值）",
+                "default": "[{platform}]{sender}: {message}"
+              },
+              "platform_names": {
+                "type": "list",
+                "description": "平台名称映射",
+                "hint": "把 {platform} 的原始平台名替换为自定义展示名，例如 aiocqhttp=QQ、telegram=电报。每项格式：原始平台名=显示名。默认自带示例 aiocqhttp=QQ（开箱即用）；未命中的平台保持原名，删空则不改写",
+                "default": [
+                  "aiocqhttp=QQ"
+                ]
+              },
+              "forward_chat_format": {
+                "type": "string",
+                "description": "聊天消息格式",
+                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容，{display_name} 替换为服务器显示名称（可中文，如 生存服；未填则用显示名称默认值，默认 MC）。示例：<{player}> {message}",
+                "default": "[{display_name}]{player}: {message}"
+              },
+              "broadcast_color": {
+                "type": "string",
+                "description": "转发消息颜色",
+                "hint": "MC 颜色名（如 aqua、green、white）或 #RRGGBB 格式",
+                "default": "white"
+              },
+              "mark_option": {
+                "type": "string",
+                "description": "转发提醒方式",
+                "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
+                "options": [
+                  "text",
+                  "emoji",
+                  "none"
+                ],
+                "default": "emoji"
+              },
+              "mark_emoji_id": {
+                "type": "int",
+                "description": "回执表情 ID",
+                "hint": "转发成功后所贴的表情（仅 mark_option=emoji 且平台为 aiocqhttp 时生效）。填 QQ 表情 ID，默认 124 为 👌、76 为 👍、66 为 ❤️、63 为 🌹",
+                "default": 124
+              }
+            }
+          },
+          "forward": {
+            "description": "转发内容",
             "type": "object",
             "items": {
               "forward_chat_to_astrbot": {
@@ -153,12 +202,6 @@
                 "description": "全量转发游戏聊天到指定会话",
                 "hint": "开启后游戏内普通聊天全部转发到目标会话；关闭后只有以「游戏→群触发前缀」开头的聊天才转发（该前缀留空则仍全部转发）。已开启的图片转发不受该前缀限制",
                 "default": true
-              },
-              "forward_chat_format": {
-                "type": "string",
-                "description": "聊天消息格式",
-                "hint": "转发时的聊天消息格式。{player} 替换为玩家名称，{message} 替换为消息内容，{display_name} 替换为服务器显示名称（可中文，如 生存服；未填则用显示名称默认值，默认 MC）。示例：<{player}> {message}",
-                "default": "[{display_name}]{player}: {message}"
               },
               "forward_join_leave_to_astrbot": {
                 "type": "bool",
@@ -189,44 +232,13 @@
                 "description": "转发机器人自己的消息，不剥离唤醒词",
                 "hint": "默认关闭。开启后机器人唤醒消息按原文转发（含被 OneBot 省略的 @机器人），并转发消息管道回复与机器人自身的群消息；图片与表情按转发配置处理",
                 "default": false
-              },
-              "broadcast_format": {
-                "type": "string",
-                "description": "外部消息转发到MC的格式",
-                "hint": "发送到游戏内的格式。{platform} 平台名，{sender} 发送者名，{message} 消息内容，{display_name} 服务器显示名称（可中文；未填则用显示名称默认值，默认 MC），{server_name} 服务器名称（始终有值）",
-                "default": "[{platform}]{sender}: {message}"
-              },
-              "platform_names": {
-                "type": "list",
-                "description": "平台名称映射",
-                "hint": "把 {platform} 的原始平台名替换为自定义展示名，例如 aiocqhttp=QQ、telegram=电报。每项格式：原始平台名=显示名。默认自带示例 aiocqhttp=QQ（开箱即用）；未命中的平台保持原名，删空则不改写",
-                "default": [
-                  "aiocqhttp=QQ"
-                ]
-              },
-              "broadcast_color": {
-                "type": "string",
-                "description": "转发消息颜色",
-                "hint": "MC 颜色名（如 aqua、green、white）或 #RRGGBB 格式",
-                "default": "white"
-              },
-              "mark_option": {
-                "type": "string",
-                "description": "转发提醒方式",
-                "hint": "选择转发成功后的提醒方式：text为文本提醒，emoji为贴表情，none为不提醒",
-                "options": [
-                  "text",
-                  "emoji",
-                  "none"
-                ],
-                "default": "emoji"
-              },
-              "mark_emoji_id": {
-                "type": "int",
-                "description": "回执表情 ID",
-                "hint": "转发成功后所贴的表情（仅 mark_option=emoji 且平台为 aiocqhttp 时生效）。填 QQ 表情 ID，默认 124 为 👌、76 为 👍、66 为 ❤️、63 为 🌹",
-                "default": 124
-              },
+              }
+            }
+          },
+          "image": {
+            "description": "图片转发",
+            "type": "object",
+            "items": {
               "forward_image_to_mc": {
                 "type": "bool",
                 "description": "转发图片到游戏内",

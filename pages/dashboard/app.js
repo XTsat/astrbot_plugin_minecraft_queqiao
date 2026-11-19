@@ -3538,13 +3538,23 @@ class DashboardApp {
     const fwdBoxes = {
       chat: document.getElementById('st-fwd-chat'),
       format: document.getElementById('st-fwd-chat-format'),
+      broadcastFormat: document.getElementById('st-fwd-broadcast-format'),
+      platformNames: document.getElementById('st-fwd-platform-names'),
+      broadcastColor: document.getElementById('st-fwd-broadcast-color'),
+      markOption: document.getElementById('st-fwd-mark-option'),
+      markEmojiId: document.getElementById('st-fwd-mark-emoji-id'),
       join: document.getElementById('st-fwd-joinleave'),
       death: document.getElementById('st-fwd-death'),
       ach: document.getElementById('st-fwd-achievement'),
       localTr: document.getElementById('st-fwd-local-translate'),
+      botSelf: document.getElementById('st-fwd-bot-self'),
       image: document.getElementById('st-fwd-image'),
       imageToMc: document.getElementById('st-fwd-image-to-mc'),
       imageFromMc: document.getElementById('st-fwd-image-from-mc'),
+      mcImageMode: document.getElementById('st-fwd-mc-image-mode'),
+      chatimageName: document.getElementById('st-fwd-chatimage-name'),
+      e33chatMediaDir: document.getElementById('st-fwd-e33chat-media-dir'),
+      e33chatImageMaxEdge: document.getElementById('st-fwd-e33chat-image-max-edge'),
       relay: document.getElementById('st-relay-enabled'),
       prefix: document.getElementById('st-fwd-prefix'),
       chatPrefix: document.getElementById('st-fwd-chat-prefix'),
@@ -3582,6 +3592,53 @@ class DashboardApp {
         fwdBoxes.format.value = typeof msg.forward_chat_format === 'string'
           ? msg.forward_chat_format
           : '';
+      }
+      if (fwdBoxes.broadcastFormat) {
+        fwdBoxes.broadcastFormat.value = typeof msg.broadcast_format === 'string'
+          ? msg.broadcast_format
+          : '';
+      }
+      if (fwdBoxes.platformNames) {
+        // 配置里是「原始平台名=显示名」的字符串数组，面板按每行一条编辑
+        const names = Array.isArray(msg.platform_names) ? msg.platform_names : [];
+        fwdBoxes.platformNames.value = names.join('\n');
+      }
+      if (fwdBoxes.broadcastColor) {
+        fwdBoxes.broadcastColor.value = typeof msg.broadcast_color === 'string'
+          ? msg.broadcast_color
+          : '';
+      }
+      if (fwdBoxes.markOption) {
+        fwdBoxes.markOption.value = msg.mark_option === 'text'
+          || msg.mark_option === 'none'
+          ? msg.mark_option
+          : 'emoji';
+      }
+      if (fwdBoxes.markEmojiId) {
+        fwdBoxes.markEmojiId.value = Number.isFinite(msg.mark_emoji_id)
+          ? String(msg.mark_emoji_id)
+          : '124';
+      }
+      if (fwdBoxes.botSelf) fwdBoxes.botSelf.checked = !!msg.forward_bot_self_messages;
+      if (fwdBoxes.mcImageMode) {
+        fwdBoxes.mcImageMode.value = msg.mc_image_mode === 'e33chat'
+          ? 'e33chat'
+          : 'chatimage';
+      }
+      if (fwdBoxes.chatimageName) {
+        fwdBoxes.chatimageName.value = typeof msg.chatimage_name === 'string'
+          ? msg.chatimage_name
+          : '';
+      }
+      if (fwdBoxes.e33chatMediaDir) {
+        fwdBoxes.e33chatMediaDir.value = typeof msg.e33chat_media_dir === 'string'
+          ? msg.e33chat_media_dir
+          : '';
+      }
+      if (fwdBoxes.e33chatImageMaxEdge) {
+        fwdBoxes.e33chatImageMaxEdge.value = Number.isFinite(msg.e33chat_image_max_edge)
+          ? String(msg.e33chat_image_max_edge)
+          : '320';
       }
       if (fwdBoxes.join) fwdBoxes.join.checked = !!msg.forward_join_leave_to_astrbot;
       if (fwdBoxes.death) fwdBoxes.death.checked = !!msg.forward_death_to_astrbot;
@@ -3754,6 +3811,49 @@ class DashboardApp {
           // 图片转发：按两个方向的实际勾选分别保存（总开关只做快捷全开/全关联动）
           msg.forward_image_to_mc = !!(fwdImageToMc && fwdImageToMc.checked);
           msg.forward_image_from_mc = !!(fwdImageFromMc && fwdImageFromMc.checked);
+          // ---- 消息格式 ----
+          const fwdBroadcastFormat = document.getElementById('st-fwd-broadcast-format');
+          if (fwdBroadcastFormat) {
+            const v = fwdBroadcastFormat.value.trim();
+            if (v) msg.broadcast_format = v;
+            else delete msg.broadcast_format;
+          }
+          const fwdPlatformNames = document.getElementById('st-fwd-platform-names');
+          if (fwdPlatformNames) {
+            // 每行一条「原始平台名=显示名」；空行忽略，删空 = 不改写
+            msg.platform_names = fwdPlatformNames.value
+              .split('\n').map((line) => line.trim()).filter(Boolean);
+          }
+          const fwdBroadcastColor = document.getElementById('st-fwd-broadcast-color');
+          if (fwdBroadcastColor) {
+            msg.broadcast_color = fwdBroadcastColor.value.trim() || 'white';
+          }
+          const fwdMarkOption = document.getElementById('st-fwd-mark-option');
+          if (fwdMarkOption) msg.mark_option = fwdMarkOption.value;
+          const fwdMarkEmojiId = document.getElementById('st-fwd-mark-emoji-id');
+          if (fwdMarkEmojiId) {
+            const n = Number.parseInt(fwdMarkEmojiId.value, 10);
+            msg.mark_emoji_id = Number.isFinite(n) && n > 0 ? n : 124;
+          }
+          // ---- 转发内容 ----
+          const fwdBotSelf = document.getElementById('st-fwd-bot-self');
+          if (fwdBotSelf) msg.forward_bot_self_messages = !!fwdBotSelf.checked;
+          // ---- 图片 ----
+          const fwdMcImageMode = document.getElementById('st-fwd-mc-image-mode');
+          if (fwdMcImageMode) msg.mc_image_mode = fwdMcImageMode.value;
+          const fwdChatimageName = document.getElementById('st-fwd-chatimage-name');
+          if (fwdChatimageName) {
+            msg.chatimage_name = fwdChatimageName.value.trim() || '图片';
+          }
+          const fwdE33MediaDir = document.getElementById('st-fwd-e33chat-media-dir');
+          if (fwdE33MediaDir) msg.e33chat_media_dir = fwdE33MediaDir.value.trim();
+          const fwdE33MaxEdge = document.getElementById('st-fwd-e33chat-image-max-edge');
+          if (fwdE33MaxEdge) {
+            const n = Number.parseInt(fwdE33MaxEdge.value, 10);
+            msg.e33chat_image_max_edge = Number.isFinite(n)
+              ? Math.max(64, Math.min(2048, n))
+              : 320;
+          }
           payload.message = msg;
           // 目标会话：每行一个 UMO（同服务器表单解析规则）
           payload.target_sessions = fwdSessions.value
@@ -3842,14 +3942,6 @@ class DashboardApp {
             && fwdImageFromMc && fwdImageFromMc.checked);
         }
       });
-    });
-    const fwdImageToggleBtn = document.getElementById('st-fwd-image-toggle');
-    fwdImageToggleBtn?.addEventListener('click', () => {
-      const subgroup = document.getElementById('st-fwd-image-subgroup');
-      if (!subgroup) return;
-      const collapsed = subgroup.classList.toggle('hidden');
-      fwdImageToggleBtn.textContent = collapsed ? '展开 ⯈' : '收起 ⯆';
-      fwdImageToggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     });
   }
 

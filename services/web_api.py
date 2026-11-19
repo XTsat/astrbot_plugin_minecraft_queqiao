@@ -18,7 +18,11 @@ from astrbot.api import logger
 from ..core.constants import (
     CONNECT_FAIL_NOTIFY_DELAY_MAX,
     CONNECT_FAIL_NOTIFY_DELAY_MIN,
+    DEFAULT_BROADCAST_FORMAT,
+    DEFAULT_CHATIMAGE_NAME,
+    DEFAULT_PLATFORM_NAMES,
     DEFAULT_CHAT_FORMAT,
+    EMOJI_OK_GESTURE,
     DEFAULT_CLIENT_ORIGIN,
     DEFAULT_CONNECT_FAIL_NOTIFY_DELAY,
     DEFAULT_CONNECT_FAIL_NOTIFY_FORMAT,
@@ -1447,6 +1451,35 @@ class WebApiController:
                 E33CHAT_IMAGE_MAX_EDGE_MIN,
                 E33CHAT_IMAGE_MAX_EDGE_MAX,
             ),
+            "broadcast_format": str(
+                msg.get("broadcast_format") or DEFAULT_BROADCAST_FORMAT
+            ),
+            # 平台名映射在配置里是「原始平台名=显示名」字符串数组。
+            # 缺键时回落到默认映射（与 ServerConfig 默认一致），面板首次打开
+            # 显示的必须是实际生效值；显式空列表表示「删空 = 不改写」，要保留
+            "platform_names": (
+                [
+                    str(item).strip()
+                    for item in msg["platform_names"]
+                    if str(item).strip()
+                ]
+                if isinstance(msg.get("platform_names"), list)
+                else [f"{key}={value}" for key, value in DEFAULT_PLATFORM_NAMES.items()]
+            ),
+            "broadcast_color": str(msg.get("broadcast_color") or "white"),
+            "mark_option": (
+                str(msg.get("mark_option") or "").strip().lower()
+                if str(msg.get("mark_option") or "").strip().lower()
+                in ("emoji", "text", "none")
+                else "emoji"
+            ),
+            "mark_emoji_id": _as_int(msg.get("mark_emoji_id"), EMOJI_OK_GESTURE),
+            "chatimage_name": str(
+                msg.get("chatimage_name") or DEFAULT_CHATIMAGE_NAME
+            ),
+            "forward_bot_self_messages": _as_bool(
+                msg.get("forward_bot_self_messages"), False
+            ),
             "auto_forward_prefix": str(msg.get("auto_forward_prefix") or ""),
         }
 
@@ -1734,6 +1767,13 @@ class WebApiController:
                 "mc_image_mode",
                 "e33chat_media_dir",
                 "e33chat_image_max_edge",
+                "broadcast_format",
+                "platform_names",
+                "broadcast_color",
+                "mark_option",
+                "mark_emoji_id",
+                "chatimage_name",
+                "forward_bot_self_messages",
                 "auto_forward_prefix",
             ):
                 if key not in message_payload:
@@ -1762,9 +1802,35 @@ class WebApiController:
                         == "e33chat"
                         else "chatimage"
                     )
+                elif key == "forward_bot_self_messages":
+                    msg[key] = _as_bool(message_payload[key], False)
+                elif key == "mark_emoji_id":
+                    msg[key] = _as_int(
+                        message_payload[key], EMOJI_OK_GESTURE
+                    )
+                elif key == "mark_option":
+                    value = str(message_payload[key] or "").strip().lower()
+                    msg[key] = value if value in ("emoji", "text", "none") else "emoji"
+                elif key == "platform_names":
+                    # 只保留「原始平台名=显示名」的合法条目：空行、缺分隔符、
+                    # 键或值为空的条目一律丢弃，与 _to_platform_map 同口径，
+                    # 避免面板把非法条目回显成一条看着能用的脏配置
+                    raw = message_payload[key]
+                    if isinstance(raw, list):
+                        cleaned: list[str] = []
+                        for item in raw:
+                            key_part, sep, value_part = str(item).partition("=")
+                            key_part, value_part = key_part.strip(), value_part.strip()
+                            if sep and key_part and value_part:
+                                cleaned.append(f"{key_part}={value_part}")
+                        msg[key] = cleaned
                 else:
                     msg[key] = str(message_payload[key] or "").strip()
             entry["message"] = msg
+            # 清洗结果同步回 payload：后面的 payload_view 与就地生效都从它取值，
+            # 不同步会出现「落盘用清洗值、运行时用原始值」的不一致
+            if isinstance(payload.get("message"), dict):
+                payload["message"].update(msg)
         if "enabled" in payload:
             entry["enabled"] = _as_bool(payload.get("enabled"), True)
 

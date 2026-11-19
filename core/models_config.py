@@ -223,6 +223,37 @@ _LEGACY_DIRECTION_LEAVES: dict[str, str] = {
     "enable_game_to_group": "forward_chat_to_astrbot",
     "enable_game_to_ai": "enable_ai_chat",
 }
+# 消息类配置按功能拆成独立分组（format / forward / image），运行时仍按
+# `message` 子对象读取：新分组只在落盘形状上分家，normalize_entry 把它们
+# 折回 message、fold_entry 再从 message 搬回各自分组。这样运行时只有一处，
+# 旧配置（键仍在 message 里）也继续可用。
+MESSAGE_GROUP_ALIASES: dict[str, tuple[str, ...]] = {
+    "format": (
+        "broadcast_format",
+        "platform_names",
+        "forward_chat_format",
+        "broadcast_color",
+        "mark_option",
+        "mark_emoji_id",
+    ),
+    "forward": (
+        "forward_chat_to_astrbot",
+        "forward_join_leave_to_astrbot",
+        "forward_death_to_astrbot",
+        "forward_achievement_to_astrbot",
+        "enable_local_translation",
+        "forward_bot_self_messages",
+    ),
+    "image": (
+        "forward_image_to_mc",
+        "chatimage_name",
+        "forward_image_from_mc",
+        "mc_image_mode",
+        "e33chat_media_dir",
+        "e33chat_image_max_edge",
+    ),
+}
+
 # 旧版把这两个前缀写在 message 子对象里，运行时也按 message 键读取
 _PREFIX_MESSAGE_KEYS = ("auto_forward_prefix", "forward_chat_prefix")
 # 两个「转发」开关落在 message 子对象（与历史位置一致），
@@ -242,6 +273,20 @@ def normalize_entry(entry: dict) -> dict:
     data = dict(entry)
     raw_message = data.get("message")
     data["message"] = dict(raw_message) if isinstance(raw_message, dict) else {}
+
+    # 三个消息分组的键都认：不按分组严格匹配，手改配置时把键写错分组
+    # 也能生效（分组只是面板归类，运行时不区分）
+    _all_message_keys = {
+        leaf for leaves in MESSAGE_GROUP_ALIASES.values() for leaf in leaves
+    }
+    for group in MESSAGE_GROUP_ALIASES:
+        node = data.get(group)
+        if not isinstance(node, dict):
+            continue
+        for leaf in _all_message_keys:
+            if leaf in node:
+                # 新分组优先：用户在新结构里改过的值不被旧 message 覆盖
+                data["message"][leaf] = node[leaf]
 
     for group, aliases in CONFIG_GROUP_ALIASES.items():
         node = data.get(group)
@@ -309,6 +354,15 @@ def fold_entry(entry: dict) -> dict:
     # 旧版散落在 prefix 分组里的独立布尔一并清掉
     for legacy_leaf in _LEGACY_DIRECTION_LEAVES:
         prefix_group.pop(legacy_leaf, None)
+
+    for group, leaves in MESSAGE_GROUP_ALIASES.items():
+        node = data.get(group)
+        grouped = dict(node) if isinstance(node, dict) else {}
+        for leaf in leaves:
+            if leaf in message:
+                grouped[leaf] = message.pop(leaf)
+        if grouped:
+            data[group] = grouped
 
     for group, aliases in CONFIG_GROUP_ALIASES.items():
         node = data.get(group)

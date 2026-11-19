@@ -36,7 +36,13 @@ from .core.constants import (
     strip_prefix,
 )
 from .core.models import QueQiaoEvent
-from .core.models_config import ServerConfig, _to_bool, _to_int, _to_str
+from .core.models_config import (
+    ServerConfig,
+    _to_bool,
+    _to_int,
+    _to_platform_map,
+    _to_str,
+)
 from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
 from .handlers.commands import CommandHandler, parse_direct_address
@@ -243,6 +249,13 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_achievement_to_astrbot",
         "forward_image_to_mc",
         "forward_image_from_mc",
+        "broadcast_format",
+        "platform_names",
+        "broadcast_color",
+        "mark_option",
+        "mark_emoji_id",
+        "chatimage_name",
+        "forward_bot_self_messages",
         "mc_image_mode",
         "e33chat_media_dir",
         "e33chat_image_max_edge",
@@ -271,6 +284,7 @@ class MinecraftQueQiaoPlugin(Star):
         "forward_achievement_to_astrbot": False,
         "forward_image_to_mc": False,
         "forward_image_from_mc": False,
+        "forward_bot_self_messages": False,
         "notify_on_connect": False,
         "notify_on_connect_fail": False,
         "quiet_hours_enabled": False,
@@ -301,6 +315,19 @@ class MinecraftQueQiaoPlugin(Star):
                 else:
                     # 类型不合法（如字符串）不应用，避免破坏运行时列表
                     continue
+            elif key == "platform_names":
+                # 「原始平台名=显示名」列表 → 映射；非法条目由 _to_platform_map 丢弃
+                config.platform_names = _to_platform_map(fields.get(key))
+            elif key == "mark_option":
+                value = _to_str(fields.get(key), config.mark_option).strip().lower()
+                if value in ("emoji", "text", "none"):
+                    config.mark_option = value
+                else:
+                    continue
+            elif key == "mark_emoji_id":
+                config.mark_emoji_id = _to_int(
+                    fields.get(key), config.mark_emoji_id
+                )
             elif key == "e33chat_image_max_edge":
                 # 群图最大边长：按 schema 的范围钳制，避免面板传入越界值
                 config.e33chat_image_max_edge = max(
