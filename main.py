@@ -43,6 +43,8 @@ from .core.models_config import (
     _to_int,
     _to_platform_map,
     _to_str,
+    image_upload_settings,
+    migrate_image_upload_config,
 )
 from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
@@ -97,6 +99,22 @@ class MinecraftQueQiaoPlugin(Star):
         data_dir = Path(StarTools.get_data_dir(PLUGIN_DATA_DIR))
         data_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir = data_dir
+
+        # 旧版根级图床三键迁进 image_upload 分组；迁移后立即落盘，避免同一配置
+        # 在旧键与新分组两处并存（旧键在 schema 里只为升级时保住用户数据）
+        if migrate_image_upload_config(self.config):
+            save = getattr(self.config, "save_config", None)
+            if callable(save):
+                try:
+                    save()
+                    logger.info(
+                        f"[{PLUGIN_NAME}] 旧版图床根级配置已迁入 image_upload 分组"
+                    )
+                except (OSError, ValueError):
+                    logger.warning(
+                        f"[{PLUGIN_NAME}] 图床配置迁移落盘失败（内存已迁移，下次保存会重试）",
+                        exc_info=True,
+                    )
 
         self.server_manager = ServerManager()
         self.binding_service = BindingService(data_dir)
@@ -640,25 +658,27 @@ class MinecraftQueQiaoPlugin(Star):
         return True
 
     async def _setup_image_services(self) -> None:
-        """按根级配置构建图片转存条目并启动内置 HTTP 监听。
+        """按 `image_upload` 分组构建图片转存条目并启动内置 HTTP 监听。
 
-        `enable_image_upload` 是总开关；`image_upload_services` 是与
-        mc_servers 同款的条目列表，内置图片 HTTP 服务与其它第三方图床
-        混排在同一列表里，按列表顺序逐个尝试（内置条目通常放前面）。
-        内置条目需要占用本机端口，构建后统一调用 `start_builtin()` 启动。
+        `enabled` 是总开关；`services` 是与 mc_servers 同款的条目列表，
+        内置图片 HTTP 服务与其它第三方图床混排在同一列表里，按列表顺序
+        逐个尝试（内置条目通常放前面）。内置条目需要占用本机端口，构建后
+        统一调用 `start_builtin()` 启动。读取统一走 image_upload_settings()，
+        旧版根级三键自动兜底，调用方无需关心配置存在哪一层。
         """
         self.image_bed.uploaders = []
-        if not _to_bool(self.config.get("enable_image_upload"), False):
+        settings = image_upload_settings(self.config)
+        if not _to_bool(settings.get("enabled"), False):
             return
 
-        entries = self.config.get("image_upload_services") or []
+        entries = settings.get("services") or []
         if isinstance(entries, dict):  # 防御：误存成单项对象
             entries = [entries]
-        # 上传超时是全局根级配置，逐个注入第三方图床条目；非正数回落默认值
+        # 上传超时是分组级的全局配置，逐个注入第三方图床条目；非正数回落默认值
         upload_timeout = max(
             1,
             _to_int(
-                self.config.get("image_upload_timeout"),
+                settings.get("timeout"),
                 DEFAULT_IMAGE_UPLOAD_TIMEOUT,
             ),
         )

@@ -1,6 +1,6 @@
 """图片转存条目：把无公开 URL 的图片换成玩家可访问的 URL。
 
-`image_upload_services` 是「添加条目」式的条目列表，条目有两类：
+`image_upload.services` 是「添加条目」式的条目列表，条目有两类：
 
 - `BuiltinHttpUploader`（`builtin_http` 模板）：把图片字节登记到插件内的
   HTTP 服务，返回 `{base_url}/img/<token>`。不依赖外网与第三方，要求
@@ -27,7 +27,7 @@
   第一个形如 `http(s)://` 的字符串（兰空 / sm.ms / pngurl 等）。
 
 注意隐私与稳定性：第三方图床会把群图片上传到外部服务，请按需开启。
-总开关在根级配置 `enable_image_upload`；条目自身的 `enabled` 可单独关闭。
+总开关在 `image_upload.enabled`；条目自身的 `enabled` 可单独关闭。
 """
 
 import base64
@@ -47,7 +47,7 @@ from ..core.constants import (
 from .image_host import ImageHost, guess_image_content_type, sniff_image_format
 
 # 第三方图床单次上传超时（秒）的默认值；实际取值由根级配置
-# `image_upload_timeout` 决定，构造条目时注入
+# `image_upload.timeout` 决定，构造条目时注入
 UPLOAD_TIMEOUT = DEFAULT_IMAGE_UPLOAD_TIMEOUT
 
 # response 支持的可取值
@@ -421,7 +421,7 @@ class ImageBedUploader:
                 return await self._upload(session, data), ""
         except Exception as exc:
             # 超时是最常见的一类失败，单独说清「超时多少秒」方便用户决定
-            # 是调大 image_upload_timeout 还是换一个更快的图床
+            # 是调大 image_upload.timeout 还是换一个更快的图床
             reason = f"上传超时（{self.timeout} 秒）" if isinstance(
                 exc, TimeoutError
             ) else str(exc)
@@ -488,9 +488,9 @@ class ImageBedUploader:
 class ImageBedUploaderGroup:
     """多个图片转存条目的集合：按配置顺序逐个尝试，任一成功即返回 URL。
 
-    与 mc_servers 的「添加条目」样式对应：根级配置 `image_upload_services`
+    与 mc_servers 的「添加条目」样式对应：`image_upload.services`
     是一个条目列表，每个条目是 `BuiltinHttpUploader` 或 `ImageBedUploader`；
-    总开关在插件层（`enable_image_upload`），条目自身的 `enabled` 可单独关闭。
+    总开关在插件层（`image_upload.enabled`），条目自身的 `enabled` 可单独关闭。
     """
 
     def __init__(self) -> None:

@@ -303,7 +303,7 @@ function buildFieldRow(key, spec, target, onchange, opts = {}) {
     hdr.className = 'settings-group-head';
     const t = document.createElement('span');
     t.className = 'settings-group-title';
-    t.textContent = key;
+    t.textContent = spec.description || key;
     hdr.appendChild(t);
     if (spec.hint) {
       const n = document.createElement('span');
@@ -517,30 +517,49 @@ function buildViewForm() {
     return sec;
   };
 
-  // 图床视图：只渲染图床配置（开关 + 超时 + 服务列表）
+  // 图片转存分组：总开关 / 上传超时 / 条目列表（模板列表就在组内）
+  const appendImageUpload = (target) => {
+    const groupSpec = schema.image_upload;
+    if (!groupSpec) return;
+    if (typeof conf.image_upload !== 'object' || conf.image_upload === null) {
+      conf.image_upload = {};
+    }
+    buildObjectFields(
+      target,
+      groupSpec.items || {},
+      conf.image_upload,
+      () => setDirty(true)
+    );
+  };
+
+  // 图床视图：只渲染图片转存分组
   if (view === 'image_bed') {
     const sec = sectionTitle('图床配置');
     sec.id = 'sec-image';
-    const imgKeys = ['enable_image_upload', 'image_upload_timeout'].filter((k) => schema[k]);
-    if (imgKeys.length) {
-      buildObjectFields(sec, Object.fromEntries(imgKeys.map((k) => [k, schema[k]])), conf, () => setDirty(true));
-    }
-    if (schema.image_upload_services) {
-      sec.appendChild(buildTemplateList(schema.image_upload_services, conf.image_upload_services, () => setDirty(true), 'sec-image'));
-    }
+    appendImageUpload(sec);
     form.appendChild(sec);
     return;
   }
 
-  // 基础设置（非列表类顶层字段）
+  // 基础设置（非列表类顶层字段）；image_upload 分组单独成卡片，
+  // 旧版根级键（invisible）只作迁移来源，不在表单里重复出现
   const rootKeys = Object.keys(schema).filter(
-    (k) => !['mc_servers', 'image_upload_services'].includes(k)
+    (k) => !['mc_servers', 'image_upload'].includes(k) && !(schema[k] && schema[k].invisible)
   );
   if (rootKeys.length) {
     const sec = sectionTitle('基本设置');
     sec.id = 'sec-root';
     buildObjectFields(sec, Object.fromEntries(rootKeys.map((k) => [k, schema[k]])), conf, () => setDirty(true));
     form.appendChild(sec);
+  }
+
+  // 图片转存服务：配置页里保留入口（总开关 / 超时 / 条目列表都在这里，
+  // 与「🖼️ 图床」面板读写同一份配置）
+  if (schema.image_upload) {
+    const imgSec = sectionTitle('图片转存');
+    imgSec.id = 'sec-image';
+    appendImageUpload(imgSec);
+    form.appendChild(imgSec);
   }
 
   // MC 服务器列表（始终渲染全部服务器卡片；卡片可收起）
@@ -642,9 +661,25 @@ async function load() {
     state.conf = data.conf || {};
     state.schema = data.schema || {};
     state.activeServers = data.active_servers || [];
-    // 保证列表字段存在
+    // 保证列表字段存在；图床设置统一收在 image_upload 分组，旧版根级键兜底
     if (!Array.isArray(state.conf.mc_servers)) state.conf.mc_servers = [];
-    if (!Array.isArray(state.conf.image_upload_services)) state.conf.image_upload_services = [];
+    if (typeof state.conf.image_upload !== 'object' || state.conf.image_upload === null) {
+      state.conf.image_upload = {};
+    }
+    const imageUpload = state.conf.image_upload;
+    if (typeof imageUpload.enabled !== 'boolean') {
+      imageUpload.enabled = !!state.conf.enable_image_upload;
+    }
+    if (!Number.isFinite(imageUpload.timeout)) {
+      imageUpload.timeout = Number.isFinite(state.conf.image_upload_timeout)
+        ? state.conf.image_upload_timeout
+        : 30;
+    }
+    if (!Array.isArray(imageUpload.services)) {
+      imageUpload.services = Array.isArray(state.conf.image_upload_services)
+        ? state.conf.image_upload_services
+        : [];
+    }
     // 获取人格列表
     try {
       const personasResp = await apiGet('personas');

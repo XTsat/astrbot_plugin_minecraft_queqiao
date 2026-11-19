@@ -488,346 +488,374 @@
       }
     }
   },
-  "enable_image_upload": {
-    "type": "bool",
-    "description": "启用图片转存服务",
-    "hint": "总开关：开启后使用下方 image_upload_services 列表里的条目，把无公开 URL 的图片转存换取玩家可访问的链接。条目支持两类：「内置图片HTTP服务」把图片转存到本机 HTTP 服务（不依赖第三方），第三方图床则上传到公网图床；两类可混排，内置优先。注意第三方图床会把群图片上传到外部服务",
-    "default": false
-  },
-  "image_upload_timeout": {
-    "type": "int",
-    "description": "图床上传超时（秒）",
-    "hint": "第三方图床上传接口单次请求的超时时间。超时视为该条目失败，自动切换列表里的下一个条目。默认 30 秒。注意：调太大如果图片卡住需要较久才能降级到下一个图床",
-    "default": 30
-  },
-  "image_upload_services": {
-    "type": "template_list",
-    "description": "图片转存服务列表",
-    "hint": "点「添加条目」选择服务类型（内置图片HTTP服务 / 第三方图床），多个服务按列表顺序逐个尝试，前一个失败会自动切换到下一个",
-    "default": [],
-    "templates": {
-      "builtin_http": {
-        "name": "内置图片HTTP服务",
-        "hint": "本地：不上传第三方，需有公网地址",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此服务",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用默认名称「内置图片HTTP服务」",
-            "default": "内置图片HTTP服务"
-          },
-          "host": {
-            "type": "string",
-            "description": "监听地址",
-            "hint": "一般保持 0.0.0.0 监听所有网卡；若 AstrBot 与 MC 服务器同机且只给局域网玩家用，可填内网 IP",
-            "default": "0.0.0.0"
-          },
-          "port": {
-            "type": "int",
-            "description": "监听端口",
-            "hint": "玩家客户端需要能访问该端口（防火墙/安全组需放行）。默认 8765，与现有服务冲突时自行更换",
-            "default": 8765
-          },
-          "base_url": {
-            "type": "string",
-            "description": "对外地址前缀（玩家可达）",
-            "hint": "玩家客户端访问图片服务所用的地址，如 http://公网IP:8765 或 http://域名:8765。不能填 127.0.0.1（玩家客户端要能连到）。留空则服务不启动——即使本条目勾选了启用",
-            "default": ""
-          }
-        }
+  "image_upload": {
+    "type": "object",
+    "description": "图片转存服务",
+    "hint": "把没有公开 URL 的图片转存成玩家客户端能打开的链接，再发进游戏。开启总开关后，按下方列表顺序逐个尝试条目：内置图片HTTP服务把图片转存到本机 HTTP 服务（不依赖第三方），第三方图床则上传到公网图床；两类可混排，内置优先。注意第三方图床会把群图片上传到外部服务",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用图片转存服务",
+        "hint": "总开关：开启后使用下方条目列表，把无公开 URL 的图片转存换取玩家可访问的链接。关闭后内置 HTTP 服务与所有第三方图床都不再生效",
+        "default": false
       },
-      "custom": {
-        "name": "自定义图床",
-        "hint": "通用：自由填写接口与响应格式",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": ""
-          },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "图床的上传接口，如自建兰空图床的 http://IP:7791/api/v1/upload。不限定服务商，填任意图床的上传地址即可。注意是接口地址，不是网站首页",
-            "default": ""
-          },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
-            "default": ""
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "text"
-          },
-          "file_field": {
-            "type": "string",
-            "description": "上传文件字段名",
-            "hint": "multipart 表单里文件字段的名称；绝大多数图床是 file，个别是 image（如 img402.dev），插件会按此发送",
-            "default": "file"
-          },
-          "headers": {
-            "type": "string",
-            "description": "自定义请求头（可空）",
-            "hint": "需要额外请求头的图床填：一行一个「名字: 值」，如 Accept: application/json；也支持 JSON 对象格式（如 {\"X-Api-Key\":\"abc\"}）。token 字段会自动发送 Authorization: Bearer，无需在此重复",
-            "default": ""
-          },
-          "form_fields": {
-            "type": "string",
-            "description": "额外表单字段（可空）",
-            "hint": "少数图床除文件外还要求额外的普通表单字段时填：一行一个「名字: 值」，如 time: 72h；也支持 JSON 对象格式。字段名别与文件字段名/file 字段冲突",
-            "default": ""
-          }
-        }
+      "timeout": {
+        "type": "int",
+        "description": "图床上传超时（秒）",
+        "hint": "第三方图床上传接口单次请求的超时时间。超时视为该条目失败，自动切换列表里的下一个条目。默认 30 秒。注意：调太大如果图片卡住需要较久才能降级到下一个图床",
+        "default": 30
       },
-      "imglink": {
-        "name": "imglink",
-        "hint": "海外：免token，单张≤25MB",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
+      "services": {
+        "type": "template_list",
+        "description": "图片转存服务列表",
+        "hint": "点「添加条目」选择服务类型（内置图片HTTP服务 / 第三方图床），多个服务按列表顺序逐个尝试，前一个失败会自动切换到下一个",
+        "default": [],
+        "templates": {
+          "builtin_http": {
+            "name": "内置图片HTTP服务",
+            "hint": "本地：不上传第三方，需有公网地址",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此服务",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用默认名称「内置图片HTTP服务」",
+                "default": "内置图片HTTP服务"
+              },
+              "host": {
+                "type": "string",
+                "description": "监听地址",
+                "hint": "一般保持 0.0.0.0 监听所有网卡；若 AstrBot 与 MC 服务器同机且只给局域网玩家用，可填内网 IP",
+                "default": "0.0.0.0"
+              },
+              "port": {
+                "type": "int",
+                "description": "监听端口",
+                "hint": "玩家客户端需要能访问该端口（防火墙/安全组需放行）。默认 8765，与现有服务冲突时自行更换",
+                "default": 8765
+              },
+              "base_url": {
+                "type": "string",
+                "description": "对外地址前缀（玩家可达）",
+                "hint": "玩家客户端访问图片服务所用的地址，如 http://公网IP:8765 或 http://域名:8765。不能填 127.0.0.1（玩家客户端要能连到）。留空则服务不启动——即使本条目勾选了启用",
+                "default": ""
+              }
+            }
           },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "imglink"
+          "custom": {
+            "name": "自定义图床",
+            "hint": "通用：自由填写接口与响应格式",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": ""
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "图床的上传接口，如自建兰空图床的 http://IP:7791/api/v1/upload。不限定服务商，填任意图床的上传地址即可。注意是接口地址，不是网站首页",
+                "default": ""
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "text"
+              },
+              "file_field": {
+                "type": "string",
+                "description": "上传文件字段名",
+                "hint": "multipart 表单里文件字段的名称；绝大多数图床是 file，个别是 image（如 img402.dev），插件会按此发送",
+                "default": "file"
+              },
+              "headers": {
+                "type": "string",
+                "description": "自定义请求头（可空）",
+                "hint": "需要额外请求头的图床填：一行一个「名字: 值」，如 Accept: application/json；也支持 JSON 对象格式（如 {\"X-Api-Key\":\"abc\"}）。token 字段会自动发送 Authorization: Bearer，无需在此重复",
+                "default": ""
+              },
+              "form_fields": {
+                "type": "string",
+                "description": "额外表单字段（可空）",
+                "hint": "少数图床除文件外还要求额外的普通表单字段时填：一行一个「名字: 值」，如 time: 72h；也支持 JSON 对象格式。字段名别与文件字段名/file 字段冲突",
+                "default": ""
+              }
+            }
           },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "imglink.cc 上传接口；服务端会重新编码图片，不适合原样存档",
-            "default": "https://imglink.cc/api/upload"
+          "imglink": {
+            "name": "imglink",
+            "hint": "海外：免token，单张≤25MB",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "imglink"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "imglink.cc 上传接口；服务端会重新编码图片，不适合原样存档",
+                "default": "https://imglink.cc/api/upload"
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              }
+            }
           },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
-            "default": ""
+          "img402": {
+            "name": "img402.dev",
+            "hint": "海外：免token，单张≤10MB",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "img402"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "img402.dev 免费上传接口（文件字段名是 image，非 file）",
+                "default": "https://img402.dev/api/free"
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              },
+              "file_field": {
+                "type": "string",
+                "description": "上传文件字段名",
+                "hint": "multipart 表单里文件字段的名称；绝大多数图床是 file，个别是 image（如 img402.dev），插件会按此发送",
+                "default": "image"
+              }
+            }
           },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          }
-        }
-      },
-      "img402": {
-        "name": "img402.dev",
-        "hint": "海外：免token，单张≤10MB",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
+          "pngurl": {
+            "name": "pngurl",
+            "hint": "国内：访客免token（有频率限制），可填token",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "pngurl"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "pngurl.com 上传接口（原 pngcdn.cn 已停用，接口根地址为 /api/v1）",
+                "default": "https://pngurl.com/api/v1/upload"
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "pngurl.com 用户在 https://pngurl.com/user/tokens 创建永久 token；访客上传可留空，但访客有频率限制（连传多张会提示「为了避免恶意刷图」），长期使用建议填 token。会作为 Authorization: Bearer 请求头并附带表单字段 token 发送",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              },
+              "headers": {
+                "type": "string",
+                "description": "自定义请求头（可空）",
+                "hint": "pngurl.com 需要携带 Accept: application/json。一行一个「名字: 值」，也支持 JSON 对象格式（如 {\"X-Api-Key\":\"abc\"}）；token 字段会自动发送 Authorization: Bearer，无需在此重复",
+                "default": "Accept: application/json"
+              }
+            }
           },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "img402"
+          "anyapi": {
+            "name": "anyapi",
+            "hint": "国内（中转）：免token，≤10MB",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "anyapi"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "anyapi 自建图床接口（imageproxy 中转代理，免 token；建议单文件 ≤10MB）",
+                "default": "https://imageproxy.zhongzhuan.chat/api/upload"
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              }
+            }
           },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "img402.dev 免费上传接口（文件字段名是 image，非 file）",
-            "default": "https://img402.dev/api/free"
+          "see": {
+            "name": "see（sm.ms）",
+            "hint": "国内：需token，单张≤5MB",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "see"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "S.EE（原 sm.ms）上传接口；sm.ms 旧接口已 308 迁移，需在此端点上传",
+                "default": "https://s.ee/api/v1/file/upload"
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              },
+              "file_field": {
+                "type": "string",
+                "description": "上传文件字段名",
+                "hint": "S.EE 文件字段名是 smfile，非 file",
+                "default": "smfile"
+              },
+              "headers": {
+                "type": "string",
+                "description": "自定义请求头（可空）",
+                "hint": "S.EE 用 Authorization 直传 key（不带 Bearer 前缀），格式：Authorization: 你的key。在 s.ee 用户页 → 工具 → API 密钥令牌 获取",
+                "default": "Authorization: "
+              }
+            }
           },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
-            "default": ""
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          },
-          "file_field": {
-            "type": "string",
-            "description": "上传文件字段名",
-            "hint": "multipart 表单里文件字段的名称；绝大多数图床是 file，个别是 image（如 img402.dev），插件会按此发送",
-            "default": "image"
-          }
-        }
-      },
-      "pngurl": {
-        "name": "pngurl",
-        "hint": "国内：访客免token（有频率限制），可填token",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "pngurl"
-          },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "pngurl.com 上传接口（原 pngcdn.cn 已停用，接口根地址为 /api/v1）",
-            "default": "https://pngurl.com/api/v1/upload"
-          },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "pngurl.com 用户在 https://pngurl.com/user/tokens 创建永久 token；访客上传可留空，但访客有频率限制（连传多张会提示「为了避免恶意刷图」），长期使用建议填 token。会作为 Authorization: Bearer 请求头并附带表单字段 token 发送",
-            "default": ""
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          },
-          "headers": {
-            "type": "string",
-            "description": "自定义请求头（可空）",
-            "hint": "pngurl.com 需要携带 Accept: application/json。一行一个「名字: 值」，也支持 JSON 对象格式（如 {\"X-Api-Key\":\"abc\"}）；token 字段会自动发送 Authorization: Bearer，无需在此重复",
-            "default": "Accept: application/json"
-          }
-        }
-      },
-      "anyapi": {
-        "name": "anyapi",
-        "hint": "国内（中转）：免token，≤10MB",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "anyapi"
-          },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "anyapi 自建图床接口（imageproxy 中转代理，免 token；建议单文件 ≤10MB）",
-            "default": "https://imageproxy.zhongzhuan.chat/api/upload"
-          },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "需要鉴权的图床填 API Token，会作为 Authorization: Bearer 请求头并附带表单字段 token 发送；免 token 的图床留空",
-            "default": ""
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          }
-        }
-      },
-      "see": {
-        "name": "see（sm.ms）",
-        "hint": "国内：需token，单张≤5MB",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "see"
-          },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "S.EE（原 sm.ms）上传接口；sm.ms 旧接口已 308 迁移，需在此端点上传",
-            "default": "https://s.ee/api/v1/file/upload"
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          },
-          "file_field": {
-            "type": "string",
-            "description": "上传文件字段名",
-            "hint": "S.EE 文件字段名是 smfile，非 file",
-            "default": "smfile"
-          },
-          "headers": {
-            "type": "string",
-            "description": "自定义请求头（可空）",
-            "hint": "S.EE 用 Authorization 直传 key（不带 Bearer 前缀），格式：Authorization: 你的key。在 s.ee 用户页 → 工具 → API 密钥令牌 获取",
-            "default": "Authorization: "
-          }
-        }
-      },
-      "imgbb": {
-        "name": "imgbb",
-        "hint": "海外：需token，单张≤32MB",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "启用此图床",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "description": "显示名称（可空）",
-            "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
-            "default": "imgbb"
-          },
-          "upload_url": {
-            "type": "string",
-            "description": "上传接口地址（完整 URL）",
-            "hint": "imgbb 上传接口，key 在 https://api.imgbb.com/ 免费注册",
-            "default": "https://api.imgbb.com/1/upload"
-          },
-          "token": {
-            "type": "string",
-            "description": "鉴权 Token（可空）",
-            "hint": "imgbb API key，https://api.imgbb.com/ 免费注册。插件会以表单字段 key 提交（imgbb 不支持 Bearer 鉴权）",
-            "default": ""
-          },
-          "response": {
-            "type": "string",
-            "description": "响应解析方式",
-            "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
-            "default": "json"
-          },
-          "file_field": {
-            "type": "string",
-            "description": "上传文件字段名",
-            "hint": "imgbb 文件字段名是 image，非 file",
-            "default": "image"
+          "imgbb": {
+            "name": "imgbb",
+            "hint": "海外：需token，单张≤32MB",
+            "items": {
+              "enabled": {
+                "type": "bool",
+                "description": "启用此图床",
+                "default": true
+              },
+              "name": {
+                "type": "string",
+                "description": "显示名称（可空）",
+                "hint": "仅用于日志与界面辨识，留空则用上传接口地址的主机名",
+                "default": "imgbb"
+              },
+              "upload_url": {
+                "type": "string",
+                "description": "上传接口地址（完整 URL）",
+                "hint": "imgbb 上传接口，key 在 https://api.imgbb.com/ 免费注册",
+                "default": "https://api.imgbb.com/1/upload"
+              },
+              "token": {
+                "type": "string",
+                "description": "鉴权 Token（可空）",
+                "hint": "imgbb API key，https://api.imgbb.com/ 免费注册。插件会以表单字段 key 提交（imgbb 不支持 Bearer 鉴权）",
+                "default": ""
+              },
+              "response": {
+                "type": "string",
+                "description": "响应解析方式",
+                "hint": "text = 响应正文就是图片链接；json = 取 JSON 响应中键名为 url 的字段（无则取第一个形如 http(s):// 的字段）",
+                "default": "json"
+              },
+              "file_field": {
+                "type": "string",
+                "description": "上传文件字段名",
+                "hint": "imgbb 文件字段名是 image，非 file",
+                "default": "image"
+              }
+            }
           }
         }
       }
     }
+  },
+  "enable_image_upload": {
+    "type": "bool",
+    "description": "启用图片转存服务（旧版）",
+    "hint": "旧版根级开关，仅用于升级迁移：插件启动时会把旧值搬进 image_upload 分组并复位，请改 image_upload 里的开关",
+    "default": false,
+    "invisible": true
+  },
+  "image_upload_timeout": {
+    "type": "int",
+    "description": "图床上传超时（旧版）",
+    "hint": "旧版根级超时，仅用于升级迁移：插件启动时会把旧值搬进 image_upload 分组并复位，请改 image_upload 里的超时",
+    "default": 30,
+    "invisible": true
+  },
+  "image_upload_services": {
+    "type": "list",
+    "description": "图片转存服务列表（旧版）",
+    "hint": "旧版根级条目列表，仅用于升级迁移：插件启动时会把旧条目搬进 image_upload.services 并复位，请改 image_upload 里的列表",
+    "default": [],
+    "invisible": true
   }
 }

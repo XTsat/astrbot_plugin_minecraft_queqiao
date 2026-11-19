@@ -23,6 +23,7 @@ from .constants import (
     DEFAULT_CONNECT_NOTIFY_FORMAT,
     DEFAULT_DISPLAY_NAME,
     DEFAULT_E33CHAT_IMAGE_MAX_EDGE,
+    DEFAULT_IMAGE_UPLOAD_TIMEOUT,
     DEFAULT_LOW_FREQUENCY_INTERVAL,
     DEFAULT_LOW_FREQUENCY_THRESHOLD,
     DEFAULT_MONITOR_INTERVAL,
@@ -397,6 +398,79 @@ def fold_entry(entry: dict) -> dict:
     for flat in _PREFIX_MESSAGE_KEYS + _PREFIX_MESSAGE_FLAGS:
         data.pop(flat, None)
     return data
+
+
+# ---- 根级「图片转存服务」分组 ----
+# 历史版本把开关 / 上传超时 / 条目列表放在根级三个扁平键上；新结构统一收进
+# `image_upload` 分组（配置页因此只有一张卡片，模板列表也落到组内）。旧键仍
+# 留在 schema 里只为迁移——AstrBot 载入配置时会按 schema 清理未知键，直接删掉
+# 旧键会让升级瞬间丢掉用户配好的图床。读取一律走 image_upload_settings()，
+# 避免各调用方各猜一层。
+IMAGE_UPLOAD_GROUP = "image_upload"
+IMAGE_UPLOAD_LEGACY_KEYS: dict[str, str] = {
+    "enabled": "enable_image_upload",
+    "timeout": "image_upload_timeout",
+    "services": "image_upload_services",
+}
+
+
+def image_upload_settings(conf: object) -> dict[str, object]:
+    """图片转存配置的运行时视图：新分组优先，旧版根级键兜底。
+
+    新分组里出现同名字段即视为用户已在新结构里改过，旧键不再覆盖它。
+    """
+    data = conf if isinstance(conf, dict) else {}
+    node = data.get(IMAGE_UPLOAD_GROUP)
+    merged: dict[str, object] = dict(node) if isinstance(node, dict) else {}
+    for leaf, flat in IMAGE_UPLOAD_LEGACY_KEYS.items():
+        if leaf not in merged and flat in data:
+            merged[leaf] = data[flat]
+    return merged
+
+
+def migrate_image_upload_config(conf: dict) -> bool:
+    """把旧版根级三键迁进 `image_upload` 分组；返回是否发生迁移。
+
+    只在「分组仍是整组默认值」时让旧键接管：AstrBot 载入新 schema 时会先补
+    一份默认分组，单看某个键无法区分「用户没配」与「用户在新结构里显式关掉」，
+    因此整组默认才迁移，避免覆盖用户在新结构里的修改。迁移后旧键复位默认值，
+    同一配置不在两处并存。
+    """
+    if not isinstance(conf, dict):
+        return False
+    node = conf.get(IMAGE_UPLOAD_GROUP)
+    group: dict[str, object] = dict(node) if isinstance(node, dict) else {}
+    legacy_enabled = _to_bool(conf.get("enable_image_upload"), False)
+    legacy_timeout = _to_int(
+        conf.get("image_upload_timeout"), DEFAULT_IMAGE_UPLOAD_TIMEOUT
+    )
+    legacy_services = conf.get("image_upload_services")
+    if not isinstance(legacy_services, list):
+        legacy_services = []
+
+    has_legacy = (
+        legacy_enabled
+        or bool(legacy_services)
+        or (legacy_timeout >= 1 and legacy_timeout != DEFAULT_IMAGE_UPLOAD_TIMEOUT)
+    )
+    group_is_default = (
+        not _to_bool(group.get("enabled"), False)
+        and _to_int(group.get("timeout"), DEFAULT_IMAGE_UPLOAD_TIMEOUT)
+        == DEFAULT_IMAGE_UPLOAD_TIMEOUT
+        and not group.get("services")
+    )
+    if not has_legacy or not group_is_default:
+        return False
+
+    group["enabled"] = legacy_enabled
+    # 原样搬过去，非正数交给读取侧按既有规则夹到 1，避免迁移改变旧行为
+    group["timeout"] = legacy_timeout
+    group["services"] = legacy_services
+    conf[IMAGE_UPLOAD_GROUP] = group
+    conf["enable_image_upload"] = False
+    conf["image_upload_timeout"] = DEFAULT_IMAGE_UPLOAD_TIMEOUT
+    conf["image_upload_services"] = []
+    return True
 
 
 class _KeepUnknownPlaceholders(dict):

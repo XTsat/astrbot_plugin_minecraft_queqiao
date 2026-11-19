@@ -1438,6 +1438,10 @@ from astrbot_plugin_minecraft_queqiao.main import (
     MinecraftQueQiaoPlugin as _P28,
     TEMPLATE_KEY_BUILTIN_HTTP as _TK28,
 )
+from astrbot_plugin_minecraft_queqiao.core.models_config import (
+    image_upload_settings as _ius28,
+    migrate_image_upload_config as _miu28,
+)
 
 # (a) MIME 猜测（按魔数）
 assert _gct28(b"\x89PNG\r\n\x1a\n...") == "image/png"
@@ -1517,20 +1521,34 @@ _bad28 = asyncio.run(_riu28(_BadBytes28(file="base64://x"), _g_d28))
 assert _bad28[0] is None
 assert "convert_to_file_path" in _bad28[1], "失败原因应反映字节获取失败: " + _bad28[1]
 
-# (e) 根级配置默认值与 hint（conf 模板 ↔ 代码兜底值一致）
+# (e) image_upload 分组默认值与 hint（conf 模板 ↔ 代码兜底值一致）
 _sh28 = json.loads(_pathlib.Path(__file__).with_name("_conf_schema.json")
                    .read_text(encoding="utf-8"))
-assert _sh28["enable_image_upload"]["default"] is False
-assert _sh28["image_upload_services"]["type"] == "template_list"
-for _k28 in ("enable_image_upload", "image_upload_timeout",
-             "image_upload_services"):
-    assert _k28 in _sh28, f"根级配置缺少 {_k28}"
-assert "玩家" in _sh28["enable_image_upload"]["hint"], \
-    "enable_image_upload 的 hint 必须说明玩家可达性前提"
-assert _sh28["enable_image_upload"]["hint"], "开关的 hint 不应为空"
+_img_group28 = _sh28["image_upload"]
+assert _img_group28["type"] == "object", "图床配置应整体收进一个 object 分组"
+assert _img_group28.get("hint"), "图片转存分组的 hint 不应为空"
+assert "玩家" in _img_group28["hint"], \
+    "分组 hint 必须说明玩家可达性前提（内置服务要玩家客户端能访问）"
+_img_items28 = _img_group28["items"]
+assert list(_img_items28) == ["enabled", "timeout", "services"], \
+    f"分组内顺序应为 总开关 / 超时 / 条目列表，实际 {list(_img_items28)}"
+assert _img_items28["enabled"]["default"] is False
+assert _img_items28["timeout"]["type"] == "int" and \
+    _img_items28["timeout"]["default"] == 30
+assert _img_items28["services"]["type"] == "template_list", \
+    "图床条目列表（模板列表）应作为分组的子层级"
+# 旧版根级三键保留但隐藏，只作升级迁移来源：AstrBot 载入配置会按 schema
+# 清理未知键，直接删掉旧键会让升级瞬间丢掉用户配好的图床
+for _legacy28 in ("enable_image_upload", "image_upload_timeout",
+                  "image_upload_services"):
+    assert _legacy28 in _sh28, f"schema 缺少迁移来源 {_legacy28}"
+    assert _sh28[_legacy28]["invisible"] is True, \
+        f"旧版根级键 {_legacy28} 应隐藏，避免与新分组重复出现"
+assert _sh28["enable_image_upload"]["default"] is False, \
+    "旧版开关默认值应保持不变，未配置过的用户升级后仍为关闭"
 # 图床：默认不加载任何条目；预配置图床只作为「添加条目」的模板
 # （内置图片 HTTP 服务 / 自定义图床 各自在前）
-_bsrv28 = _sh28["image_upload_services"]
+_bsrv28 = _img_items28["services"]
 assert _bsrv28["default"] == [], "图床默认不加载任何条目，由用户按模板添加"
 _tpls28 = _bsrv28["templates"]
 assert list(_tpls28)[0] == "builtin_http", "模板列表最上方应是「内置图片HTTP服务」"
@@ -1968,7 +1986,53 @@ assert len(_p28e.image_bed.builtin_uploaders()) == 1, \
 assert _p28e.image_bed.uploaders[2].response == "json"
 assert _p28e.image_bed.uploaders[2].token == "tk"
 
-# 上传超时：根级 image_upload_timeout 全局注入第三方图床条目
+# 新分组读取：image_upload.enabled / timeout / services 与旧扁平键同源
+_p28n = _mk_p28({"image_upload": {
+    "enabled": True,
+    "timeout": "45",
+    "services": [
+        {"__template_key": _TK28, "enabled": True, "name": "新本机",
+         "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+        {"__template_key": "custom", "enabled": True, "name": "新图床",
+         "upload_url": "https://x.example/u", "response": "text"},
+    ],
+}})
+asyncio.run(_p28n._setup_image_services())
+assert _p28n.image_bed.enabled is True
+assert _p28n.image_bed.service_names == "新本机, 新图床", _p28n.image_bed.service_names
+assert [u.timeout for u in _p28n.image_bed.uploaders if isinstance(u, _IB28)] == [45], \
+    "分组级 timeout 应注入第三方图床条目"
+
+# 旧版三键 → image_upload 分组：迁移后旧键复位，同一配置不在两处并存
+_old28 = {"enable_image_upload": True, "image_upload_timeout": "45",
+          "image_upload_services": [{"__template_key": "custom", "enabled": True}]}
+assert _miu28(_old28) is True, "旧配置应触发迁移"
+assert _old28["image_upload"]["enabled"] is True
+assert _old28["image_upload"]["timeout"] == 45, "旧超时应从字符串收敛为整数"
+assert _old28["image_upload"]["services"] == [{"__template_key": "custom", "enabled": True}]
+assert _old28["enable_image_upload"] is False and \
+    _old28["image_upload_timeout"] == 30 and _old28["image_upload_services"] == [], \
+    "迁移后旧键应回落默认值，不在两处并存"
+# 新分组已有非默认值：旧键不得覆盖（视为用户已迁到新结构）
+_keep28 = {"enable_image_upload": True, "image_upload_timeout": 90,
+           "image_upload_services": [{"x": 1}],
+           "image_upload": {"enabled": False, "timeout": 60, "services": []}}
+assert _miu28(_keep28) is False, "新分组非默认时不得再迁移"
+assert _ius28(_keep28) == {"enabled": False, "timeout": 60, "services": []}, \
+    "新分组优先，旧键不得覆盖"
+# 分组缺叶子时逐键回退旧版值：手改配置只迁了一半也不丢设置
+_partial28 = {"image_upload_timeout": 77, "image_upload": {"enabled": True}}
+assert _ius28(_partial28)["timeout"] == 77
+assert _ius28(_partial28)["enabled"] is True
+# 插件初始化即迁移，旧配置无需用户手工改
+_p28m = _mk_p28({"enable_image_upload": True,
+                 "image_upload_services": [_bi28]})
+assert _p28m.config["image_upload"]["enabled"] is True
+assert _p28m.config["image_upload"]["services"] == [_bi28]
+assert _p28m.config["enable_image_upload"] is False, \
+    "插件初始化应把旧键迁进分组并复位旧键"
+
+# 上传超时：分组级 image_upload.timeout 全局注入第三方图床条目
 # （_p28e 未配置该项 → 所有图床条目回落默认 30 秒）
 for u in _p28e.image_bed.uploaders:
     if isinstance(u, _IB28):
@@ -2002,16 +2066,11 @@ assert all(not hasattr(u, "timeout") for u in _p28e.image_bed.builtin_uploaders(
     or _p28e.image_bed.builtin_uploaders()[0].timeout == 30, \
     "内置条目不需要外网上传超时"
 
-# schema：image_upload_timeout 应紧挨在 enable_image_upload 与 image_upload_services 之间
-_sh_keys28 = list(_sh28.keys())
-_i28a, _i28b, _i28c = (
-    _sh_keys28.index("enable_image_upload"),
-    _sh_keys28.index("image_upload_timeout"),
-    _sh_keys28.index("image_upload_services"),
-)
-assert _i28a + 1 == _i28b == _i28c - 1, \
-    f"image_upload_timeout 应位于两个配置之间，实际顺序 {_sh_keys28}"
-_to_schema28 = _sh28["image_upload_timeout"]
+# schema：分组内顺序为 enabled → timeout → services（模板列表落在组内）
+_img_keys28 = list(_sh28["image_upload"]["items"])
+assert _img_keys28 == ["enabled", "timeout", "services"], \
+    f"image_upload 分组的子字段顺序不对，实际 {_img_keys28}"
+_to_schema28 = _sh28["image_upload"]["items"]["timeout"]
 assert _to_schema28["type"] == "int" and _to_schema28["default"] == 30
 assert "30 秒" in _to_schema28["hint"], \
     "超时 hint 应写出默认值，便于用户判断"
@@ -5769,8 +5828,20 @@ class _Ctx29:
 
 _tmp29 = _pl29.Path(tempfile.mkdtemp(prefix="queqiao_ibed29_"))
 _conf29 = {
-    "enable_image_upload": True,
-    "image_upload_timeout": "45",
+    "image_upload": {
+        "enabled": True,
+        "timeout": "45",
+        "services": [
+            {"__template_key": "builtin_http", "enabled": True, "name": "本机",
+             "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
+            {"__template_key": "custom", "enabled": True, "name": "catbox",
+             "upload_url": "https://catbox.moe/user/api.php", "token": "",
+             "response": "text", "file_field": "file", "headers": "", "form_fields": ""},
+            {"__template_key": "custom", "enabled": True, "name": "坏条目",
+             "upload_url": "not-a-url", "token": "", "response": "text",
+             "file_field": "file", "headers": "", "form_fields": ""},
+        ],
+    },
     "mc_servers": [
         {"__template_key": "server", "enabled": True, "target_sessions": [],
          "server": {"server_name": "MC", "display_name": "", "ws_mode": "forward",
@@ -5779,19 +5850,9 @@ _conf29 = {
          "server": {"server_name": "MC2", "display_name": "", "ws_mode": "reverse",
                     "reverse_port": "8180"}},
     ],
-    "image_upload_services": [
-        {"__template_key": "builtin_http", "enabled": True, "name": "本机",
-         "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
-        {"__template_key": "custom", "enabled": True, "name": "catbox",
-         "upload_url": "https://catbox.moe/user/api.php", "token": "",
-         "response": "text", "file_field": "file", "headers": "", "form_fields": ""},
-        {"__template_key": "custom", "enabled": True, "name": "坏条目",
-         "upload_url": "not-a-url", "token": "", "response": "text",
-         "file_field": "file", "headers": "", "form_fields": ""},
-    ],
 }
 _mc_before29 = _copy43.deepcopy(_conf29["mc_servers"])
-_ibed_before29 = _copy43.deepcopy(_conf29["image_upload_services"])
+_ibed_before29 = _copy43.deepcopy(_conf29["image_upload"]["services"])
 _plugin29 = _FakePlugin29(_conf29, str(_tmp29))
 _imagebed29 = _FakeImageBed29(
     builtin=[{"name": "本机", "host": "0.0.0.0", "port": 8765,
@@ -5820,7 +5881,7 @@ for _p29 in (
 _res29 = asyncio.run(_wac29.get_image_bed_status())
 for _old29 in ("enabled", "status_text", "service_names", "uploaders_count"):
     assert _old29 in _res29["data"], f"状态响应缺失既有字段 {_old29}"
-assert _res29["data"]["timeout"] == 45, "timeout 应为 conf 的 image_upload_timeout"
+assert _res29["data"]["timeout"] == 45, "timeout 应为 image_upload.timeout（字符串也应收敛为整数）"
 assert _res29["data"]["builtin_running"][0]["running"] is True
 _items29 = _res29["data"]["items"]
 assert len(_items29) == 3, "含未启用/未生效条目必须返回"
@@ -5833,11 +5894,11 @@ assert _items29[0]["detail"] == "http://1.2.3.4:8765" and \
     _items29[1]["detail"] == "https://catbox.moe/user/api.php"
 
 # (b) 总开关关闭 → 全部条目 active=False + 原因说明
-_plugin29.config["enable_image_upload"] = False
+_plugin29.config["image_upload"]["enabled"] = False
 _res29b = asyncio.run(_wac29.get_image_bed_status())
 assert all(not it["active"] and it["reason"] == "总开关未开启"
            for it in _res29b["data"]["items"]), _res29b["data"]["items"]
-_plugin29.config["enable_image_upload"] = True
+_plugin29.config["image_upload"]["enabled"] = True
 
 # (b2) 模板清单：/image_bed/templates 返回各模板 name/hint/defaults，
 # 与后端 _new_image_entry 生成的新条目默认值同源（img402 的 file_field 应为
@@ -5860,8 +5921,8 @@ async def _fake_json29(default=None):
 _wa29.request.json = _fake_json29
 _res29c = asyncio.run(_wac29.create_config_image_bed())
 assert _res29c["data"]["saved"] is True
-assert _plugin29.config["image_upload_services"][3]["__template_key"] == "img402"
-assert _plugin29.config["image_upload_services"][3]["file_field"] == "image", \
+assert _plugin29.config["image_upload"]["services"][3]["__template_key"] == "img402"
+assert _plugin29.config["image_upload"]["services"][3]["file_field"] == "image", \
     "img402 模板默认值应取自 schema（file_field=image）"
 assert _plugin29.reloads == 0 and _plugin29.image_bed_applys == 1, \
     "图床保存必须走 apply_image_bed_config（免重连），不得 reload_config"
@@ -5872,7 +5933,7 @@ async def _fake_json29d(default=None):
     return {"index": 2, "enabled": False}
 _wa29.request.json = _fake_json29d
 asyncio.run(_wac29.update_config_image_bed())
-assert _plugin29.config["image_upload_services"][2]["enabled"] is False
+assert _plugin29.config["image_upload"]["services"][2]["enabled"] is False
 assert _plugin29.config["mc_servers"] == _mc_before29
 async def _fake_json29e(default=None):
     return {"index": 99, "enabled": True}
@@ -5892,7 +5953,7 @@ async def _fake_json29h(default=None):
     return {"index": 2}
 _wa29.request.json = _fake_json29h
 _res29e = asyncio.run(_wac29.delete_config_image_bed())
-assert _res29e["data"]["saved"] is True and len(_plugin29.config["image_upload_services"]) == 3
+assert _res29e["data"]["saved"] is True and len(_plugin29.config["image_upload"]["services"]) == 3
 assert _plugin29.config["mc_servers"] == _mc_before29, "删除也不得触碰 mc_servers"
 async def _fake_json29i(default=None):
     return {"index": 99}
@@ -5902,7 +5963,8 @@ _wa29.request.json = _orig_json29
 
 # (f) _new_image_entry 默认值 == schema 模板默认值
 _schema29 = _wac29._read_schema()
-_tpls29 = (_schema29.get("image_upload_services") or {}).get("templates") or {}
+_img29_schema = (_schema29.get("image_upload") or {}).get("items") or {}
+_tpls29 = (_img29_schema.get("services") or {}).get("templates") or {}
 _e29 = _wac29._new_image_entry("builtin_http")
 assert _e29["__template_key"] == "builtin_http" and _e29["enabled"] is True
 _tpl_items29 = _tpls29["builtin_http"]["items"]
@@ -5915,13 +5977,13 @@ assert _e29c["file_field"] == "image" and _e29c["response"] == "json"
 assert _wac29._new_image_entry("ghost")["__template_key"] == "custom", \
     "未知模板应回落 custom"
 
-# (g) switch：根级开关/超时局部生效；非法超时 → 400
+# (g) switch：分组开关/超时局部生效；非法超时 → 400
 async def _fake_json29j(default=None):
     return {"enable_image_upload": False, "image_upload_timeout": 90}
 _wa29.request.json = _fake_json29j
 _res29g = asyncio.run(_wac29.switch_image_bed())
-assert _plugin29.config["enable_image_upload"] is False and \
-    _plugin29.config["image_upload_timeout"] == 90
+assert _plugin29.config["image_upload"]["enabled"] is False and \
+    _plugin29.config["image_upload"]["timeout"] == 90
 assert _plugin29.reloads == 0 and _plugin29.image_bed_applys == 4, \
     "switch 必须免重连（create/update/delete 三次成功 + 本次 switch）"
 async def _fake_json29k(default=None):
@@ -5944,7 +6006,7 @@ _res29q = asyncio.run(_wac29.move_config_image_bed())
 assert _res29q["data"]["saved"] is True and _res29q["data"]["index"] == 1, _res29q["data"]
 assert _res29q["data"]["direction"] == "up" and _res29q["data"]["moved"] == "猫盒", \
     _res29q["data"]
-assert [e["name"] for e in _plugin29.config["image_upload_services"]] == \
+assert [e["name"] for e in _plugin29.config["image_upload"]["services"]] == \
     ["本机", "猫盒", "catbox"], "上移必须与上一条目交换位置"
 assert [it["entry"]["name"] for it in _res29q["data"]["items"]] == \
     ["本机", "猫盒", "catbox"], "响应 items 必须反映调整后的顺序"
@@ -5955,7 +6017,7 @@ async def _fake_json29r(default=None):
 _wa29.request.json = _fake_json29r
 _res29r = asyncio.run(_wac29.move_config_image_bed())
 assert _res29r["data"]["saved"] is True and _res29r["data"]["index"] == 2
-assert [e["name"] for e in _plugin29.config["image_upload_services"]] == \
+assert [e["name"] for e in _plugin29.config["image_upload"]["services"]] == \
     ["本机", "catbox", "猫盒"], "下移必须与下一条目交换位置"
 assert _plugin29.reloads == 0 and _plugin29.image_bed_applys == 6, \
     "移动必须走 apply_image_bed_config（免重连），且仅两次成功移动各生效一次"
@@ -5991,7 +6053,7 @@ _wa29.request.json = _fake_json29x
 assert asyncio.run(_wac29.move_config_image_bed())["status_code"] == 400, \
     "布尔 index 应返回 400"
 # 失败的移动不得改动配置顺序（(g2) 两次成功移动后的顺序为 本机/catbox/猫盒）
-assert [e["name"] for e in _plugin29.config["image_upload_services"]] == \
+assert [e["name"] for e in _plugin29.config["image_upload"]["services"]] == \
     ["本机", "catbox", "猫盒"], "非法移动请求不得改动图床顺序"
 _wa29.request.json = _orig_json29
 
@@ -6010,8 +6072,8 @@ class _FakeUploader29:
     async def upload(self, data):
         return self._result
 
-_plugin29.config["enable_image_upload"] = True
-_plugin29.config["image_upload_services"] = [
+_plugin29.config["image_upload"]["enabled"] = True
+_plugin29.config["image_upload"]["services"] = [
     {"__template_key": "builtin_http", "enabled": True, "name": "本机",
      "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
     {"__template_key": "custom", "enabled": True, "name": "catbox",
@@ -6069,8 +6131,8 @@ assert _res29h2["data"]["counts"] == {"ok": 0, "warn": 0, "fail": 2, "inactive":
 # (h2) 单条目测试：index 生效 → 复用运行时实例（uploaders[k]）走真实链路；
 # index 未生效 → 直接返回未生效原因；index 越界/非整数 → 400。
 # 列表已由 (h) 重置为 3 条（0 本机内置 / 1 catbox / 2 坏条目 upload_url 非法）
-_plugin29.config["enable_image_upload"] = True  # (g) 段 switch 测试关过总开关，此处恢复
-_plugin29.config["image_upload_services"] = [
+_plugin29.config["image_upload"]["enabled"] = True  # (g) 段 switch 测试关过总开关，此处恢复
+_plugin29.config["image_upload"]["services"] = [
     {"__template_key": "builtin_http", "enabled": True, "name": "本机",
      "host": "0.0.0.0", "port": 8765, "base_url": "http://1.2.3.4:8765"},
     {"__template_key": "custom", "enabled": True, "name": "catbox",

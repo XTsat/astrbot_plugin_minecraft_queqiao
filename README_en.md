@@ -70,11 +70,13 @@ The dashboard (plugin Pages) manages the servers in your config directly — no 
 
 The dashboard has a dedicated “🖼️ 图床” (Image Bed) tab pinned at the right end of the server-tab bar (entering it hides the stat cards and the server-card area):
 
-- **Master switch & timeout**: the root-level `enable_image_upload` (when off, no upload is attempted) and `image_upload_timeout` (upload timeout in seconds) are toggled / edited at the top of the panel and take effect on save
+- **Master switch & timeout**: `image_upload.enabled` (when off, no upload is attempted) and `image_upload.timeout` (upload timeout in seconds) are toggled / edited at the top of the panel and take effect on save
 - **Full entry management**: each entry is a card showing its kind (built-in / third-party), enabled state, why it is (or is not) active (disabled entry / invalid URL / wrong response type are all spelled out), address and runtime state; “new” entries are created with the template defaults filled in, editing covers every field, and deletion asks for confirmation
 - **Reorder entries**: the “⬆ 上移 / ⬇ 下移” (move up / move down) buttons on each card set the order in which image beds are tried; uploads walk the list from top to bottom, so the higher an entry sits the earlier it is tried, and the new order takes effect as soon as you save
 - **Built-in HTTP service runtime**: `builtin_http` entries show a “running / not running” badge reflecting the real state (not started / stopped / failed to start)
 - **🧪 Test upload**: with no parameters at all, a built-in PNG probe is pushed through the whole upload chain per entry and the hosted image is read back to verify its real format, with the result colour-coded — 🟢 **green = pass** (the produced format can be rendered by ChatImage), 🟡 **yellow = usable but limited** (the image bed re-encodes images to webp, which ChatImage cannot render, so the upload succeeds but nothing shows in game) and 🔴 **red = failed** (listed as “image-bed name: reason”) — configuration problems are identified in one click
+
+All image-bed settings live in a single `image_upload` group: the master switch `enabled`, the upload timeout `timeout`, and the entry list `services` — one card in the config page. The legacy root-level keys are migrated automatically on upgrade, so no manual edit is needed.
 
 Every save is **partial-effect** (only the image-transfer subsystem is rebuilt; no MC connection is touched). The image-transfer subsystem is also decoupled from the MC server config, so the image bed starts even when no server is configured at all.
 
@@ -204,7 +206,7 @@ With `forward_image_to_mc` enabled, images in group messages and enabled bot pip
 ```
 
 - Only enable it on servers where players have the [ChatImage](https://github.com/kitUIN/ChatImage) mod (Fabric / Forge / NeoForge) installed — otherwise only the `[[CICode,...]]` text is shown
-- The image URL must be reachable from player clients; when an image has no public URL (the log says "图片均无可访问的公开 URL"), turn on the root-level `enable_image_upload` and configure `image_upload_services` (see below)
+- The image URL must be reachable from player clients; when an image has no public URL (the log says "图片均无可访问的公开 URL"), turn on `image_upload.enabled` and configure `image_upload.services` (see below)
 - When `auto_forward_prefix` is set, only images in messages carrying the prefix are relayed (a bare image message has no text and never matches the prefix)
 
 ### Relaying in-game images to external sessions
@@ -235,15 +237,15 @@ E33Chat is a separate chat mod ([NereaFantasia/E33Chat](https://github.com/Nerea
 
 #### Built-in image HTTP service
 
-Some protocol clients deliver images only as base64 / local files with no externally reachable URL. Add a **"Built-in image HTTP service"** entry (template `builtin_http`) in `image_upload_services` — the plugin caches the image bytes in its built-in HTTP service and broadcasts `{base_url}/img/<token>` for player clients to load. **The prerequisite is that AstrBot has a publicly reachable address**; image bytes are cached in memory for 30 minutes (up to 500 entries). This service only stores bytes as-is and never re-encodes them, so whatever you send is what comes back (the image-bed test normally turns green). All of these entries can also be maintained directly in the dashboard's “🖼️ 图床” panel — no config file editing needed.
+Some protocol clients deliver images only as base64 / local files with no externally reachable URL. Add a **"Built-in image HTTP service"** entry (template `builtin_http`) in `image_upload.services` — the plugin caches the image bytes in its built-in HTTP service and broadcasts `{base_url}/img/<token>` for player clients to load. **The prerequisite is that AstrBot has a publicly reachable address**; image bytes are cached in memory for 30 minutes (up to 500 entries). This service only stores bytes as-is and never re-encodes them, so whatever you send is what comes back (the image-bed test normally turns green). All of these entries can also be maintained directly in the dashboard's “🖼️ 图床” panel — no config file editing needed.
 
 #### Generic image bed
 
 Automatically upload images without a public URL to an image bed to get a publicly reachable link, then broadcast it into the game:
 
-1. Turn on the root-level switch `enable_image_upload`
-2. Adjust `image_upload_timeout` (upload timeout, default 30 s) as needed
-3. Add image bed entries in `image_upload_services`: no bed is loaded by default — “new” lets you pick the **built-in HTTP service**, the **“Custom”** template (any upload endpoint), or a pre-configured template (endpoint and response mode pre-filled, just supply a token where needed)
+1. Turn on `image_upload.enabled`
+2. Adjust `image_upload.timeout` (upload timeout, default 30 s) as needed
+3. Add image bed entries in `image_upload.services`: no bed is loaded by default — “new” lets you pick the **built-in HTTP service**, the **“Custom”** template (any upload endpoint), or a pre-configured template (endpoint and response mode pre-filled, just supply a token where needed)
 
 > 💡 All three steps above can be done in the dashboard's “🖼️ 图床” panel: the master switch and timeout live at the top, entries are created / edited from templates with “new / edit”, and “🧪 Test upload” verifies the configuration right away.
 

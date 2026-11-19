@@ -523,7 +523,7 @@
         <span class="ib-status" id="ib-status">--</span>
       </div>
       <div class="ib-toolbar">
-        <label class="ib-toggle" title="根级 enable_image_upload：关闭后所有图床条目与内置服务全部不生效">
+        <label class="ib-toggle" title="图片转存总开关（image_upload.enabled）：关闭后所有图床条目与内置服务全部不生效">
           <input type="checkbox" id="ib-enabled" />
           <span>启用图片转存</span>
         </label>
@@ -795,7 +795,7 @@
       </div>
     </div>
   </div>
-  <!-- 图床条目弹窗：面板「图床」视图内直接管理 conf 的 image_upload_services
+  <!-- 图床条目弹窗：面板「图床」视图内直接管理 conf 的 image_upload.services
        （新建 / 编辑 / 启用 / 删除）。保存链路与服务器条目一致：备份 → 原子
        落盘 → 局部生效（免重连 MC）。仅暴露常用字段，其余沿用 schema 模板
        默认值，完整字段编辑仍在「配置管理」页做 -->

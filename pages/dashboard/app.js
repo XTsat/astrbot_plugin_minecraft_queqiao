@@ -193,7 +193,7 @@ class DashboardApp {
     // 新建表单切换模板时用 defaults 预填字段；成功拉取后重建模板下拉
     this.imageBedTemplates = null;
     // 模板选择器里除 builtin/custom 外的第三方模板键（与 _conf_schema.json
-    // 的 image_upload_services.templates 键集合对齐；后端模板接口未拉到时兜底）
+    // 的 image_upload.services.templates 键集合对齐；后端模板接口未拉到时兜底）
     this.imageBedTemplateKeys = [
       'builtin_http', 'custom', 'imglink', 'img402', 'pngurl', 'anyapi',
       'see', 'imgbb',
@@ -2140,7 +2140,8 @@ class DashboardApp {
     }
   }
 
-  // 根级总开关（enable_image_upload）：免重连局部生效
+  // 分组总开关（image_upload.enabled）：免重连局部生效。请求体沿用
+  // enable_image_upload 字段名，后端映射到分组，旧缓存页也照常可用
   async toggleImageBed(enabled) {
     const btn = document.getElementById('ib-enabled');
     if (btn) btn.disabled = true;
@@ -2159,7 +2160,7 @@ class DashboardApp {
     }
   }
 
-  // 上传超时（image_upload_timeout）：免重连局部生效
+  // 上传超时（image_upload.timeout）：免重连局部生效
   async saveImageBedTimeout() {
     const input = document.getElementById('ib-timeout');
     if (!input) return;

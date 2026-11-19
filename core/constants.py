@@ -187,7 +187,7 @@ CHATIMAGE_SUPPORTED_FORMATS: tuple[str, ...] = (
     "bmp",
 )
 
-# 第三方图床上传超时（秒，对应根级配置 image_upload_timeout）
+# 第三方图床上传超时（秒，对应 image_upload.timeout）
 DEFAULT_IMAGE_UPLOAD_TIMEOUT = 30
 
 # 内置图片 HTTP 服务的监听参数（对应 builtin_http 模板的 host/port 默认值）

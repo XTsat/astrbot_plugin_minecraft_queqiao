@@ -47,10 +47,12 @@ from ..core.constants import (
 )
 from ..core.models_config import (
     CONFIG_GROUP_ALIASES,
+    IMAGE_UPLOAD_GROUP,
     PREFIX_DIRECTION_FLAGS,
     _PREFIX_MESSAGE_FLAGS,
     _PREFIX_MESSAGE_KEYS,
     fold_entry,
+    image_upload_settings,
     normalize_entry,
 )
 from ..core.queqiao_client import reverse_servers_snapshot
@@ -60,7 +62,7 @@ from .metrics import MetricsCollector
 # 面板可管理的服务器条目字段（conf 中 mc_servers 的子集，其余字段回落 schema 默认值）
 _SERVER_TEMPLATE_KEY = "server"
 
-# 图床条目字段白名单（conf 中 image_upload_services 条目可被面板修改的字段；
+# 图床条目字段白名单（conf 中 image_upload.services 条目可被面板修改的字段；
 # 与 _conf_schema.json 各模板 items 键集合一致，其余字段回落 schema 默认值）
 _IMAGE_ENTRY_FIELDS = (
     "enabled",
@@ -899,14 +901,11 @@ class WebApiController:
         """获取图床服务的运行状态。
 
         始终保留 `enabled / status_text / service_names / uploaders_count`
-        四个既有字段（向后兼容），在此基础上增补 `timeout`（根级上传超时）、
+        四个既有字段（向后兼容），在此基础上增补 `timeout`（分组级上传超时）、
         `items`（条目生效态视图，含未生效原因）、`builtin_running`（内置
         HTTP 服务的真实监听状态）。
         """
-        master_enabled = _as_bool(
-            self.plugin.config.get("enable_image_upload") if self.plugin is not None else None,
-            False,
-        )
+        master_enabled = self._image_bed_enabled()
         return json_response(
             {
                 "enabled": self.image_bed.enabled,
@@ -922,14 +921,12 @@ class WebApiController:
     async def get_image_bed_templates(self) -> Any:
         """返回图床模板清单与各模板的字段默认值（供面板新建表单预填）。
 
-        数据源为 ``_conf_schema.json`` 的 ``image_upload_services.templates``；
+        数据源为 ``_conf_schema.json`` 的 ``image_upload.services.templates``；
         每模板给出 ``{name, hint, defaults}``，``defaults`` 用
         ``_schema_default()`` 逐键推导，与 ``_new_image_entry`` 生成的新条目
         默认值完全一致。面板选模板后即可把这些默认值回填进表单。
         """
-        templates = (
-            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
-        )
+        templates = self._image_templates_schema()
         result: dict[str, Any] = {}
         for key, template in templates.items():
             if not isinstance(template, dict):
@@ -964,11 +961,7 @@ class WebApiController:
         payload = await request.json(default={})
         if not isinstance(payload, dict):
             return error_response("请求体需为 JSON 对象", status_code=400)
-        master_enabled = _as_bool(
-            self.plugin.config.get("enable_image_upload")
-            if self.plugin is not None else None,
-            False,
-        )
+        master_enabled = self._image_bed_enabled()
         entries = self._conf_image_entries()
         index = payload.get("index")
         if index is not None:
@@ -1128,10 +1121,12 @@ class WebApiController:
         return url, reason, elapsed_ms
 
     async def switch_image_bed(self) -> Any:
-        """保存根级图床开关与上传超时（局部生效，不重连）。
+        """保存图片转存总开关与上传超时（局部生效，不重连）。
 
         请求体：``{"enable_image_upload": bool}`` 与 / 或
-        ``{"image_upload_timeout": int≥1}``；仅显式出现的字段会被修改。
+        ``{"image_upload_timeout": int≥1}``；仅显式出现的字段会被修改，
+        最终写进 ``image_upload`` 分组的 ``enabled`` / ``timeout``。请求体
+        沿用面板既有字段名，避免前端与旧页面同时升级。
         """
         if self.plugin is None:
             return error_response("插件实例未注入，无法修改配置", status_code=503)
@@ -1139,25 +1134,29 @@ class WebApiController:
         if not isinstance(payload, dict):
             return error_response("请求体需为 JSON 对象", status_code=400)
 
-        new_conf = dict(self.plugin.config)
+        group = self._image_upload_settings()
+        touched: list[str] = []
         if "enable_image_upload" in payload:
-            new_conf["enable_image_upload"] = _as_bool(payload["enable_image_upload"], False)
+            group["enabled"] = _as_bool(payload["enable_image_upload"], False)
+            touched.append("enabled")
         if "image_upload_timeout" in payload:
             timeout = _as_int(payload["image_upload_timeout"], -1)
             if timeout < 1:
                 return error_response("上传超时需为 ≥1 的整数", status_code=400)
-            new_conf["image_upload_timeout"] = timeout
-        if not any(key in payload for key in ("enable_image_upload", "image_upload_timeout")):
+            group["timeout"] = timeout
+            touched.append("timeout")
+        if not touched:
             return error_response("无可识别的图床开关字段", status_code=400)
 
+        new_conf = dict(self.plugin.config)
+        new_conf[IMAGE_UPLOAD_GROUP] = group
         try:
             await self._persist_config(new_conf, reload=False)
         except Exception as exc:
-            logger.exception(f"[{PLUGIN_NAME}] 更新图床根级配置失败")
-            return error_response(f"更新图床根级配置失败: {exc}", status_code=500)
+            logger.exception(f"[{PLUGIN_NAME}] 更新图床分组配置失败")
+            return error_response(f"更新图床分组配置失败: {exc}", status_code=500)
         logger.info(
-            f"[{PLUGIN_NAME}] 面板更新图床开关/超时（免重连）: "
-            f"{', '.join(key for key in ('enable_image_upload', 'image_upload_timeout') if key in payload)}"
+            f"[{PLUGIN_NAME}] 面板更新图床开关/超时（免重连）: {', '.join(touched)}"
         )
         return await self.get_image_bed_status()
 
@@ -1927,31 +1926,41 @@ class WebApiController:
         logger.info(f"[{PLUGIN_NAME}] 面板删除服务器: {removed_name or '#' + str(position)}")
         return self._config_servers_response(saved=True, removed=removed_name)
 
-    # ---- 图床条目管理（面板「图床」视图直接改 conf 里的 image_upload_services） ----
+    # ---- 图床条目管理（面板「图床」视图直接改 conf 里的 image_upload.services） ----
+
+    def _image_upload_settings(self) -> dict[str, Any]:
+        """图片转存分组的运行时视图（新分组优先，旧版根级键兜底）。"""
+        return image_upload_settings(self.plugin.config if self.plugin is not None else None)
 
     def _conf_image_entries(self) -> list[Any]:
-        """当前内存配置里的 image_upload_services 原始条目列表（含未启用条目）。"""
-        if self.plugin is None:
-            return []
-        entries = self.plugin.config.get("image_upload_services")
+        """当前内存配置里的图床条目原始列表（含未启用条目）。"""
+        entries = self._image_upload_settings().get("services")
         if isinstance(entries, dict):  # 防御：误存成单项对象
             entries = [entries]
         return entries if isinstance(entries, list) else []
 
     def _conf_with_image_entries(self, entries: list[Any]) -> dict[str, Any]:
-        """把替换后的图床条目列表合成一份完整配置（只碰 image_upload_services 键）。"""
+        """把替换后的图床条目列表合成一份完整配置（只碰 image_upload.services）。"""
         new_conf = dict(self.plugin.config)
-        new_conf["image_upload_services"] = entries
+        group = self._image_upload_settings()
+        group["services"] = entries
+        new_conf[IMAGE_UPLOAD_GROUP] = group
         return new_conf
+
+    def _image_templates_schema(self) -> dict[str, Any]:
+        """``_conf_schema.json`` 里的图床模板表（image_upload.services.templates）。"""
+        group = self._read_schema().get(IMAGE_UPLOAD_GROUP)
+        items = group.get("items") if isinstance(group, dict) else None
+        services = items.get("services") if isinstance(items, dict) else None
+        templates = services.get("templates") if isinstance(services, dict) else None
+        return templates if isinstance(templates, dict) else {}
 
     def _new_image_entry(self, template_key: str) -> dict[str, Any]:
         """按 schema 模板生成一份全新图床条目（默认值全部取自模板）。
 
         schema 缺失（异常环境）时退化为最小可用结构，保证新建功能不中断。
         """
-        templates = (
-            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
-        )
+        templates = self._image_templates_schema()
         template = templates.get(template_key) or templates.get(_IMAGE_TEMPLATE_KEY_CUSTOM)
         if not isinstance(template, dict):
             logger.warning(f"[{PLUGIN_NAME}] 未找到图床模板 {template_key!r}，使用最小默认结构")
@@ -2051,12 +2060,18 @@ class WebApiController:
         )
 
     def _image_bed_timeout(self) -> int:
-        """根级上传超时（conf 的 image_upload_timeout，缺省回落默认值）。"""
-        if self.plugin is None:
-            return DEFAULT_IMAGE_UPLOAD_TIMEOUT
-        return max(1, _as_int(
-            self.plugin.config.get("image_upload_timeout"), DEFAULT_IMAGE_UPLOAD_TIMEOUT
-        ))
+        """分组级上传超时（image_upload.timeout，缺省回落默认值）。"""
+        return max(
+            1,
+            _as_int(
+                self._image_upload_settings().get("timeout"),
+                DEFAULT_IMAGE_UPLOAD_TIMEOUT,
+            ),
+        )
+
+    def _image_bed_enabled(self) -> bool:
+        """图片转存总开关（image_upload.enabled，旧版根级键自动兜底）。"""
+        return _as_bool(self._image_upload_settings().get("enabled"), False)
 
     def _image_bed_items(self, master_enabled: bool) -> list[dict[str, Any]]:
         """把 conf 里的图床条目整理成面板展示视图（含未生效原因）。
@@ -2125,13 +2140,14 @@ class WebApiController:
         return None
 
     def _image_bed_response(self, **extra: Any) -> Any:
-        """统一返回格式：最新条目原始列表 + 当前根级开关/超时。"""
+        """统一返回格式：最新条目原始列表 + 当前开关/超时。
+
+        ``enable_image_upload`` / ``image_upload_timeout`` 是面板既有字段名，
+        值取自 ``image_upload`` 分组（``enabled`` / ``timeout``），前端无需改键。
+        """
         payload: dict[str, Any] = {
             "items": self._config_image_items(),
-            "enable_image_upload": _as_bool(
-                self.plugin.config.get("enable_image_upload") if self.plugin is not None else None,
-                False,
-            ),
+            "enable_image_upload": self._image_bed_enabled(),
             "image_upload_timeout": self._image_bed_timeout(),
         }
         payload.update(extra)
@@ -2159,9 +2175,7 @@ class WebApiController:
             return error_response("请求体需为 JSON 对象", status_code=400)
 
         template_key = str(payload.get("template_key") or "").strip()
-        templates = (
-            (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
-        )
+        templates = self._image_templates_schema()
         if template_key not in templates:
             return error_response(f"未知的图床模板: {template_key or '(空)'}", status_code=400)
 
@@ -2207,9 +2221,7 @@ class WebApiController:
         new_template_key = str(payload.get("template_key") or "").strip()
         current_key = str(entry.get("__template_key") or "").strip()
         if new_template_key and new_template_key != current_key:
-            templates = (
-                (self._read_schema().get("image_upload_services") or {}).get("templates") or {}
-            )
+            templates = self._image_templates_schema()
             if new_template_key not in templates:
                 return error_response(f"未知的图床模板: {new_template_key}", status_code=400)
             entry = self._new_image_entry(new_template_key)
@@ -2259,7 +2271,7 @@ class WebApiController:
     async def move_config_image_bed(self) -> Any:
         """上移 / 下移图床条目并局部生效，用于调整图床尝试的优先顺序。
 
-        上传按 ``image_upload_services`` 的列表顺序逐个尝试，因此调整列表
+        上传按 ``image_upload.services`` 的列表顺序逐个尝试，因此调整列表
         顺序即调整图床优先级。请求体：``index`` 定位条目，``direction`` 为
         ``up`` 或 ``down``；已处于首/尾时返回 400（面板同时禁用边界按钮）。
         """

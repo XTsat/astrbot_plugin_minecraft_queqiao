@@ -299,10 +299,10 @@ class MinecraftQueQiaoPlugin(Star):
 ### 5.1 配置 Schema（_conf_schema.json）
 
 - 本项目 Schema 是**真实扁平结构**（不是模板示意里的 `schemaVersion/fields`）
-- 顶层键：`enabled`（总开关）、`mc_servers`（`template_list` 服务器条目）、`enable_image_upload`（图床总开关）、`image_upload_timeout`、`image_upload_services`（图床条目列表）
+- 顶层键：`enabled`（总开关）、`mc_servers`（`template_list` 服务器条目）、`image_upload`（图片转存分组：`enabled` 总开关 / `timeout` 上传超时 / `services` 图床条目 `template_list`）；旧的根级 `enable_image_upload` / `image_upload_timeout` / `image_upload_services` 仅作为隐藏的迁移来源保留（`invisible: true`），读取一律走 `core.models_config.image_upload_settings()`
 - 新增配置项 → **先在 `_conf_schema.json` 补 schema**（type/hint/default/options），再在代码中实现读写；`hint` 用中文，作为文档里的「中文名」
 - 多服务器配置一律落在 `mc_servers` 条目内，不要新增平级「服务器名」字段
-- 配置项在文档（README 配置表、CHANGELOG）中引用时，**中文名在前、英文 key 在后**：统一写成「中文名（`key`）」形式，例如「超时时间（`image_upload_timeout`）」；中文名取自 `_conf_schema.json` 的 `hint` 字段，`key` 用反引号包裹
+- 配置项在文档（README 配置表、CHANGELOG）中引用时，**中文名在前、英文 key 在后**：统一写成「中文名（`key`）」形式，例如「超时时间（`image_upload.timeout`）」；中文名取自 `_conf_schema.json` 的 `hint` 字段，`key` 用反引号包裹
 
 ### 5.2 新增配置项流程
 
