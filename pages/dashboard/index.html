@@ -257,7 +257,25 @@
                 <option value="">（使用会话默认人格）</option>
               </select>
             </span>
-            <span class="settings-row-hint">游戏内 AI 对话使用该人格的提示词，不受会话默认人格影响；留空 = 用会话默认人格</span>
+            <span class="settings-row-hint">游戏内 AI 对话使用该人格的提示词；留空 = 跟随会话的人格设置</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">AI 上下文归属</span>
+            <span class="settings-row-control">
+              <select id="st-ai-session-mode">
+                <option value="server">每台服务器一份</option>
+                <option value="group">与目标群共用</option>
+                <option value="player">每个玩家一份</option>
+              </select>
+            </span>
+            <span class="settings-row-hint">游戏内 AI 按哪个会话记上下文：每服独立 / 与目标群共用（群内 /new 也能重置）/ 每个玩家一份</span>
+          </label>
+          <label class="settings-row">
+            <span class="settings-row-label">AI 上下文保留轮数</span>
+            <span class="settings-row-control">
+              <input type="number" id="st-ai-history-turns" min="0" max="200" step="1" placeholder="20" autocomplete="off" />
+            </span>
+            <span class="settings-row-hint">记住最近多少轮（一问一答为一轮），0 = 不限制；调大更连贯但更费 token</span>
           </label>
         </div>
         <div class="settings-group" id="settings-group-format">

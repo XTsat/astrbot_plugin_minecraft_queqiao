@@ -37,6 +37,11 @@ from ..core.constants import (
     DEFAULT_REVERSE_PATH,
     DEFAULT_REVERSE_PORT,
     DEFAULT_TERMINAL_DAYS,
+    AI_HISTORY_TURNS_MAX,
+    AI_HISTORY_TURNS_MIN,
+    AI_SESSION_MODES,
+    DEFAULT_AI_HISTORY_TURNS,
+    DEFAULT_AI_SESSION_MODE,
     DEFAULT_WS_URL,
     E33CHAT_IMAGE_MAX_EDGE_MAX,
     E33CHAT_IMAGE_MAX_EDGE_MIN,
@@ -123,6 +128,12 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+def _as_ai_session_mode(value: Any) -> str:
+    """AI 上下文归属：只认三个已知取值，其余回落默认（每服一份）。"""
+    mode = str(value or "").strip().lower()
+    return mode if mode in AI_SESSION_MODES else DEFAULT_AI_SESSION_MODE
 
 
 def _enabled_directions_of(entry: Any) -> list[str]:
@@ -1360,6 +1371,16 @@ class WebApiController:
                     "ai_chat_prefix": str(entry.get("ai_chat_prefix") or ""),
                     # AI 对话人格（条目顶层，与 ai_chat_prefix 平级）：面板下拉框回显
                     "ai_persona_id": str(entry.get("ai_persona_id") or ""),
+                    # AI 上下文归属 / 保留轮数 / 重置指令：面板「功能设置」读写
+                    "ai_session_mode": _as_ai_session_mode(
+                        entry.get("ai_session_mode")
+                    ),
+                    "ai_history_turns": _as_int_clamped(
+                        entry.get("ai_history_turns"),
+                        DEFAULT_AI_HISTORY_TURNS,
+                        AI_HISTORY_TURNS_MIN,
+                        AI_HISTORY_TURNS_MAX,
+                    ),
                     # 「转发渠道」多选框：三个方向统一由这一个列表表示
                     "enabled_directions": _enabled_directions_of(entry),
                     # 互通终端加载天数（每台服务器独立，条目顶层；缺省回落默认）
@@ -1665,10 +1686,34 @@ class WebApiController:
         if "ai_persona_id" in payload:
             # 人格 ID 落在条目顶层（与 ai_chat_prefix 平级）；空串 = 用会话默认人格
             entry["ai_persona_id"] = str(payload.get("ai_persona_id") or "").strip()
-        # 配置页的 ai 分组（payload.ai）：人格项按显式出现合并
+        if "ai_session_mode" in payload:
+            # AI 上下文归属：只认三个已知取值，脏值回落默认（每服一份）
+            entry["ai_session_mode"] = _as_ai_session_mode(
+                payload.get("ai_session_mode")
+            )
+        if "ai_history_turns" in payload:
+            entry["ai_history_turns"] = _as_int_clamped(
+                payload.get("ai_history_turns"),
+                DEFAULT_AI_HISTORY_TURNS,
+                AI_HISTORY_TURNS_MIN,
+                AI_HISTORY_TURNS_MAX,
+            )
+        # 配置页的 ai 分组（payload.ai）：人格与上下文项按显式出现合并
         ai_payload = payload.get("ai")
-        if isinstance(ai_payload, dict) and "persona_id" in ai_payload:
-            entry["ai_persona_id"] = str(ai_payload.get("persona_id") or "").strip()
+        if isinstance(ai_payload, dict):
+            if "persona_id" in ai_payload:
+                entry["ai_persona_id"] = str(ai_payload.get("persona_id") or "").strip()
+            if "session_mode" in ai_payload:
+                entry["ai_session_mode"] = _as_ai_session_mode(
+                    ai_payload.get("session_mode")
+                )
+            if "history_turns" in ai_payload:
+                entry["ai_history_turns"] = _as_int_clamped(
+                    ai_payload.get("history_turns"),
+                    DEFAULT_AI_HISTORY_TURNS,
+                    AI_HISTORY_TURNS_MIN,
+                    AI_HISTORY_TURNS_MAX,
+                )
         # 面板的「触发前缀」分组（payload.prefix）：三个前缀 + 三个方向开关。
         # 按「显式出现」合并，漏传不清空；叶子键名与 ServerConfig 属性对齐
         prefix_payload = payload.get("prefix")

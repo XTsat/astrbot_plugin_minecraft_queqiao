@@ -80,6 +80,7 @@ astrbot_plugin_minecraft_queqiao/
 │   ├── rcon_client.py      #   直连 RCON 兜底（惰性 import aiomcrcon）
 │   └── server_manager.py   #   多服务器实例与指令执行（鹊桥优先/RCON 兜底）
 ├── services/               # 服务层
+│   ├── ai_session.py       #   游戏内 AI 的 UMO 归属、上下文读写与重置
 │   ├── binding.py          #   账号↔游戏ID 绑定（原子写）
 │   ├── message_bridge.py   #   双向转发 + 回环抑制 + 富文本剥离
 │   ├── image_host.py       #   内置图片 HTTP 服务（/img/<token>）
@@ -111,7 +112,7 @@ core/constants.py 位于最底层，零内部依赖，不得 import 本插件其
 ```
 
 - `core/`：核心业务层，只做协议、配置模型、连接与服务器实例，不接触 WebUI 与命令展示
-- `services/`：可复用的服务（绑定、转发、图床、渲染、翻译、日志、监控、指标、Web API），可 import `core`，禁止 import `main`
+- `services/`：可复用的服务（AI 会话、绑定、转发、图床、渲染、翻译、日志、监控、指标、Web API），可 import `core`，禁止 import `main`
 - `handlers/`：命令业务逻辑与多服务器选择，可 import `core` / `services`，禁止 import `main`
 - `main.py`：编排层，持有各服务实例、注册命令与事件，不实现具体业务细节
 
@@ -519,6 +520,36 @@ async def cmd_sub(
 - 前缀匹配一律走 `core/constants.py` 的 `prefix_matches()` / `strip_prefix()`，
   **禁止直接用 `str.startswith`**：短前缀（`ai`）必须做词边界判断，
   否则 `aim`、`airport` 会被误判；纯字母前缀忽略大小写
+
+### 6.6.1 游戏内 AI 的会话与上下文（改动 AI 链路前必读）
+
+游戏内聊天走鹊桥 WS，**不经过 AstrBot 的事件管道**，所以 `conversation_manager`
+既不会自动读也不会自动写上下文；AstrBot 的 `/new`、`/reset` 是内建指令，匹配前
+要求 `event.is_at_or_wake_command`（`core/star/filter/command.py`），游戏内聊天
+永远到不了那里。这段能力由插件自己补（`services/ai_session.py`）：
+
+- **UMO 三档归属**（`ai_session_mode`，默认 `server`）：
+  - `server`：每台服务器一个合成 UMO（`{PLUGIN_NAME}:GroupMessage:server_<name>`）
+  - `group`：复用该服务器 `target_sessions[0]`；未配目标会话时退回 `server`
+  - `player`：每个玩家一个合成 UMO，key 优先 uuid（改名不丢历史）、缺省用昵称
+- **读写流程**：`ensure_conversation()` 取/建对话 → `load_history()` 读历史 →
+  调 `text_chat(contexts=..., system_prompt=...)` → `append_turn()` 写回并按
+  `ai_history_turns` 裁剪。历史裁剪必须保证首条是 `user`，与 AstrBot 的截断器一致
+- **人格优先级**：`ai_persona_id` → 对话绑定人格 → `resolve_selected_persona()`
+  （会话强制人格 / 会话默认人格）。人格的 `_begin_dialogs_processed` 要一起带上，
+  否则情景预设对话丢失
+- **重置指令**（`ai_new_command` / `ai_reset_command`，两个独立字符串，默认 `new` /
+  `reset`；留空 = 关闭该入口，可填任意词；面板不提供，只在配置页出现）在
+  `_match_ai_reset` 里做**整句**匹配（忽略大小写与首尾空白）：`#new` 是重置，`#new 帮我写首诗`
+  是正常提问。`new` 调 `new_conversation`（旧对话仍留在 AstrBot 可查），
+  `reset` 调 `update_conversation(history=[])`
+- **降级**：AstrBot 没有 `conversation_manager`（旧版）时退化为单轮对话且不写库，
+  不得因此让游戏内 AI 完全不可用
+- **`unique_session` 注意**：AstrBot 平台设置开启「隔离会话」后，群消息 UMO 变成
+  `{sender}_{group}`，与 `target_sessions` 里配置的群 UMO 不再相同。`group` 模式按
+  配置的 UMO 读写，不会随成员分裂；要按人隔离应使用 `player` 模式
+- 新增配置项必须同时进 `SOFT_CONFIG_KEYS` 与 `apply_soft_config` 的解析分支，
+  否则面板保存后要热重载才生效
 
 ### 6.7 自定义指令
 

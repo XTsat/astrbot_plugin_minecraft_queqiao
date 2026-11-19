@@ -197,12 +197,14 @@ function createControl(spec, onchange) {
       if (Array.isArray(spec.options) && spec.options.length) {
         const el = document.createElement('select');
         el.className = 'cfg-select';
-        for (const opt of spec.options) {
+        // labels 与 options 一一对应：有中文名时显示中文，值仍存原始 key
+        const optionLabels = Array.isArray(spec.labels) ? spec.labels : [];
+        spec.options.forEach((opt, i) => {
           const o = document.createElement('option');
           o.value = String(opt);
-          o.textContent = String(opt);
+          o.textContent = optionLabels[i] || String(opt);
           el.appendChild(o);
-        }
+        });
         el.addEventListener('change', () => onchange());
         return {
           el,

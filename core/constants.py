@@ -222,6 +222,37 @@ E33CHAT_IMAGE_MAX_EDGE_MAX = 2048
 MAX_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
 IMAGE_DOWNLOAD_TIMEOUT = 15  # 秒
 
+# ---- AI 对话的会话（UMO） ----
+
+# 游戏内 AI 对话按哪个会话读写上下文。AstrBot 的对话历史以 UMO 为键存库，
+# 游戏内聊天不经过 AstrBot 事件管道，因此由插件自己挑一个 UMO 去读写：
+#   server：每台服务器一个独立 UMO（默认）——各服上下文互不干扰，
+#           不与群聊共享，群里的 /new 也不会清掉游戏内的对话
+#   group ：复用该服务器 target_sessions 的第一个群 UMO——与群共用同一份
+#           上下文与人格，群内 /new 即可重置游戏侧
+#   player：每个玩家一个 UMO——玩家之间上下文隔离，适合多人共服
+AI_SESSION_MODE_SERVER = "server"
+AI_SESSION_MODE_GROUP = "group"
+AI_SESSION_MODE_PLAYER = "player"
+AI_SESSION_MODES: tuple[str, ...] = (
+    AI_SESSION_MODE_SERVER,
+    AI_SESSION_MODE_GROUP,
+    AI_SESSION_MODE_PLAYER,
+)
+DEFAULT_AI_SESSION_MODE = AI_SESSION_MODE_SERVER
+
+# 上下文保留轮数（一问一答为一轮）：游戏内绕过了 AstrBot 的上下文管理，
+# 不设上限会让历史无限增长并最终撑爆模型上下文。0 = 不限制（交给模型报错）
+DEFAULT_AI_HISTORY_TURNS = 20
+AI_HISTORY_TURNS_MIN = 0
+AI_HISTORY_TURNS_MAX = 200
+
+# 游戏内重置对话的两个入口：命中 AI 前缀后**整句**等于关键字才触发，语义
+# 对齐 AstrBot 的 /new（新建对话并切过去）与 /reset（清空当前对话历史）。
+# 两者独立配置，留空 = 关闭该入口；没配的人直接用 new / reset 即可
+DEFAULT_AI_NEW_COMMAND = "new"
+DEFAULT_AI_RESET_COMMAND = "reset"
+
 # ---- 性能监控（TPS / 延迟） ----
 # 监控采样按天分片持久化到 data_dir/monitor/<server>/YYYY-MM-DD.jsonl；
 # TPS 通过 RCON 执行 TPS 指令获取（Bukkit 系 tps / forge tps / spark tps 等），

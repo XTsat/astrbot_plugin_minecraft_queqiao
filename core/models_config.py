@@ -12,6 +12,13 @@ from datetime import datetime
 from astrbot.api import logger
 
 from .constants import (
+    AI_HISTORY_TURNS_MAX,
+    AI_HISTORY_TURNS_MIN,
+    AI_SESSION_MODES,
+    DEFAULT_AI_HISTORY_TURNS,
+    DEFAULT_AI_NEW_COMMAND,
+    DEFAULT_AI_RESET_COMMAND,
+    DEFAULT_AI_SESSION_MODE,
     DEFAULT_BROADCAST_FORMAT,
     DEFAULT_CHAT_FORMAT,
     DEFAULT_CHATIMAGE_NAME,
@@ -105,6 +112,24 @@ def _to_int_clamped(value: object, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, _to_int(value, default)))
 
 
+def _to_ai_session_mode(value: object) -> str:
+    """AI 会话模式：只认三个已知取值，其余（含空串）回落默认。"""
+    mode = _to_str(value, DEFAULT_AI_SESSION_MODE).strip().lower()
+    return mode if mode in AI_SESSION_MODES else DEFAULT_AI_SESSION_MODE
+
+
+def _to_ai_command(value: object, default: str) -> str:
+    """游戏内重置指令关键字：去空白、去前导斜杠、转小写。
+
+    与匹配侧（`_match_ai_reset`）同口径：游戏内聊天不会带斜杠，但用户可能
+    顺手写 `/new`，这里统一剥掉；空串是合法值（= 关闭该入口），因此只在
+    「未配置」（None）时回落到默认。
+    """
+    if value is None:
+        return default
+    return _to_str(value, "").strip().lstrip("/").lower()
+
+
 def _to_list(value: object, default: list[str]) -> list[str]:
     """兼容列表、JSON 字符串、逗号分隔字符串三种形态。"""
     if value is None:
@@ -188,8 +213,12 @@ def _to_platform_map(value: object) -> dict[str, str]:
 CONFIG_GROUP_ALIASES: dict[str, dict[str, str]] = {
     "ai": {
         # AI 的启停已并入「转发渠道」多选框（prefix.enabled_directions），
-        # 这里只保留人格选择，避免同一个开关在配置里出现两处
+        # 这里只保留人格与会话相关选项，避免同一个开关在配置里出现两处
         "persona_id": "ai_persona_id",
+        "session_mode": "ai_session_mode",
+        "history_turns": "ai_history_turns",
+        "new_command": "ai_new_command",
+        "reset_command": "ai_reset_command",
     },
     "prefix": {
         # 三个方向的多选框（enabled_directions）单独处理成三个布尔，
@@ -536,6 +565,14 @@ class ServerConfig:
     enable_ai_chat: bool = True
     ai_persona_id: str = ""
     ai_chat_prefix: str = "#"
+    # 游戏内 AI 上下文按哪个 UMO 读写：server / group / player，见
+    # core/constants.py 的 AI_SESSION_MODE_*；非法值回落 server
+    ai_session_mode: str = DEFAULT_AI_SESSION_MODE
+    # 上下文保留轮数（一问一答为一轮）：0 = 不限制
+    ai_history_turns: int = DEFAULT_AI_HISTORY_TURNS
+    # 游戏内重置对话的两条指令（命中 AI 前缀后整句匹配）：留空 = 关闭该入口
+    ai_new_command: str = DEFAULT_AI_NEW_COMMAND
+    ai_reset_command: str = DEFAULT_AI_RESET_COMMAND
     text2image: bool = True
     # 互通终端加载最近几天的日志分片（0=全部保留分片），每台服务器独立
     terminal_days: int = DEFAULT_TERMINAL_DAYS
@@ -925,6 +962,19 @@ class ServerConfig:
             enable_ai_chat=_to_bool(data.get("enable_ai_chat"), True),
             ai_persona_id=_to_str(data.get("ai_persona_id"), ""),
             ai_chat_prefix=_to_str(data.get("ai_chat_prefix"), "#"),
+            ai_session_mode=_to_ai_session_mode(data.get("ai_session_mode")),
+            ai_history_turns=_to_int_clamped(
+                data.get("ai_history_turns"),
+                DEFAULT_AI_HISTORY_TURNS,
+                AI_HISTORY_TURNS_MIN,
+                AI_HISTORY_TURNS_MAX,
+            ),
+            ai_new_command=_to_ai_command(
+                data.get("ai_new_command"), DEFAULT_AI_NEW_COMMAND
+            ),
+            ai_reset_command=_to_ai_command(
+                data.get("ai_reset_command"), DEFAULT_AI_RESET_COMMAND
+            ),
             text2image=_to_bool(data.get("text2image"), True),
             terminal_days=_to_int_clamped(
                 data.get("terminal_days"), DEFAULT_TERMINAL_DAYS, 0, 30

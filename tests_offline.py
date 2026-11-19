@@ -7949,3 +7949,118 @@ assert ServerConfig.from_dict({"slp_address": " 1.2.3.4:25566 "}).slp_address ==
 
 print("OK  探测地址解析/抖动静默/真启动通知/schema 全部通过")
 
+
+print("\n=== 60. 游戏内 AI 会话（UMO 归属 / 上下文读写 / 重置指令） ===")
+
+from astrbot_plugin_minecraft_queqiao.services import ai_session as _ai60
+from astrbot_plugin_minecraft_queqiao.main import (
+    MinecraftQueQiaoPlugin as _P60,
+)
+from astrbot_plugin_minecraft_queqiao.core.constants import (
+    AI_SESSION_MODE_GROUP as _MODE_G60,
+    AI_SESSION_MODE_PLAYER as _MODE_P60,
+    AI_SESSION_MODE_SERVER as _MODE_S60,
+)
+
+# (a) 三种 UMO 归属：server 每服一份、group 复用首个目标会话、player 每玩家一份
+_cfg60 = SC.from_dict({"server": {"server_name": "S60"},
+    "message": {"target_sessions": ["aiocqhttp:GroupMessage:123"]}})
+_umo_s = _ai60.resolve_session_umo(_cfg60, "S60", "uuid-a")
+assert _umo_s.endswith(":server_S60"), _umo_s
+# 同一台服务器的两个玩家在 server 模式下共用一个会话
+assert _ai60.resolve_session_umo(_cfg60, "S60", "uuid-b") == _umo_s
+
+_cfg60g = SC.from_dict({"server": {"server_name": "S60"},
+    "message": {"target_sessions": ["aiocqhttp:GroupMessage:123"]},
+    "ai": {"session_mode": "group"}})
+assert _ai60.resolve_session_umo(_cfg60g, "S60", "uuid-a") == "aiocqhttp:GroupMessage:123"
+
+_cfg60p = SC.from_dict({"server": {"server_name": "S60"},
+    "message": {"target_sessions": ["aiocqhttp:GroupMessage:123"]},
+    "ai": {"session_mode": "player"}})
+_umo_p1 = _ai60.resolve_session_umo(_cfg60p, "S60", "uuid-a")
+_umo_p2 = _ai60.resolve_session_umo(_cfg60p, "S60", "uuid-b")
+assert _umo_p1 != _umo_p2, "player 模式下不同玩家必须落到不同会话"
+assert _umo_p1 != "aiocqhttp:GroupMessage:123", "player 模式不得复用群会话"
+
+# group 模式但没配目标会话 → 退回 server，不凭空造群会话
+_cfg60g2 = SC.from_dict({"server": {"server_name": "S60"},
+    "ai": {"session_mode": "group"}})
+assert _ai60.resolve_session_umo(_cfg60g2, "S60", "uuid-a").endswith(":server_S60")
+
+# (b) 历史裁剪：按轮数保留最近 N 轮，且首条必须是 user
+_hist60 = []
+for _i in range(10):
+    _hist60.append({"role": "user", "content": f"q{_i}"})
+    _hist60.append({"role": "assistant", "content": f"a{_i}"})
+_trim60 = _ai60.truncate_history(_hist60, 2)
+assert [m["content"] for m in _trim60] == ["q8", "a8", "q9", "a9"], _trim60
+assert _ai60.truncate_history(_hist60, 0) == _hist60, "0 = 不限制"
+assert _ai60.truncate_history(_hist60, 99) == _hist60, "轮数足够时原样返回"
+assert _hist60 and _hist60[0]["role"] == "user", "裁剪不得改动原列表"
+# 切在半轮上（首条是 assistant）时继续丢弃，避免把应答当开场
+_half60 = [{"role": "assistant", "content": "orphan"}] + _hist60[-3:]
+_trim_half60 = _ai60.truncate_history(_half60, 2)
+assert _trim_half60 and _trim_half60[0]["role"] == "user", _trim_half60
+
+# (c) 重置指令匹配：整句匹配，`new 帮我写诗` 不得被当成重置
+assert _P60._match_ai_reset(_cfg60, "new") == "new"
+assert _P60._match_ai_reset(_cfg60, " RESET ") == "reset", "大小写与空白应被忽略"
+assert _P60._match_ai_reset(_cfg60, "new 帮我写首诗") == "", "带内容的句子是正常提问"
+# 两个入口独立配置：关掉哪个就只有那个词失效
+_cfg60_none = SC.from_dict({"server": {"server_name": "S60"},
+    "ai": {"new_command": "", "reset_command": ""}})
+assert _P60._match_ai_reset(_cfg60_none, "new") == "", "留空 = 关闭新建对话"
+assert _P60._match_ai_reset(_cfg60_none, "reset") == "", "留空 = 关闭清空历史"
+_cfg60_half = SC.from_dict({"server": {"server_name": "S60"},
+    "ai": {"new_command": "新对话", "reset_command": ""}})
+assert _P60._match_ai_reset(_cfg60_half, "新对话") == "new", "可自定义任意词"
+assert _P60._match_ai_reset(_cfg60_half, "reset") == "", "只关掉 reset 不应影响 new"
+
+# (d) 配置解析：默认值、非法值回落、轮数钳制、重置指令清洗
+_c60 = SC.from_dict({})
+assert _c60.ai_session_mode == _MODE_S60 == "server", "默认按服务器独立"
+assert _c60.ai_history_turns == 20
+assert _c60.ai_new_command == "new" and _c60.ai_reset_command == "reset"
+assert SC.from_dict({"ai": {"session_mode": "GROUP"}}).ai_session_mode == _MODE_G60
+assert SC.from_dict({"ai": {"session_mode": "bogus"}}).ai_session_mode == "server"
+assert SC.from_dict({"ai": {"session_mode": "player"}}).ai_session_mode == _MODE_P60
+assert SC.from_dict({"ai_history_turns": 999}).ai_history_turns == 200
+assert SC.from_dict({"ai_history_turns": -5}).ai_history_turns == 0
+assert SC.from_dict({"ai": {"new_command": " /New "}}).ai_new_command == "new", \
+    "去空白、去前导斜杠、小写"
+assert SC.from_dict({"ai": {"reset_command": ""}}).ai_reset_command == "", \
+    "空串是合法值（关闭入口）"
+assert SC.from_dict({"ai": {"new_command": None}}).ai_new_command == "new", \
+    "未配置才回落默认"
+
+# (e) schema：三个新键的类型/默认值与代码一致，且落在 ai 分组
+_schema60 = json.loads(
+    pathlib.Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8")
+)
+_ai_items60 = _schema60["mc_servers"]["templates"]["server"]["items"]["ai"]["items"]
+assert _ai_items60["session_mode"]["default"] == _MODE_S60
+assert _ai_items60["session_mode"]["options"] == list(_MODE_S60 and (
+    "server", "group", "player"))
+assert _ai_items60["history_turns"]["default"] == 20
+assert _ai_items60["history_turns"]["type"] == "int"
+assert _ai_items60["new_command"]["type"] == "string"
+assert _ai_items60["new_command"]["default"] == "new"
+assert _ai_items60["reset_command"]["type"] == "string"
+assert _ai_items60["reset_command"]["default"] == "reset"
+# 两个入口分开配置，不再是一个列表 / 勾选框
+assert "reset_commands" not in _ai_items60, "旧的列表式配置应已删除"
+# 面板「功能设置」不提供这两个字段（保持精简），只在配置页编辑
+_dash60 = pathlib.Path(__file__).with_name("pages").joinpath("dashboard").joinpath("index.html")
+_dash60_html = _dash60.read_text(encoding="utf-8")
+for _stale60 in ("st-ai-reset-commands", "st-ai-new-command", "st-ai-reset-command"):
+    assert _stale60 not in _dash60_html, f"面板不应出现 {_stale60}"
+for _k60 in ("session_mode", "history_turns", "new_command", "reset_command"):
+    assert _ai_items60[_k60]["hint"], f"{_k60} 缺少 hint"
+
+# (f) 软更新键与代码默认值对齐（面板改完即时生效，无需重载）
+assert "ai_session_mode" in _P60.SOFT_CONFIG_KEYS
+assert "ai_history_turns" in _P60.SOFT_CONFIG_KEYS
+assert "ai_new_command" in _P60.SOFT_CONFIG_KEYS
+assert "ai_reset_command" in _P60.SOFT_CONFIG_KEYS
+print("OK  UMO 三档归属 / 历史裁剪 / 重置整句匹配 / 配置与 schema 对齐 / 软更新键 全通过")

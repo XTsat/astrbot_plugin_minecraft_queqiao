@@ -3459,6 +3459,22 @@ class DashboardApp {
       personaBox.value = current;
       personaBox.disabled = false;
     }
+    // AI 上下文归属 / 保留轮数 / 重置指令：与人格同属 ai 分组，同样按配置回显。
+    // 正在编辑的输入框不回写，避免打断输入
+    const sessionModeBox = document.getElementById('st-ai-session-mode');
+    if (sessionModeBox) {
+      const mode = confItem && typeof confItem.ai_session_mode === 'string'
+        ? confItem.ai_session_mode
+        : 'server';
+      sessionModeBox.value = ['server', 'group', 'player'].includes(mode) ? mode : 'server';
+    }
+    const turnsBox = document.getElementById('st-ai-history-turns');
+    if (turnsBox && document.activeElement !== turnsBox) {
+      const turns = confItem && Number.isFinite(confItem.ai_history_turns)
+        ? confItem.ai_history_turns
+        : 20;
+      turnsBox.value = String(Math.max(0, Math.min(200, turns)));
+    }
     // 互通终端天数（每台服务器独立，conf 条目顶层；缺省 2）：
     // 正在编辑的输入框不回写，避免打断输入
     const daysBox = document.getElementById('st-terminal-days');
@@ -3738,12 +3754,17 @@ class DashboardApp {
         const fwdPrefixBox = document.getElementById('st-fwd-prefix');
         const chatPrefixBox = document.getElementById('st-fwd-chat-prefix');
         const personaSelect = document.getElementById('st-ai-persona');
+        const sessionModeSelect = document.getElementById('st-ai-session-mode');
+        const turnsInput = document.getElementById('st-ai-history-turns');
         const payload = {
           // 「转发渠道」多选框 + 三个前缀：勾选的方向才启用，前缀只负责筛消息
           enabled_directions: Array.from(document.querySelectorAll('.st-route:checked'))
             .map((box) => box.value),
           // AI 对话人格：空串 = 使用会话默认人格
           ai_persona_id: personaSelect ? personaSelect.value : '',
+          // AI 上下文归属 / 保留轮数 / 重置指令（条目顶层，与人格平级）
+          ai_session_mode: sessionModeSelect ? sessionModeSelect.value : 'server',
+          ai_history_turns: turnsInput ? Number(turnsInput.value) : 20,
           prefix: {
             group_to_game: fwdPrefixBox ? fwdPrefixBox.value.trim() : '',
             game_to_group: chatPrefixBox ? chatPrefixBox.value.trim() : '',

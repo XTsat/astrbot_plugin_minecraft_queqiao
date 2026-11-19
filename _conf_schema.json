@@ -103,9 +103,43 @@
               "persona_id": {
                 "type": "string",
                 "description": "AI 对话人格",
-                "hint": "可选，从 AstrBot 已有人格中选择；游戏内 AI 对话将使用该人格的提示词，不受该会话默认人格影响。留空 = 使用该会话的默认人格",
+                "hint": "可选，从 AstrBot 已有人格中选择；游戏内 AI 对话将使用该人格的提示词。留空 = 跟随该会话的人格设置",
                 "default": "",
                 "_special": "select_persona"
+              },
+              "session_mode": {
+                "type": "string",
+                "description": "AI 上下文归属",
+                "hint": "游戏内 AI 按哪个会话记上下文：server 每服一份（各服独立，默认）/ group 与目标群共用（群内 /new 也能重置）/ player 每个玩家一份（多人互不干扰）",
+                "options": [
+                  "server",
+                  "group",
+                  "player"
+                ],
+                "labels": [
+                  "每台服务器一份",
+                  "与目标群共用",
+                  "每个玩家一份"
+                ],
+                "default": "server"
+              },
+              "history_turns": {
+                "type": "int",
+                "description": "AI 上下文保留轮数",
+                "hint": "游戏内对话记住最近多少轮（一问一答为一轮），0 = 不限制。调大更连贯，但每次请求的 token 也更多",
+                "default": 20
+              },
+              "new_command": {
+                "type": "string",
+                "description": "新建对话指令",
+                "hint": "游戏内命中 AI 前缀后，整句等于这个词即开新对话（语义同 AstrBot 的 /new）；留空 = 关闭这个入口",
+                "default": "new"
+              },
+              "reset_command": {
+                "type": "string",
+                "description": "清空对话指令",
+                "hint": "游戏内命中 AI 前缀后，整句等于这个词即清空当前对话历史（语义同 AstrBot 的 /reset）；留空 = 关闭这个入口",
+                "default": "reset"
               }
             }
           },

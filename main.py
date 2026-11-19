@@ -18,6 +18,9 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.star.filter.command import GreedyStr
 
 from .core.constants import (
+    AI_HISTORY_TURNS_MAX,
+    AI_HISTORY_TURNS_MIN,
+    AI_SESSION_MODES,
     CONNECT_FAIL_NOTIFY_DELAY_MAX,
     CONNECT_FAIL_NOTIFY_DELAY_MIN,
     DEFAULT_BROADCAST_FORMAT,
@@ -42,6 +45,7 @@ from .core.models_config import (
     _to_bool,
     _to_int,
     _to_platform_map,
+    _to_ai_command,
     _to_str,
     image_upload_settings,
     migrate_image_upload_config,
@@ -49,6 +53,7 @@ from .core.models_config import (
 from .core.queqiao_client import QueQiaoTimeout
 from .core.server_manager import ServerManager
 from .handlers.commands import CommandHandler, parse_direct_address
+from .services.ai_session import AiSessionStore, resolve_session_umo, truncate_history
 from .services.binding import BindingService
 from .services.connect_watch import ConnectWatch
 from .services.image_bed import (
@@ -126,6 +131,8 @@ class MinecraftQueQiaoPlugin(Star):
         self.terminal_logs = TerminalLogStore(data_dir)
         self.monitor = MonitorCollector(data_dir, self.server_manager)
         self.panel_prefs = PanelPrefsStore(data_dir)
+        # 游戏内 AI 的上下文读写（按 UMO 取 AstrBot 的对话历史）
+        self.ai_sessions = AiSessionStore(context)
         self.command_handler = CommandHandler(
             self.server_manager, self.binding_service, self.renderer
         )
@@ -258,6 +265,10 @@ class MinecraftQueQiaoPlugin(Star):
         "enable_ai_chat",
         "ai_persona_id",
         "ai_chat_prefix",
+        "ai_session_mode",
+        "ai_history_turns",
+        "ai_new_command",
+        "ai_reset_command",
         "enable_local_translation",
         "forward_chat_to_astrbot",
         "enable_relay_to_mc",
@@ -347,6 +358,25 @@ class MinecraftQueQiaoPlugin(Star):
                 config.mark_emoji_id = _to_int(
                     fields.get(key), config.mark_emoji_id
                 )
+            elif key == "ai_session_mode":
+                # AI 会话归属：只认三个已知取值，非法值保持原值不覆盖
+                mode = _to_str(fields.get(key), "").strip().lower()
+                if mode in AI_SESSION_MODES:
+                    config.ai_session_mode = mode
+                else:
+                    continue
+            elif key == "ai_history_turns":
+                # 上下文保留轮数：按 schema 范围钳制（0 = 不限制）
+                config.ai_history_turns = max(
+                    AI_HISTORY_TURNS_MIN,
+                    min(
+                        AI_HISTORY_TURNS_MAX,
+                        _to_int(fields.get(key), config.ai_history_turns),
+                    ),
+                )
+            elif key in ("ai_new_command", "ai_reset_command"):
+                # 重置指令关键字：空串是合法值（= 关闭该入口）
+                setattr(config, key, _to_ai_command(fields.get(key), ""))
             elif key == "e33chat_image_max_edge":
                 # 群图最大边长：按 schema 的范围钳制，避免面板传入越界值
                 config.e33chat_image_max_edge = max(
@@ -1115,20 +1145,93 @@ class MinecraftQueQiaoPlugin(Star):
     ) -> None:
         """把游戏内 AI 提问交给 LLM，并把回复私聊回玩家。
 
-        使用 AstrBot 的 LLM 调用链：优先走会话默认人格，失败则提示玩家。
+        上下文按 `ai_session_mode` 选定的 UMO 读写（见 services/ai_session.py），
+        于是游戏内对话与 AstrBot 的 `/new`、人格设置是同一套数据。
         """
         player = event.player
         logger.info(
             f"[{PLUGIN_NAME}][{server_name}] AI 提问来自 {player.display_name}: {question}"
         )
 
-        reply = await self._ask_llm(config, event, question)
+        umo = self._ai_session_umo(config, server_name, event)
+        reset_word = self._match_ai_reset(config, question)
+        if reset_word:
+            await self._handle_ai_reset(server_name, config, event, umo, reset_word)
+            return
+
+        reply = await self._ask_llm(server_name, config, event, question, umo)
         self.metrics.record_ai_chat(
             server_name, player.display_name, question, bool(reply)
         )
         if not reply:
             return
+        await self._send_ai_reply(server_name, config, event, reply)
 
+    @staticmethod
+    def _ai_player_key(event: QueQiaoEvent) -> str:
+        """玩家维度的会话标识：优先 uuid（跨昵称改名稳定），缺失时用昵称。"""
+        player = event.player
+        return (player.uuid or player.nickname or "").strip() or "unknown"
+
+    def _ai_session_umo(
+        self, config: ServerConfig, server_name: str, event: QueQiaoEvent
+    ) -> str:
+        """本次 AI 对话使用的 UMO（上下文与人格都挂在这个键上）。"""
+        return resolve_session_umo(config, server_name, self._ai_player_key(event))
+
+    @staticmethod
+    def _match_ai_reset(config: ServerConfig, question: str) -> str:
+        """命中重置关键字时返回该关键字，否则返回空串。
+
+        关键字比较忽略大小写与首尾空白，只匹配**整句**：`#new` 是重置，
+        `#new 帮我写首诗` 则是正常提问，避免误伤以这些词开头的句子。
+        """
+        word = question.strip().lower()
+        if not word:
+            return ""
+        # 两个入口互相独立：先看「新建对话」，再看「清空历史」
+        if config.ai_new_command and word == config.ai_new_command:
+            return "new"
+        if config.ai_reset_command and word == config.ai_reset_command:
+            return "reset"
+        return ""
+
+    async def _handle_ai_reset(
+        self,
+        server_name: str,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        umo: str,
+        word: str,
+    ) -> None:
+        """游戏内重置对话，语义对齐 AstrBot 的 `/new` 与 `/reset`。
+
+        `new` = 新建对话并切过去（旧对话仍留在 AstrBot 里可查）；`reset` =
+        清空当前对话的历史。动作由匹配到的关键字决定（见 `_match_ai_reset`）。
+        """
+        if not self.ai_sessions.available:
+            logger.warning(
+                f"[{PLUGIN_NAME}][{server_name}] 当前 AstrBot 无会话管理器，"
+                "游戏内重置指令不可用"
+            )
+            return
+
+        if word == "reset":
+            cleared = await self.ai_sessions.clear_history(umo)
+            reply = "✅ 已清空当前对话历史" if cleared else "❌ 当前没有可清空的对话"
+        else:
+            cid = await self.ai_sessions.new_conversation(umo)
+            reply = "✅ 已开启新对话" if cid else "❌ 新建对话失败"
+        logger.info(
+            f"[{PLUGIN_NAME}][{server_name}] 游戏内重置对话: {word} → {reply}"
+        )
+        await self._send_ai_reply(server_name, config, event, reply)
+
+    async def _send_ai_reply(
+        self, server_name: str, config: ServerConfig, event: QueQiaoEvent, reply: str
+    ) -> None:
+        """私聊回复玩家；仅「确定失败」才改用广播（超时不得重发）。"""
+        player = event.player
         instance = self.server_manager.get(server_name)
         if instance is None:
             return
@@ -1156,40 +1259,115 @@ class MinecraftQueQiaoPlugin(Star):
             )
 
     async def _ask_llm(
-        self, config: ServerConfig, event: QueQiaoEvent, question: str
+        self,
+        server_name: str,
+        config: ServerConfig,
+        event: QueQiaoEvent,
+        question: str,
+        umo: str,
     ) -> str:
         """调用 AstrBot LLM，返回纯文本回复；不可用时返回空串。
 
-        使用 `get_using_provider` + `text_chat`，与 AstrBot 4.x 的 provider 接口一致。
-        - uma 优先取该服务器的首个 target_sessions，以匹配对应适配器的 provider；
-          无 target_sessions 时 uma=None，回退默认 provider。
-        - 若配置了 ai_persona_id，取该人格 prompt 作为 system_prompt，与 UMO 会话
-          默认人格解耦，用户可自行选择对话人格。
+        与 AstrBot 消息管道的差异：游戏内聊天不经过管道，历史不会被自动读写，
+        因此这里显式取会话、读历史、调模型、再把这一问一答写回去。
+        - `umo` 决定上下文归属与 provider 选择（会话级模型偏好按 UMO 生效）
+        - 人格优先级：本插件的 `ai_persona_id` → 该对话绑定的人格 → 该会话默认人格
         """
         try:
-            uma = config.target_sessions[0] if config.target_sessions else None
-            provider = self.context.get_using_provider(umo=uma)
+            provider = await self._get_ai_provider(umo)
             if provider is None:
                 logger.warning(f"[{PLUGIN_NAME}] 未找到可用的 LLM 提供商")
                 return ""
 
-            system_prompt = None
-            persona_id = getattr(config, "ai_persona_id", "") or ""
-            if persona_id:
-                persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
-                if persona:
-                    system_prompt = str(persona.get("prompt") or "").strip() or None
+            history: list[dict] = []
+            cid: str | None = None
+            conversation_persona = ""
+            if self.ai_sessions.available:
+                cid = await self.ai_sessions.ensure_conversation(umo)
+                if cid:
+                    history = await self.ai_sessions.load_history(umo, cid)
+                    conversation_persona = await self.ai_sessions.conversation_persona_id(
+                        umo, cid
+                    )
 
+            persona = await self._resolve_ai_persona(
+                config, umo, conversation_persona
+            )
+            system_prompt = ""
+            begin_dialogs: list[dict] = []
+            if persona:
+                system_prompt = str(persona.get("prompt") or "").strip()
+                dialogs = persona.get("_begin_dialogs_processed") or []
+                begin_dialogs = [item for item in dialogs if isinstance(item, dict)]
+
+            contexts = begin_dialogs + truncate_history(
+                history, config.ai_history_turns
+            )
+            kwargs: dict[str, object] = {"prompt": question}
+            if contexts:
+                kwargs["contexts"] = contexts
             if system_prompt:
-                response = await provider.text_chat(
-                    system_prompt=system_prompt, prompt=question
+                kwargs["system_prompt"] = system_prompt
+
+            response = await provider.text_chat(**kwargs)
+            reply = (getattr(response, "completion_text", "") or "").strip()
+            if reply and cid:
+                await self.ai_sessions.append_turn(
+                    umo,
+                    cid,
+                    history,
+                    question,
+                    reply,
+                    config.ai_history_turns,
                 )
-            else:
-                response = await provider.text_chat(prompt=question)
-            return (getattr(response, "completion_text", "") or "").strip()
+            return reply
         except Exception as exc:
             logger.error(f"[{PLUGIN_NAME}] LLM 调用失败: {exc}")
             return ""
+
+    async def _get_ai_provider(self, umo: str):
+        """按 UMO 取对话模型：优先异步接口（新版），旧版回退同步接口。"""
+        getter = getattr(self.context, "get_using_provider_async", None)
+        if callable(getter):
+            return await getter(umo=umo)
+        return self.context.get_using_provider(umo=umo)
+
+    async def _resolve_ai_persona(
+        self, config: ServerConfig, umo: str, conversation_persona_id: str
+    ) -> dict | None:
+        """选出本次回复使用的人格。
+
+        `ai_persona_id` 是本插件的显式指定，优先级最高；未配置时交给 AstrBot
+        的 `resolve_selected_persona` 走它自己的规则（会话强制人格 → 对话绑定
+        人格 → 会话默认人格），保证与群聊里看到的 AI 是同一个角色。
+        """
+        manager = getattr(self.context, "persona_manager", None)
+        if manager is None:
+            return None
+
+        persona_id = (config.ai_persona_id or "").strip()
+        if persona_id:
+            persona = manager.get_persona_v3_by_id(persona_id)
+            if persona:
+                return persona
+
+        resolver = getattr(manager, "resolve_selected_persona", None)
+        if not callable(resolver):
+            return manager.get_persona_v3_by_id(conversation_persona_id or None)
+        try:
+            provider_settings = (
+                self.context.get_config(umo=umo).get("provider_settings", {})
+            )
+            _, persona, _, _ = await resolver(
+                umo=umo,
+                conversation_persona_id=conversation_persona_id or None,
+                platform_name=umo.split(":", 1)[0],
+                provider_settings=provider_settings,
+            )
+            return persona
+        except Exception as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 解析会话人格失败({umo}): {exc}")
+            return manager.get_persona_v3_by_id(conversation_persona_id or None)
 
     # ---- 命令组 ----
 

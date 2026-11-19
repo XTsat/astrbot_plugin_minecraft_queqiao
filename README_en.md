@@ -18,7 +18,7 @@ Connects Minecraft servers to AstrBot through the [QueQiao](https://github.com/1
 - **Web Dashboard**: view server status, performance monitoring (TPS / latency), the bridge terminal in real time and connection observability (reconnect count / phase / limit alert, API timeout count), with quick broadcast and command console
 - **Image-bed panel**: a dedicated “🖼️ 图床” tab at the right end of the dashboard's server-tab bar to manage image transfer directly — the master switch, upload timeout, full add/edit/delete and reordering of image bed entries, the built-in HTTP service runtime state, and a one-click test upload that runs the whole chain with built-in probe images and colour-codes the result (green / yellow / red) by ChatImage compatibility
 - **Manage servers from the panel**: create servers, enable / disable, edit connection settings and target sessions, or delete entries right from the dashboard; disabled servers stay visible as grey cards and can be enabled with one click — saving backs up the config and hot-reloads automatically
-- **AI chat**: talk to the AI in-game with the `ai` prefix; replies are sent privately to the player
+- **AI chat**: talk to the AI in-game with the `#` prefix and get replies privately; it remembers the conversation (scoped per server, per target group or per player), and `#new` / `#reset` work like AstrBot's own commands
 - **Multiple servers**: connect several servers, each with independent forwarding settings
 - **Flexible transport**: forward mode (plugin dials QueQiao) or reverse mode (QueQiao dials plugin, ideal for rented servers)
 
@@ -318,6 +318,15 @@ Example: `display_name` = `生存服`, format `[{display_name}] <{player}> {mess
 |--------|------|---------|-------------|
 | `enable_ai_chat` | bool | `true` | Master switch for in-game AI chat |
 | `ai_chat_prefix` | string | `#` | Game → AI trigger prefix: in-game chat like `#hello` goes to the AI, replied privately; empty triggers on everything (all in-game chat goes to the AI) |
+| `ai.ai_session_mode` | string | `server` | Where the AI keeps its context: `server` one per server (independent) / `group` shared with the target group (so `/new` in that group resets the in-game chat too) / `player` one per player (no cross-talk on a shared server) |
+| `ai.history_turns` | int | `20` | How many turns to remember (one question + one answer is a turn); `0` = unlimited. Larger is more coherent but costs more tokens per request |
+| `ai.new_command` | string | `new` | New-conversation word: an in-game message that, after the AI prefix, equals this word exactly starts a new conversation (same as `/new`); empty = disabled |
+| `ai.reset_command` | string | `reset` | Clear-history word: an in-game message that, after the AI prefix, equals this word exactly clears the current history (same as `/reset`); empty = disabled |
+| `ai.persona_id` | string | empty | AI persona: pick one of the existing AstrBot personas and the in-game AI uses its prompt; empty = follow the session's persona settings |
+
+> **In-game AI now remembers context.** `ai_session_mode` decides which session the history lives on. `server` (the default) keeps every server separate and unaffected by `/new` in a group; `group` shares one history with the target group, so sending `/new` there also starts a fresh in-game conversation; `player` keeps one history per player so people on the same server do not bleed into each other. The default reset words are `#new` (start a new conversation) and `#reset` (clear the current history), matching AstrBot's own commands; Both words are configured independently and can be anything (e.g. `newchat`); they only appear in the plugin config page, not in the dashboard drawer.
+
+> **Heads-up on “isolated sessions”**: if AstrBot's platform setting **unique_session** is on, group messages get a per-member session id (`{sender}_{group}`) that no longer matches the group UMO you put in Target Sessions. The `group` mode still reads and writes the UMO you configured rather than one per member; use `player` mode for per-player isolation, or turn unique_session off.
 
 The three prefixes act in different directions and are configured independently; a given in-game message matches only one of them:
 
