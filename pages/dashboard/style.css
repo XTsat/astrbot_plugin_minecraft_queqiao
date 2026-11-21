@@ -407,6 +407,56 @@ body {
   cursor: pointer;
 }
 
+/* 刷新间隔输入框：紧贴「自动刷新」勾选框，视觉上作为同一个控件组 */
+.auto-refresh-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  transition: border-color 0.2s ease;
+}
+
+.auto-refresh-interval:focus-within {
+  border-color: var(--border-focus);
+}
+
+.auto-refresh-interval input {
+  width: 52px;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: right;
+}
+
+.auto-refresh-interval input:focus {
+  outline: none;
+}
+
+/* 去掉数字输入的上下箭头：窄栏里会把 52px 挤得很挤 */
+.auto-refresh-interval input::-webkit-outer-spin-button,
+.auto-refresh-interval input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.auto-refresh-interval input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.auto-refresh-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* --------------------------------------------------------------------------
    4. 服务器视图切换栏 (Server Tabs Bar)
    -------------------------------------------------------------------------- */
@@ -2090,11 +2140,10 @@ body {
   overflow: auto;
 }
 
-/* 服务器配置 / 监控设置 / 总设置 / 图床条目 四个弹窗统一宽度（以性能监控设置为准）：
+/* 服务器配置 / 监控设置 / 图床条目 三个弹窗统一宽度（以性能监控设置为准）：
    三列（标签 / 控件 / 说明）挤在窄宽度里时右侧说明会被压成窄竖条 */
 #monitor-settings-modal .modal-card,
 #server-form-modal .modal-card,
-#settings-modal .modal-card,
 #image-bed-form-modal .modal-card {
   width: min(860px, 94vw);
 }
@@ -2109,9 +2158,6 @@ body {
 #server-form-modal .modal-row-control input[type='password'],
 #server-form-modal .modal-row-control select,
 #server-form-modal .modal-row-control textarea,
-#settings-modal .modal-row-control input[type='number'],
-#settings-modal .modal-row-control input[type='text'],
-#settings-modal .modal-row-control select,
 #image-bed-form-modal .modal-row-control input[type='number'],
 #image-bed-form-modal .modal-row-control input[type='text'],
 #image-bed-form-modal .modal-row-control input[type='password'],

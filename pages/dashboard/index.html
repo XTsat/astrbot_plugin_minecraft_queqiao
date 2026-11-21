@@ -28,13 +28,16 @@
       </span>
       <label class="auto-refresh-toggle">
         <input type="checkbox" id="auto-refresh-toggle" />
-        <span>自动刷新 (10s)</span>
+        <span>自动刷新</span>
       </label>
+      <!-- 刷新间隔就地可改：改完失焦或回车即生效，不必再开弹窗 -->
+      <span class="auto-refresh-interval" title="自动刷新间隔（秒，10～3600）">
+        <input type="number" id="auto-refresh-interval" min="10" max="3600" step="1" value="10"
+          aria-label="自动刷新间隔（秒）" />
+        <span class="auto-refresh-unit">秒</span>
+      </span>
       <button class="btn btn-primary" id="btn-refresh" title="立即刷新数据">
         <span>🔄 刷新</span>
-      </button>
-      <button class="btn" id="btn-config-link" title="总设置（自动刷新间隔等全局偏好）">
-        <span>⚙️ 刷新设置</span>
       </button>
       <button class="btn" id="btn-config-view"
         title="配置管理：完整配置编辑（可视化表单 / JSON 直改），更底层的设置，保存后热重载。
@@ -682,30 +685,6 @@
           title="删除该服务器已采集的全部监控数据（不可恢复，采样从零重新开始）">🗑 清除采集数据</button>
         <button class="btn btn-sm" id="ms-cancel">取消</button>
         <button class="btn btn-primary btn-sm" id="ms-save">保存并生效</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 总设置弹窗：右上角「⚙ 设置」入口，承载与具体服务器无关的全局偏好。
-       自动刷新间隔原在「功能设置」面板里，随服务器视图隐藏而不可达，故迁来 -->
-  <div class="modal-overlay hidden" id="settings-modal">
-    <div class="modal-card">
-      <div class="modal-header">
-        <span class="modal-title">⚙ 总设置</span>
-        <button class="modal-close" id="gs-close" title="关闭">✕</button>
-      </div>
-      <div class="modal-body">
-        <label class="modal-row">
-          <span class="modal-row-label">自动刷新间隔（秒）</span>
-          <span class="modal-row-control">
-            <input type="number" id="st-auto-refresh" min="10" max="3600" step="1" value="10" />
-          </span>
-          <span class="modal-row-hint">勾选顶部「自动刷新」后每 N 秒拉取一次面板数据（10～3600，默认 10）；全局生效，与服务器视图无关</span>
-        </label>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-sm" id="gs-cancel">取消</button>
-        <button class="btn btn-primary btn-sm" id="gs-save">保存并生效</button>
       </div>
     </div>
   </div>

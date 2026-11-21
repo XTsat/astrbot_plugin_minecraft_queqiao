@@ -1,4 +1,5 @@
 <div align="center">
+<img src="logo.png" alt="Minecraft 鹊桥互通" width="160" />
 <h1>Minecraft 鹊桥互通</h1>
 <p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
 <p><img alt="version" src="https://img.shields.io/badge/version-v0.9.0-blue"></p>
@@ -95,57 +96,62 @@
 - **互通终端**（每台服务器独立）：终端日志加载天数（0～30，默认 2 = 今天 + 昨天，0 = 全部保留分片）。保存在插件配置条目顶层（与 WebUI 里的 `terminal_days` 是同一份配置），保存后即时生效（不重建连接）
 - 性能监控自身参数（启用、采集间隔、实时采集频率、数据保留、TPS 指令、延迟探测、默认展示）仍在监控面板右上角「⚙ 设置」弹窗里维护
 
-### 右上角「⚙ 设置」总设置弹窗
+### 自动刷新间隔
 
-仪表盘右上角（自动刷新开关右侧）的「⚙ 设置」打开总设置弹窗，维护**与具体服务器无关**的全局偏好：自动刷新间隔（10～3600 秒，勾选顶部「自动刷新」后生效，保存即生效）。刷新 / 重新打开页面时，仪表盘停留在上一次打开的服务器标签，不再回到「全部服务器」。
+顶部「自动刷新」开关右侧有一个秒数输入框，直接改、失焦或回车即生效（10～3600 秒），不必再开弹窗；勾选「自动刷新」后按该间隔拉取面板数据。该间隔是**与具体服务器无关**的全局偏好。刷新 / 重新打开页面时，仪表盘停留在上一次打开的服务器标签，不再回到「全部服务器」。
 
 ### 服务器连接信息
 
-<details>
-<summary>展开配置表</summary>
+先填这两项，其余可留默认：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `target_sessions` | list | 空 | **目标会话**（必填）：MC 消息转发的会话 UMO 列表，决定 MC 与群的绑定关系，不填则群里收不到消息 |
-| `server_name` | string | `Server` | **服务器名称**（唯一标识），必须与鹊桥 `config.yml` 的 `server_name` 一致；多台服务器时互不相同 |
-| `display_name` | string | 空 | 服务器显示名称（可中文，如 `生存服`），仅影响展示；留空用 `display_name_default` |
-| `display_name_default` | string | `MC` | 显示名称默认值：`display_name` 留空时 `{display_name}` 与状态查询显示的内容 |
-| `ws_mode` | string | `forward` | `forward` 插件连鹊桥；`reverse` 插件开服务端等鹊桥连入 |
-| `ws_url` | string | `ws://127.0.0.1:8080/minecraft/ws` | 正向连接地址，对应鹊桥 `websocket_server` |
-| `reverse_host` | string | `0.0.0.0` | 反向监听地址 |
-| `reverse_port` | int | `8080` | 反向监听端口 |
-| `reverse_path` | string | `/minecraft/ws` | 反向监听路径 |
-| `access_token` | string | 空 | 对应鹊桥 `access_token`，留空则免鉴权 |
-| `client_origin` | string | `astrbot` | 作为 `x-client-origin` 发送，非必要勿改 |
+| 目标会话（`target_sessions`） | list | 空 | **必填**。MC 消息转发的会话 UMO 列表，决定 MC 与群的绑定关系，不填则群里收不到消息 |
+| 服务器名称（`server_name`） | string | `Server` | **必填**。唯一标识，必须与鹊桥 `config.yml` 的 `server_name` 一致；多台服务器时互不相同 |
+
+<details>
+<summary>服务器连接信息其余项（9 项）</summary>
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| 服务器显示名称（`display_name`） | string | 空 | 服务器显示名称（可中文，如 `生存服`），仅影响展示；留空用 `display_name_default` |
+| 显示名称默认值（`display_name_default`） | string | `MC` | `display_name` 留空时 `{display_name}` 与状态查询显示的内容 |
+| 连接方式（`ws_mode`） | string | `forward` | `forward` 插件连鹊桥；`reverse` 插件开服务端等鹊桥连入 |
+| 鹊桥 WebSocket 地址（`ws_url`） | string | `ws://127.0.0.1:8080/minecraft/ws` | 正向连接地址，对应鹊桥 `websocket_server` |
+| 反向监听地址（`reverse_host`） | string | `0.0.0.0` | 反向监听地址 |
+| 反向监听端口（`reverse_port`） | int | `8080` | 反向监听端口 |
+| 反向监听路径（`reverse_path`） | string | `/minecraft/ws` | 反向监听路径 |
+| 认证 Token（`access_token`） | string | 空 | 对应鹊桥 `access_token`，留空则免鉴权 |
+| 对接来源标识（`client_origin`） | string | `astrbot` | 作为 `x-client-origin` 发送，非必要勿改 |
 
 </details>
 
 ### 消息转发配置
 
 <details>
-<summary>展开配置表</summary>
+<summary>消息转发配置（23 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `forward_chat_to_astrbot` | bool | `true` | 全量转发游戏聊天到指定会话；关闭后只有命中 `forward_chat_prefix` 的聊天才转发（前缀留空则仍全部转发），图片转发不受前缀限制 |
-| `forward_chat_prefix` | string | 空 | 游戏→群触发前缀：游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 全部转发 |
-| `forward_chat_format` | string | `[{display_name}]{player}: {message}` | 聊天消息格式，支持 `{player}` `{message}` `{display_name}` |
-| `forward_join_leave_to_astrbot` | bool | `false` | 转发玩家进出消息（自动附带服务器显示名称，多服同群可区分来源） |
-| `forward_death_to_astrbot` | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
-| `forward_achievement_to_astrbot` | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
-| `auto_forward_prefix` | string | 空 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
-| `forward_bot_self_messages` | bool | `false` | 转发机器人自己的消息，不剥离唤醒词：唤醒消息按原文转发（含被 OneBot 省略的 `@机器人`），并转发机器人自身的群消息；图片复用 `forward_image_to_mc`，无可用图片 URL 时降级为 `[图片]`，表情记为 `[表情:id]` |
-| `broadcast_format` | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，支持 `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
-| `platform_names` | list | `["aiocqhttp=QQ"]` | 平台名称映射：`原始平台名=显示名`，如 `aiocqhttp=QQ` |
-| `broadcast_color` | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
-| `mark_option` | string | `emoji` | 转发成功提醒：`text` 回复 ✅ / `emoji` 贴表情 / `none` 不提醒 |
-| `mark_emoji_id` | int | `124` | 回执表情 ID（QQ 表情 ID，默认 `124` = 👌） |
-| `forward_image_to_mc` | bool | `false` | 群消息和已开启转发的 Bot 回复/自身群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
-| `chatimage_name` | string | `图片` | 图片在游戏聊天栏的显示名称 |
-| `forward_image_from_mc` | bool | `false` | 游戏内图片（CICode / 链接）自动下载后作为图片发回群 |
-| `mc_image_mode` | string | `chatimage` | 游戏图片模式：`chatimage` 只认 ChatImage 的图片代码与链接；`e33chat` 额外识别 E33Chat 的图片标记与服务端媒体 |
-| `e33chat_media_dir` | string | 空 | E33Chat 服务端图片缓存目录；仅 `e33chat` 模式且需要收发服务端媒体图片时填写，AstrBot 必须能直接读到该路径 |
-| `e33chat_image_max_edge` | int | `320` | E33Chat 模式发往游戏的群图最大边长（像素），超过则等比缩小 |
+| 全量转发游戏聊天到指定会话（`forward_chat_to_astrbot`） | bool | `true` | 全量转发游戏聊天到指定会话；关闭后只有命中 `forward_chat_prefix` 的聊天才转发（前缀留空则仍全部转发），图片转发不受前缀限制 |
+| 游戏内 → 群转发前缀（`forward_chat_prefix`） | string | 空 | 游戏→群触发前缀：游戏聊天以此开头才转发到群，转发时去掉前缀；留空 = 全部转发 |
+| 聊天消息格式（`forward_chat_format`） | string | `[{display_name}]{player}: {message}` | 聊天消息格式，支持 `{player}` `{message}` `{display_name}` |
+| 转发玩家进出消息（`forward_join_leave_to_astrbot`） | bool | `false` | 转发玩家进出消息（自动附带服务器显示名称，多服同群可区分来源） |
+| 转发玩家死亡消息（`forward_death_to_astrbot`） | bool | `false` | 转发玩家死亡消息（原版/Velocity 不支持） |
+| 转发玩家成就消息（`forward_achievement_to_astrbot`） | bool | `false` | 转发玩家成就消息（原版/Velocity 不支持） |
+| 群 → MC 转发前缀（`auto_forward_prefix`） | string | 空 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| 转发机器人自己的消息，不剥离唤醒词（`forward_bot_self_messages`） | bool | `false` | 唤醒消息按原文转发（含被 OneBot 省略的 `@机器人`），并转发机器人自身的群消息；图片复用 `forward_image_to_mc`，无可用图片 URL 时降级为 `[图片]`，表情记为 `[表情:id]` |
+| 外部消息转发到MC的格式（`broadcast_format`） | string | `[{platform}]{sender}: {message}` | 转发到游戏内的格式，支持 `{platform}` `{sender}` `{message}` `{display_name}` `{server_name}` |
+| 平台名称映射（`platform_names`） | list | `["aiocqhttp=QQ"]` | `原始平台名=显示名`，如 `aiocqhttp=QQ` |
+| 转发消息颜色（`broadcast_color`） | string | `white` | 转发消息颜色，支持 MC 颜色名或 `#RRGGBB` |
+| 转发提醒方式（`mark_option`） | string | `emoji` | 转发成功提醒：`text` 回复 ✅ / `emoji` 贴表情 / `none` 不提醒 |
+| 回执表情 ID（`mark_emoji_id`） | int | `124` | 回执表情 ID（QQ 表情 ID，默认 `124` = 👌） |
+| 转发图片到游戏内（`forward_image_to_mc`） | bool | `false` | 群消息和已开启转发的 Bot 回复/自身群消息图片转发进游戏（需玩家安装 ChatImage 模组才渲染，否则显示 CICode 文本） |
+| 游戏内图片显示名称（`chatimage_name`） | string | `图片` | 图片在游戏聊天栏的显示名称 |
+| 转发游戏内图片到外部会话（`forward_image_from_mc`） | bool | `false` | 游戏内图片（CICode / 链接）自动下载后作为图片发回群 |
+| 游戏图片模式（`mc_image_mode`） | string | `chatimage` | `chatimage` 只认 ChatImage 的图片代码与链接；`e33chat` 额外识别 E33Chat 的图片标记与服务端媒体 |
+| E33Chat 服务端图片缓存目录（`e33chat_media_dir`） | string | 空 | E33Chat 服务端图片缓存目录；仅 `e33chat` 模式且需要收发服务端媒体图片时填写，AstrBot 必须能直接读到该路径 |
+| E33Chat 群图最大边长（`e33chat_image_max_edge`） | int | `320` | E33Chat 模式发往游戏的群图最大边长（像素），超过则等比缩小 |
 
 > 目标会话可用 AstrBot 自带的 `/sid` 指令获取：在目标群聊/私聊发送 `/sid`，回复中的 `UMO` 就是要填的值（如 `aiocqhttp:GroupMessage:123456789`）。该列表同时决定：MC 消息转发到哪些会话、哪些会话的消息转发进 MC、以及该会话的 `mc` 指令归属哪台服务器。
 
@@ -155,26 +161,26 @@
 
 | 常量 | ID | 表情 |
 |------|----|------|
-| `EMOJI_OK_GESTURE` | `124` | 👌 |
-| `EMOJI_THUMBS_UP` | `76` | 👍 |
-| `EMOJI_LOVE` | `66` | ❤️ |
-| `EMOJI_ROSE` | `63` | 🌹 |
+| OK 手势表情（`EMOJI_OK_GESTURE`） | `124` | 👌 |
+| 点赞表情（`EMOJI_THUMBS_UP`） | `76` | 👍 |
+| 爱心表情（`EMOJI_LOVE`） | `66` | ❤️ |
+| 玫瑰表情（`EMOJI_ROSE`） | `63` | 🌹 |
 
 </details>
 
 ### 服务器连通通知
 
 <details>
-<summary>展开配置表</summary>
+<summary>服务器连通通知（6 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `notify_on_connect` | bool | `false` | 服务器连通后向目标会话发送「服务器已启动」通知；只在服务器真的启动过时发送，连接抖动不会误报（见下方说明） |
-| `notify_on_connect_format` | string | `[{display_name}] 🟢 服务器已启动` | 通知文案，支持多行输入与 `{display_name}` `{server_name}` 占位符；留空用默认文案 |
-| `notify_on_connect_fail` | bool | `false` | 初次连不上、已连接后断线时向目标会话发送「服务器连接失败」通知；断线需持续超过「断连静默期」仍未恢复才发送，同一轮故障只发第一条，重新连上后下一轮故障重新通知 |
-| `notify_on_connect_fail_format` | string | `[{display_name}] 🔴 服务器连接失败` | 失败通知文案，支持多行输入与 `{display_name}` `{server_name}` 占位符；留空用默认文案 |
-| `connect_fail_notify_delay` | int | `60` | 断连静默期（秒，0 到 3600）：断线超过该时长仍未恢复才发失败通知，期间连回则完全不通知；`0` = 立即通知 |
-| `slp_address` | string | 空 | 服务器状态探测地址（如 `127.0.0.1:25565`，可省略端口，默认 `25565`）：断线期间插件用它判断服务器是否真的停了；留空则按断线时长判断（超过 30 秒才发启动通知） |
+| 连通通知（`notify_on_connect`） | bool | `false` | 服务器连通后向目标会话发送「服务器已启动」通知；只在服务器真的启动过时发送，连接抖动不会误报（见下方说明） |
+| 连通通知格式（`notify_on_connect_format`） | string | `[{display_name}] 🟢 服务器已启动` | 通知文案，支持多行输入与 `{display_name}` `{server_name}` 占位符；留空用默认文案 |
+| 连接失败通知（`notify_on_connect_fail`） | bool | `false` | 初次连不上、已连接后断线时向目标会话发送「服务器连接失败」通知；断线需持续超过「断连静默期」仍未恢复才发送，同一轮故障只发第一条，重新连上后下一轮故障重新通知 |
+| 连接失败通知格式（`notify_on_connect_fail_format`） | string | `[{display_name}] 🔴 服务器连接失败` | 失败通知文案，支持多行输入与 `{display_name}` `{server_name}` 占位符；留空用默认文案 |
+| 断连静默期（秒）（`connect_fail_notify_delay`） | int | `60` | 断连静默期（秒，0 到 3600）：断线超过该时长仍未恢复才发失败通知，期间连回则完全不通知；`0` = 立即通知 |
+| 服务器状态探测地址（`slp_address`） | string | 空 | 服务器状态探测地址（如 `127.0.0.1:25565`，可省略端口，默认 `25565`）：断线期间插件用它判断服务器是否真的停了；留空则按断线时长判断（超过 30 秒才发启动通知） |
 
 </details>
 
@@ -189,14 +195,14 @@
 夜里不想被游戏消息刷群时，可以给每台服务器单独设一个安静时段（例如 `23:00` 至 `08:00`），时段内只静音你勾选的消息类型。
 
 <details>
-<summary>展开配置表</summary>
+<summary>免打扰（4 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `quiet_hours_enabled` | bool | `false` | 启用免打扰时段；默认关闭 |
-| `quiet_hours_start` | string | `23:00` | 开始时间（AstrBot 本地时间 `HH:MM`）；与结束时间相同视为未配置 |
-| `quiet_hours_end` | string | `08:00` | 结束时间（AstrBot 本地时间 `HH:MM`）；早于开始时间表示跨零点 |
-| `quiet_hours_items` | list | 死亡/成就/连通/失败通知 | 时段内静音哪些类型（多选框）：`chat` 游戏聊天、`join_leave` 玩家进出、`death` 死亡消息、`achievement` 成就消息、`connect` 连通通知、`connect_fail` 连接失败通知 |
+| 启用免打扰（`quiet_hours_enabled`） | bool | `false` | 启用免打扰时段；默认关闭 |
+| 免打扰开始时间（`quiet_hours_start`） | string | `23:00` | 开始时间（AstrBot 本地时间 `HH:MM`）；与结束时间相同视为未配置 |
+| 免打扰结束时间（`quiet_hours_end`） | string | `08:00` | 结束时间（AstrBot 本地时间 `HH:MM`）；早于开始时间表示跨零点 |
+| 静音的事件类型（`quiet_hours_items`） | list | 死亡/成就/连通/失败通知 | 时段内静音哪些类型（多选框）：`chat` 游戏聊天、`join_leave` 玩家进出、`death` 死亡消息、`achievement` 成就消息、`connect` 连通通知、`connect_fail` 连接失败通知 |
 
 </details>
 
@@ -254,19 +260,19 @@ E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/Ne
 
 | 条目字段 | 类型 | 默认值 | 说明 |
 |----------|------|--------|------|
-| `enabled` | bool | `true` | 启用此图床条目 |
-| `name` | string | 空 | 显示名称（仅日志/辨识用） |
-| `upload_url` | string | 空 | 图床的**上传接口地址（完整 URL，非网站首页）** |
-| `token` | string | 空 | API Token（默认作为 `Authorization: Bearer` 请求头并附带表单字段 `token`；imgbb 例外，以表单字段 `key` 提交）；免 token 留空 |
-| `response` | string | `text` | 响应解析：`text` = 响应正文即链接；`json` = 取 `url` 字段（无则取第一个 `http(s)://` 字段） |
-| `file_field` | string | `file` | multipart 文件字段名（img402 / imgbb 为 `image`，S.EE 为 `smfile`） |
-| `headers` | string | 空 | 自定义请求头：一行一个 `名字: 值`（或 JSON 对象） |
-| `form_fields` | string | 空 | 额外普通表单字段：一行一个 `名字: 值`（或 JSON 对象） |
+| 启用 Minecraft 鹊桥互通（`enabled`） | bool | `true` | 启用此图床条目 |
+| 显示名称（可空）（`name`） | string | 空 | 显示名称（仅日志/辨识用） |
+| 上传接口地址（完整 URL）（`upload_url`） | string | 空 | 图床的**上传接口地址（完整 URL，非网站首页）** |
+| 鉴权 Token（可空）（`token`） | string | 空 | API Token（默认作为 `Authorization: Bearer` 请求头并附带表单字段 `token`；imgbb 例外，以表单字段 `key` 提交）；免 token 留空 |
+| 响应解析方式（`response`） | string | `text` | 响应解析：`text` = 响应正文即链接；`json` = 取 `url` 字段（无则取第一个 `http(s)://` 字段） |
+| 上传文件字段名（`file_field`） | string | `file` | multipart 文件字段名（img402 / imgbb 为 `image`，S.EE 为 `smfile`） |
+| 自定义请求头（可空）（`headers`） | string | 空 | 自定义请求头：一行一个 `名字: 值`（或 JSON 对象） |
+| 额外表单字段（可空）（`form_fields`） | string | 空 | 额外普通表单字段：一行一个 `名字: 值`（或 JSON 对象） |
 
 预配置模板：
 
 <details>
-<summary>展开预配置模板表</summary>
+<summary>预配置图床模板（6 项）</summary>
 
 | 模板 | 地区 | Token | 响应 | 大小/配额 | 说明 |
 |------|------|-------|------|-----------|------|
@@ -315,17 +321,17 @@ E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/Ne
 ### AI 聊天配置
 
 <details>
-<summary>展开配置表</summary>
+<summary>AI 聊天配置（11 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enable_ai_chat` | bool | `true` | 启用游戏内 AI 对话（总开关） |
-| `ai_chat_prefix` | string | `#` | 游戏→AI 触发前缀：游戏内以 `#你好` 发言即触发 AI，回复私聊给玩家；留空 = 全部触发（所有游戏聊天都交给 AI） |
-| `ai.ai_session_mode` | string | `server` | AI 上下文归属：`server` 每台服务器一份（各服独立）/ `group` 与目标群共用（群内 `/new` 也能重置）/ `player` 每个玩家一份（多人互不干扰） |
-| `ai.history_turns` | int | `20` | AI 上下文保留轮数（一问一答为一轮），`0` = 不限制；调大更连贯，但每次请求的 token 更多 |
-| `ai.new_command` | string | `new` | 新建对话指令：命中 AI 前缀后**整句**等于这个词即开新对话（语义同 AstrBot 的 `/new`）；留空 = 关闭这个入口 |
-| `ai.reset_command` | string | `reset` | 清空对话指令：命中 AI 前缀后**整句**等于这个词即清空当前对话历史（语义同 `/reset`）；留空 = 关闭这个入口 |
-| `ai.persona_id` | string | 空 | AI 对话人格：从 AstrBot 已有人格中选择，游戏内 AI 使用该人格的提示词；留空 = 跟随该会话的人格设置 |
+| 启用游戏内 AI（`enable_ai_chat`） | bool | `true` | 启用游戏内 AI 对话（总开关） |
+| 游戏内 → AI 触发前缀（`ai_chat_prefix`） | string | `#` | 游戏→AI 触发前缀：游戏内以 `#你好` 发言即触发 AI，回复私聊给玩家；留空 = 全部触发（所有游戏聊天都交给 AI） |
+| AI 上下文归属（`ai.ai_session_mode`） | string | `server` | `server` 每台服务器一份（各服独立）/ `group` 与目标群共用（群内 `/new` 也能重置）/ `player` 每个玩家一份（多人互不干扰） |
+| AI 上下文保留轮数（`ai.history_turns`） | int | `20` | AI 上下文保留轮数（一问一答为一轮），`0` = 不限制；调大更连贯，但每次请求的 token 更多 |
+| 新建对话指令（`ai.new_command`） | string | `new` | 命中 AI 前缀后**整句**等于这个词即开新对话（语义同 AstrBot 的 `/new`）；留空 = 关闭这个入口 |
+| 清空对话指令（`ai.reset_command`） | string | `reset` | 命中 AI 前缀后**整句**等于这个词即清空当前对话历史（语义同 `/reset`）；留空 = 关闭这个入口 |
+| AI 对话人格（`ai.persona_id`） | string | 空 | 从 AstrBot 已有人格中选择，游戏内 AI 使用该人格的提示词；留空 = 跟随该会话的人格设置 |
 
 > **游戏内 AI 现在会记住上下文**：`ai_session_mode` 决定上下文记在哪个会话上。选 `server`（默认）时各服互不干扰、也不受群里 `/new` 影响；选 `group` 时与目标群共用同一份上下文，在群里发 `/new` 就等于给游戏内也开了新对话；选 `player` 时每个玩家一份，多人同服不会串台。重置口令默认是 `#new`（新建对话）与 `#reset`（清空当前对话历史），与 AstrBot 自带指令语义一致，这两个词各自独立配置、可填任意词（如 `新对话`），只在「配置管理」的 AI 分组里出现，面板「功能设置」不提供。
 
@@ -337,13 +343,13 @@ E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/Ne
 
 | 配置项 | 方向 | 作用 |
 |------|------|------|
-| `prefix.enabled_directions` | 三个方向 | 多选框：勾选的方向才启用，取消后该方向整条链路静音（配置页与面板共用这一处开关） |
+| 启用的转发方向（`prefix.enabled_directions`） | 三个方向 | 多选框：勾选的方向才启用，取消后该方向整条链路静音（配置页与面板共用这一处开关） |
 
 | 配置项 | 方向 | 作用 |
 |------|------|------|
-| `prefix.group_to_game` | 群 → 游戏 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
-| `prefix.game_to_group` | 游戏 → 群 | 游戏聊天以此开头才转发到群（转发时去掉前缀）；留空 = 全部转发；图片转发不受此前缀限制 |
-| `prefix.game_to_ai` | 游戏 → AI | 游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 全部触发（所有游戏聊天都交给 AI） |
+| 群 → MC 开关（`prefix.group_to_game`） | 群 → 游戏 | 群消息以此开头才转发到游戏；留空 = 全部转发 |
+| 游戏内 → 群开关（`prefix.game_to_group`） | 游戏 → 群 | 游戏聊天以此开头才转发到群（转发时去掉前缀）；留空 = 全部转发；图片转发不受此前缀限制 |
+| 游戏内 → AI 开关（`prefix.game_to_ai`） | 游戏 → AI | 游戏内聊天以此开头才触发 AI，不再转发到群；留空 = 全部触发（所有游戏聊天都交给 AI） |
 
 > 三个前缀统一遵循 **「留空 = 全部命中」**：不填前缀即不设门槛，该方向接管全部消息。前缀匹配做词边界判断：以字母/数字结尾的前缀要求后跟空格或直接结束，`ai` 不会误伤 `aim`、`airport`；字母不区分大小写；`#`、`*` 这类符号前缀无需空格。`game_to_group` 与 `game_to_ai` **不要相互包含**，否则同一条游戏聊天的归属会产生歧义（启动时会告警）。注意 `game_to_ai` 留空意味着所有游戏聊天都交给 AI，不再转发到群。
 
@@ -352,19 +358,19 @@ E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/Ne
 ### 指令配置
 
 <details>
-<summary>展开配置表</summary>
+<summary>指令配置（9 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enabled` | bool | `true` | 启用远程指令执行 |
-| `cmd_white_black_list` | string | `white` | `white` 仅允许名单内；`black` 禁止名单内；`none` 不限制 |
-| `cmd_list` | list | `["say","list","weather","time"]` | 指令名单（填指令名，不带 `/`） |
-| `bind_enable` | bool | `true` | 启用账号与游戏 ID 绑定 |
-| `custom_cmd_list` | list | 空 | 自定义指令映射，语法见上文 |
-| `rcon_enabled` | bool | `false` | 鹊桥未开 RCON 时，改由插件直连 RCON |
-| `rcon_host` | string | `localhost` | RCON 地址 |
-| `rcon_port` | int | `25575` | RCON 端口 |
-| `rcon_password` | string | 空 | RCON 密码 |
+| 启用 Minecraft 鹊桥互通（`enabled`） | bool | `true` | 启用远程指令执行 |
+| 指令名单类型（`cmd_white_black_list`） | string | `white` | `white` 仅允许名单内；`black` 禁止名单内；`none` 不限制 |
+| 指令名单（`cmd_list`） | list | `["say","list","weather","time"]` | 指令名单（填指令名，不带 `/`） |
+| 启用绑定功能（`bind_enable`） | bool | `true` | 启用账号与游戏 ID 绑定 |
+| 自定义指令映射（`custom_cmd_list`） | list | 空 | 自定义指令映射，语法见上文 |
+| 启用直连 RCON 兜底（`rcon_enabled`） | bool | `false` | 鹊桥未开 RCON 时，改由插件直连 RCON |
+| RCON 地址（`rcon_host`） | string | `localhost` | RCON 地址 |
+| RCON 端口（`rcon_port`） | int | `25575` | RCON 端口 |
+| RCON 密码（`rcon_password`） | string | 空 | RCON 密码 |
 
 > ⚠️ 旧版的 `rcon_fallback` 配置已废弃，请直接填写上方四个字段。
 
@@ -373,26 +379,26 @@ E33Chat 是另一套聊天模组（[NereaFantasia/E33Chat](https://github.com/Ne
 ### 插件配置
 
 <details>
-<summary>展开配置表</summary>
+<summary>插件配置（2 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enabled` | bool | `true` | 启用插件 |
-| `text2image` | bool | `true` | 服务器信息渲染为图片，失败自动回退文本 |
+| 启用 Minecraft 鹊桥互通（`enabled`） | bool | `true` | 启用插件 |
+| 将服务器信息渲染为图片输出（`text2image`） | bool | `true` | 服务器信息渲染为图片，失败自动回退文本 |
 
 </details>
 
 ### 重连配置
 
 <details>
-<summary>展开配置表</summary>
+<summary>重连配置（4 项）</summary>
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `reconnect_interval` | int | `5` | 重连间隔（秒），随失败次数递增，上限 60 秒 |
-| `max_reconnect` | int | `0` | 最大重连次数，`0` 表示无限重连 |
-| `low_frequency_threshold` | int | `30` | 连续失败**超过**该次数后进入低频重试（间隔固定为 `low_frequency_interval`）；`0` 关闭低频 |
-| `low_frequency_interval` | int | `300` | 低频重试间隔（秒），默认 5 分钟 |
+| 重连间隔（秒）（`reconnect_interval`） | int | `5` | 重连间隔（秒），随失败次数递增，上限 60 秒 |
+| 最大重连次数（`max_reconnect`） | int | `0` | 最大重连次数，`0` 表示无限重连 |
+| 进入低频重试的失败次数（`low_frequency_threshold`） | int | `30` | 连续失败**超过**该次数后进入低频重试（间隔固定为 `low_frequency_interval`）；`0` 关闭低频 |
+| 低频重试间隔（秒）（`low_frequency_interval`） | int | `300` | 低频重试间隔（秒），默认 5 分钟 |
 
 </details>
 
@@ -414,13 +420,12 @@ TPS 与延迟监控**默认开启、无需配置**：后台定期采集并持久
 
 ## 部署与常见问题
 
-### 安装
+### 前提
 
-1. 将本插件放入 AstrBot 的 `data/plugins/` 目录，重启 AstrBot
-2. 在 WebUI 插件配置中点击「添加 MC服务器」，填写**目标会话**（必填）
-3. 确保 `server_name` 与鹊桥 `config.yml` 的 `server_name` 完全一致
+- **Minecraft 服务端**需先装 [鹊桥模组](https://github.com/17TheWord/QueQiao)——本插件只负责 AstrBot 这一侧，服务端不装鹊桥无法连通
+- **AstrBot** 装好本插件即可，依赖由 AstrBot 自动安装
 
-> AstrBot 与 MC 装在同一台机器时，默认连接信息已与鹊桥默认端口对齐，通常无需改动，填好「目标会话」即可使用。
+装好后在面板点「＋ 新建服务器」，**目标会话**必填，`server_name` 要与鹊桥 `config.yml` 的 `server_name` 一致。AstrBot 与 MC 同机部署时，连接信息已与鹊桥默认端口对齐，通常无需改动。
 
 ### 网络与地址（Docker / 同机部署）
 
@@ -520,7 +525,3 @@ subscribe_event:             # 按需开启事件订阅
 ### 鸣谢
 
 - [鹊桥 QueQiao](https://github.com/17TheWord/QueQiao) — 提供 Minecraft 服务端连接能力
-
-### License
-
-[AGPL-3.0](LICENSE)

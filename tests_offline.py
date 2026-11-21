@@ -5664,7 +5664,7 @@ assert _PP44(_mdir44).get("auto_refresh_interval") == 60
 assert _PP44(_mdir44).get("settings_collapsed") is True
 _wa44.request.json = _orig_json44
 
-# 前端静态守卫：监控弹窗不再持有已迁出的控件，设置面板与前端方法必须存在
+# 前端静态守卫：监控/总设置弹窗不再持有已迁出的控件，设置面板与前端方法必须存在
 _web44 = _pl44.Path(__file__).resolve().parent / "pages" / "dashboard"
 _html44 = (_web44 / "index.html").read_text(encoding="utf-8")
 _js44 = (_web44 / "app.js").read_text(encoding="utf-8")
@@ -5680,7 +5680,7 @@ for _need44 in ('id="settings-panel"', 'id="st-ai-enabled"', 'id="st-ai-prefix"'
                 'id="st-fwd-mark-emoji-id"', 'id="st-fwd-bot-self"',
                 'id="st-fwd-prefix"',
                 'id="st-fwd-sessions"',
-                'id="st-auto-refresh"', 'id="st-terminal-days"', 'id="settings-save"',
+                'id="auto-refresh-interval"', 'id="st-terminal-days"', 'id="settings-save"',
                 'id="settings-toggle"'):
     assert _need44 in _html44, f"设置面板缺少 {_need44}"
 assert 'id="tab-image-bed"' in _html44 and 'id="btn-config-view"' in _html44, (
@@ -5689,6 +5689,9 @@ assert 'id="tab-image-bed"' in _html44 and 'id="btn-config-view"' in _html44, (
 assert 'id="tab-config-view"' not in _html44, "配置管理不应再占标签栏，改由顶部按钮进入"
 assert 'id="btn-open-config-view"' not in _html44, "右上角「📝 配置」按钮应已移除，配置入口改「⚙️ 设置」旁的「⚙️ 配置管理」按钮"
 assert 'id="ms-auto-refresh"' not in _html44, "自动刷新间隔应迁出监控设置弹窗"
+assert 'id="settings-modal"' not in _html44, "总设置弹窗只剩刷新间隔一项，已合并到顶部输入框"
+assert 'id="btn-config-link"' not in _html44, "总设置入口应随弹窗一并移除"
+assert 'applyRefreshIntervalInput' in _js44, "顶部刷新间隔输入框需要提交方法"
 assert 'id="ms-terminal-days"' not in _html44, "互通终端加载天数应迁出监控设置弹窗"
 for _need44 in ("renderSettingsPanel", "saveSettingsPanel", "bindSettingsActions",
                 "setSettingsCollapsed"):

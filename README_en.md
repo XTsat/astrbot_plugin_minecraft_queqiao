@@ -1,4 +1,5 @@
 <div align="center">
+<img src="logo.png" alt="Minecraft Queqiao" width="160" />
 <h1>Minecraft Queqiao</h1>
 <p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
 <p><img alt="version" src="https://img.shields.io/badge/version-v0.9.0-blue"></p>
@@ -90,19 +91,24 @@ The dashboard has an expandable “⚙ 功能设置” (feature settings) drawer
 - **Terminal window** (per server): how many days of interop-terminal logs to load (0–30, default 2 = today plus yesterday, 0 = keep all shards). Stored at the top level of the config entry — the same setting as `terminal_days` in the WebUI; saving takes effect immediately without rebuilding connections
 - Monitoring parameters themselves (enabled, sample interval, realtime rate, retention, TPS command, latency probe, default view) still live in the “⚙ 设置” dialog of the monitoring panel
 
-### Top-right “⚙ 设置” global-settings dialog
+### Auto-refresh interval
 
-The “⚙ 设置” button at the top right (next to the auto-refresh toggle) opens a dialog for preferences independent of any single server: the dashboard auto-refresh interval in seconds (10–3600, applied while the “自动刷新” toggle is on, takes effect immediately). Refreshing or reopening the page keeps the last opened server tab instead of returning to “全部服务器”.
+The seconds box right of the “自动刷新” toggle is editable in place — type a value, then blur or press Enter to apply (10–3600 s), no dialog needed. While the toggle is on, the dashboard reloads at that interval. It is a global preference, independent of any single server. Refreshing or reopening the page keeps the last opened server tab instead of returning to “全部服务器”.
 
 ### Connection
 
-<details>
-<summary>Show options</summary>
+Set these two first; the rest can stay at their defaults:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `target_sessions` | list | empty | **Target sessions** (required): session UMO list for MC messages; defines the MC ↔ chat binding — when empty the group receives nothing |
-| `server_name` | string | `Server` | **Server name** (unique identifier), must match QueQiao's `server_name`; must differ across servers |
+| `target_sessions` | list | empty | **Required.** Session UMO list for MC messages; defines the MC ↔ chat binding — when empty the group receives nothing |
+| `server_name` | string | `Server` | **Required.** Unique identifier, must match QueQiao's `server_name`; must differ across servers |
+
+<details>
+<summary>Other connection options (9 items)</summary>
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `display_name` | string | empty | Display name (may be Chinese, e.g. `生存服`), display only; falls back to `display_name_default` when blank |
 | `display_name_default` | string | `MC` | Display-name default: what `{display_name}` and status output show when `display_name` is blank |
 | `ws_mode` | string | `forward` | `forward`: plugin dials QueQiao; `reverse`: plugin listens for QueQiao |
@@ -118,7 +124,7 @@ The “⚙ 设置” button at the top right (next to the auto-refresh toggle) o
 ### Message forwarding
 
 <details>
-<summary>Show options</summary>
+<summary>Message forwarding (23 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -160,7 +166,7 @@ Common `mark_emoji_id` values:
 ### Server-connection notification
 
 <details>
-<summary>Show options</summary>
+<summary>Server-connection notification (6 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -184,7 +190,7 @@ With “connection-failure notification” enabled, a “connection failed” no
 When you would rather not have the group pinged by game activity overnight, give each server its own silent window (for example `23:00` – `08:00`). Inside the window only the message types you tick are muted.
 
 <details>
-<summary>Show options</summary>
+<summary>Quiet hours (4 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -263,7 +269,7 @@ Automatically upload images without a public URL to an image bed to get a public
 Pre-configured templates:
 
 <details>
-<summary>Show pre-configured templates</summary>
+<summary>Pre-configured image-bed templates (6 items)</summary>
 
 | Template | Region | Token | Response | Size / quota | Notes |
 |----------|--------|-------|----------|--------------|-------|
@@ -312,7 +318,7 @@ Example: `display_name` = `生存服`, format `[{display_name}] <{player}> {mess
 ### AI chat
 
 <details>
-<summary>Show options</summary>
+<summary>AI chat (11 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -349,7 +355,7 @@ Each direction has one switch and one prefix: **the switch is the master gate, t
 ### Commands
 
 <details>
-<summary>Show options</summary>
+<summary>Commands (9 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -370,7 +376,7 @@ Each direction has one switch and one prefix: **the switch is the master gate, t
 ### Plugin options
 
 <details>
-<summary>Show options</summary>
+<summary>Plugin options (2 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -382,7 +388,7 @@ Each direction has one switch and one prefix: **the switch is the master gate, t
 ### Reconnect
 
 <details>
-<summary>Show options</summary>
+<summary>Reconnect (4 items)</summary>
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -411,13 +417,12 @@ TPS and latency monitoring are **enabled by default, zero-config**: a background
 
 ## Deployment and FAQ
 
-### Installation
+### Prerequisites
 
-1. Place this plugin under AstrBot's `data/plugins/` directory and restart AstrBot
-2. In the WebUI plugin config, click "Add MC server" and **fill in "Target sessions" (required)**
-3. Make sure `server_name` exactly matches QueQiao's `server_name`
+- **Minecraft server**: install the [QueQiao mod](https://github.com/17TheWord/QueQiao) first — this plugin only covers the AstrBot side, so nothing connects without it
+- **AstrBot**: just install this plugin; its dependencies are installed automatically
 
-> When AstrBot and MC run on one machine, the default connection settings already line up with QueQiao's default port — nothing needs changing, just set "Target sessions".
+Then click "+ New server" in the dashboard. **Target sessions** is required, and `server_name` must match QueQiao's `server_name`. When AstrBot and MC run on one machine the connection settings already line up with QueQiao's default port, so nothing else needs changing.
 
 ### Networking and addresses (Docker / same-machine setups)
 
@@ -501,7 +506,3 @@ subscribe_event:             # enable the events you need
 ### Credits
 
 - [QueQiao](https://github.com/17TheWord/QueQiao) — Minecraft server connectivity
-
-### License
-
-[AGPL-3.0](LICENSE)

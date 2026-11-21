@@ -236,7 +236,7 @@ class DashboardApp {
     // 面板偏好（互通终端加载天数等）：权威数据在后端 panel_prefs.json，
     // 异步拉取覆盖本地启动缓存（localStorage 仅加速首屏，以后端为准）
     this.loadPanelPrefs();
-    this.syncAutoRefreshLabel();
+    this.syncAutoRefreshInterval();
     // 自动刷新默认关闭（防止对鹊桥持续轮询刷屏）；先按 localStorage 启动
     // 缓存恢复勾选（加速首屏），权威值随后由 loadPanelPrefs 异步覆盖
     const cachedAuto = this.autoRefreshPref;
@@ -547,12 +547,14 @@ class DashboardApp {
     }
   }
 
-  // 顶部「自动刷新 (Ns)」按钮文字与当前间隔保持同步
-  syncAutoRefreshLabel() {
-    const label = document.querySelector('.auto-refresh-toggle span');
-    if (label) {
-      label.textContent = `自动刷新 (${this.autoRefreshInterval}s)`;
-    }
+  // 顶部刷新间隔输入框与当前生效值保持同步。
+  // 正在编辑时不回写，避免刷新把用户刚敲的数字冲掉
+  syncAutoRefreshInterval() {
+    const input = document.getElementById('auto-refresh-interval');
+    if (!input) return;
+    if (document.activeElement === input) return;
+    const secs = Math.max(10, Math.min(3600, this.autoRefreshInterval || 10));
+    if (input.value !== String(secs)) input.value = String(secs);
   }
 
   // 自动刷新间隔 / 实时显示频率以后端设置（每台服务器 settings.json 持久化）
@@ -575,7 +577,7 @@ class DashboardApp {
       this.realtimeInterval =
         Math.max(1, Math.min(60, m.realtime_interval));
     }
-    this.syncAutoRefreshLabel();
+    this.syncAutoRefreshInterval();
   }
 
   // 面板级偏好（互通终端加载天数等）：权威数据在后端 panel_prefs.json
@@ -597,7 +599,7 @@ class DashboardApp {
         this.autoRefreshIntervalPref =
           Math.max(10, Math.min(3600, prefs.auto_refresh_interval));
         this.autoRefreshInterval = this.autoRefreshIntervalPref;
-        this.syncAutoRefreshLabel();
+        this.syncAutoRefreshInterval();
         this.setupAutoRefresh(
           document.getElementById('auto-refresh-toggle')?.checked || false
         );
@@ -3931,23 +3933,19 @@ class DashboardApp {
     document.getElementById('settings-save')?.addEventListener('click', () => {
       this.saveSettingsPanel();
     });
-    // 右上角「⚙ 设置」：总设置弹窗（自动刷新间隔等全局偏好）
-    document.getElementById('btn-config-link')?.addEventListener('click', () => {
-      this.openSettingsModal();
-    });
-    document.getElementById('gs-close')?.addEventListener('click', () => {
-      this.closeSettingsModal();
-    });
-    document.getElementById('gs-cancel')?.addEventListener('click', () => {
-      this.closeSettingsModal();
-    });
-    document.getElementById('gs-save')?.addEventListener('click', () => {
-      this.saveSettingsModal();
-    });
-    // 点击遮罩空白处关闭（与监控设置弹窗行为一致）
-    document.getElementById('settings-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.closeSettingsModal();
-    });
+    // 顶部刷新间隔输入框：失焦或回车即保存，不必再开弹窗
+    const intervalInput = document.getElementById('auto-refresh-interval');
+    if (intervalInput) {
+      const commit = () => this.applyRefreshIntervalInput();
+      intervalInput.addEventListener('change', commit);
+      intervalInput.addEventListener('blur', commit);
+      intervalInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          intervalInput.blur();
+        }
+      });
+    }
     // 图片转发折叠框：总开关快捷全开/全关，子开关分别控制，展开/收起子区
     const fwdImageTotal = document.getElementById('st-fwd-image');
     const fwdImageToMc = document.getElementById('st-fwd-image-to-mc');
@@ -3967,51 +3965,34 @@ class DashboardApp {
     });
   }
 
-  // 打开右上角总设置弹窗：回写当前生效的自动刷新间隔
-  openSettingsModal() {
-    const modal = document.getElementById('settings-modal');
-    if (!modal) return;
-    const refreshBox = document.getElementById('st-auto-refresh');
-    if (refreshBox) {
-      refreshBox.value = String(
-        Number.isFinite(this.autoRefreshIntervalPref)
-          ? this.autoRefreshIntervalPref
-          : (this.autoRefreshInterval || 10));
-    }
-    modal.classList.remove('hidden');
-  }
-
-  closeSettingsModal() {
-    const modal = document.getElementById('settings-modal');
-    if (modal) modal.classList.add('hidden');
-  }
-
-  // 保存总设置：自动刷新间隔写 panel_prefs.json，保存后即时生效（不重连）
-  async saveSettingsModal() {
-    const refreshBox = document.getElementById('st-auto-refresh');
-    const refreshVal = parseInt(refreshBox ? refreshBox.value : '', 10);
-    if (!Number.isFinite(refreshVal) || refreshVal < 10 || refreshVal > 3600) {
-      this.showToast('自动刷新间隔需在 10-3600 秒之间', 'error');
-      return;
-    }
-    const saveBtn = document.getElementById('gs-save');
-    if (saveBtn) saveBtn.disabled = true;
+  // 顶部刷新间隔输入框提交：写 panel_prefs.json 并即时生效（不重连）。
+  // 越界时收拢到 10～3600，并把输入框回写成实际生效值，避免显示与实际不符
+  async applyRefreshIntervalInput() {
+    const input = document.getElementById('auto-refresh-interval');
+    if (!input) return;
+    const raw = parseInt(input.value, 10);
+    const fallback = Number.isFinite(this.autoRefreshIntervalPref)
+      ? this.autoRefreshIntervalPref
+      : (this.autoRefreshInterval || 10);
+    const next = Number.isFinite(raw)
+      ? Math.max(10, Math.min(3600, raw))
+      : fallback;
+    input.value = String(next);
+    // 与当前生效值相同则不重复落盘（blur 与 change 都会触发本方法）
+    if (next === this.autoRefreshInterval) return;
     try {
-      await this.apiPost('panel/prefs', {
-        auto_refresh_interval: refreshVal,
-      });
-      this.autoRefreshIntervalPref = refreshVal;
-      this.autoRefreshInterval = refreshVal;
-      this.syncAutoRefreshLabel();
+      await this.apiPost('panel/prefs', { auto_refresh_interval: next });
+      this.autoRefreshIntervalPref = next;
+      this.autoRefreshInterval = next;
+      this.syncAutoRefreshInterval();
       this.setupAutoRefresh(
         document.getElementById('auto-refresh-toggle')?.checked || false
       );
-      this.showToast('总设置已保存并即时生效', 'success');
-      this.closeSettingsModal();
+      this.showToast(`自动刷新间隔已改为 ${next} 秒`, 'success');
     } catch (e) {
-      this.showToast('保存总设置失败: ' + (e.message || '网络错误'), 'error');
-    } finally {
-      if (saveBtn) saveBtn.disabled = false;
+      // 落盘失败时把输入框退回实际生效值，避免界面显示一个没存进去的数字
+      input.value = String(this.autoRefreshInterval || fallback);
+      this.showToast('保存刷新间隔失败: ' + (e.message || '网络错误'), 'error');
     }
   }
 
@@ -4239,7 +4220,7 @@ class DashboardApp {
       }
       // 自动刷新间隔 / 实时频率后端已持久化，无需 localStorage——刷新/换设备
       // 都以后端为准（自动刷新间隔现由「功能设置」面板维护）
-      this.syncAutoRefreshLabel();
+      this.syncAutoRefreshInterval();
       this.closeMonitorSettings();
       this.showToast(`监控设置已保存：${enabled ? '已启用' : '已停用'}（间隔 ${resp?.settings?.interval ?? interval}s）`, 'success');
       // 设置变更后重拉服务器摘要（含最新开关/采样），面板与卡片同步刷新
