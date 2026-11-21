@@ -88,7 +88,7 @@ _IMAGE_TEMPLATE_KEY_CUSTOM = "custom"
 _IMAGE_RESPONSE_KINDS = ("text", "json")
 
 
-def _as_bool(value: Any, default: bool) -> bool:
+def _as_bool(value: object, default: bool) -> bool:
     """防御式布尔解析：WebUI/JSON 里可能是字符串 "true"/"false"。"""
     if value is None:
         return default
@@ -106,7 +106,7 @@ def _as_bool(value: Any, default: bool) -> bool:
     return default
 
 
-def _as_int(value: Any, default: int) -> int:
+def _as_int(value: object, default: int) -> int:
     """防御式整数解析：非数字回落默认值。"""
     if isinstance(value, bool):
         return default
@@ -116,12 +116,12 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
-def _as_int_clamped(value: Any, default: int, lo: int, hi: int) -> int:
+def _as_int_clamped(value: object, default: int, lo: int, hi: int) -> int:
     """整数解析 + 区间钳制（0~30 之类的天数）。非法值回落默认。"""
     return max(lo, min(hi, _as_int(value, default)))
 
 
-def _as_str_list(value: Any) -> list[str]:
+def _as_str_list(value: object) -> list[str]:
     """把目标会话等字段规整为字符串列表（兼容单值/字符串/逗号分隔）。"""
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
@@ -130,13 +130,13 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
-def _as_ai_session_mode(value: Any) -> str:
+def _as_ai_session_mode(value: object) -> str:
     """AI 上下文归属：只认三个已知取值，其余回落默认（每服一份）。"""
     mode = str(value or "").strip().lower()
     return mode if mode in AI_SESSION_MODES else DEFAULT_AI_SESSION_MODE
 
 
-def _enabled_directions_of(entry: Any) -> list[str]:
+def _enabled_directions_of(entry: object) -> list[str]:
     """「转发渠道」多选框回显：优先读 prefix 分组的列表，缺省按运行时布尔推导。
 
     顺序固定为 `PREFIX_DIRECTION_FLAGS` 的声明顺序，面板与配置页看到的一致。
@@ -210,7 +210,9 @@ except ImportError:
         async def json(self, default: Any = None) -> Any:
             return default if default is not None else {}
 
-    request = _MockRequest()  # type: ignore
+    # 降级桩的类型与 astrbot.api.web.request 不同（离线自检没有真实请求上下文），
+    # 只能在此处忽略重定义告警；运行期只会走 try 分支。
+    request = _MockRequest()  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context

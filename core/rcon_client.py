@@ -6,19 +6,16 @@
 
 import asyncio
 import contextlib
+from importlib.util import find_spec
 
 from astrbot.api import logger
 
 from .constants import PLUGIN_NAME
 from .models_config import ServerConfig
 
-try:  # 惰性降级：缺失依赖时仅关闭兜底通道
-    import aiomcrcon
-
-    _RCON_AVAILABLE = True
-except ImportError:  # pragma: no cover - 取决于运行环境
-    aiomcrcon = None  # type: ignore[assignment]
-    _RCON_AVAILABLE = False
+# 惰性降级：这里只用 find_spec 判断依赖是否装了，模块本身等到真正连 RCON 时
+# 才 import——插件其余功能不因为这个可选依赖而不工作。
+_RCON_AVAILABLE = find_spec("aiomcrcon") is not None
 
 
 class RconClient:
@@ -64,6 +61,8 @@ class RconClient:
             if self._connected and self._client is not None:
                 return True
             try:
+                import aiomcrcon
+
                 client = aiomcrcon.Client(
                     self.config.rcon_host,
                     self.config.rcon_port,
