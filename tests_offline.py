@@ -8067,3 +8067,40 @@ assert "ai_history_turns" in _P60.SOFT_CONFIG_KEYS
 assert "ai_new_command" in _P60.SOFT_CONFIG_KEYS
 assert "ai_reset_command" in _P60.SOFT_CONFIG_KEYS
 print("OK  UMO 三档归属 / 历史裁剪 / 重置整句匹配 / 配置与 schema 对齐 / 软更新键 全通过")
+
+print("\n=== 64. AGENTS.md 指令预算（超出会被静默截断） ===")
+
+# AGENTS.md 会被当作工作区指令加载，超过 65536 字节时尾部会被静默截断
+# （实测发生过：检查清单与附录直接消失）。这里守住预算，超了就报错而不是静默失效。
+_agents64 = pathlib.Path(__file__).with_name("AGENTS.md")
+_agents_bytes64 = len(_agents64.read_bytes())
+# 名义预算是 65536，但实测在 65300~65400 之间就开始被截断（65308 未截、65369 已截），
+# 所以这里按实测安全线 65300 守，而不是按名义值——否则守卫放行、截断照旧发生。
+_AGENTS_LIMIT = 65300
+assert _agents_bytes64 <= _AGENTS_LIMIT, (
+    f"AGENTS.md 已 {_agents_bytes64} 字节，超过 {_AGENTS_LIMIT} 的安全线（实测此线以上"
+    "会被截断，尾部检查清单与附录静默消失）；请压缩重复内容而不是删规则"
+)
+# 尾部必须完整：最后一节是附录，且文件的最后一条内容存在
+_agents_text64 = _agents64.read_text(encoding="utf-8")
+assert _agents_text64.rstrip().endswith("避免回声刷屏"), "AGENTS.md 末尾内容不完整"
+assert "## 附录：已知设计细节与注意点" in _agents_text64, "AGENTS.md 附录缺失"
+assert "## 9. 最终检查清单" in _agents_text64, "AGENTS.md 检查清单缺失"
+print(f"OK  AGENTS.md {_agents_bytes64} 字节（安全线 {_AGENTS_LIMIT}），尾部完整")
+
+print("\n=== 65. metadata.yaml 的平台列表 ===")
+
+# 只校验「有平台列表且格式正确」，不校验具体平台标识：适配器可以由第三方
+# 插件注册任意标识（本项目用到的 wechatpadpro 就不是内置的），拿一份内置
+# 名单去比对既会误报也会随 AstrBot 版本过期。
+import yaml as _yaml65
+
+_meta65 = _yaml65.safe_load(
+    pathlib.Path(__file__).with_name("metadata.yaml").read_text(encoding="utf-8")
+)
+_platforms65 = _meta65.get("support_platforms") or _meta65.get("platform")
+assert isinstance(_platforms65, list) and _platforms65, \
+    "metadata.yaml 应有非空的平台列表（support_platforms 或 platform）"
+assert all(isinstance(x, str) and x.strip() for x in _platforms65), \
+    "平台列表里每项都必须是非空字符串"
+print(f"OK  平台列表 {len(_platforms65)} 项：{_platforms65}")

@@ -5,10 +5,11 @@
 >
 > 项目：`astrbot_plugin_minecraft_queqiao`（Minecraft 鹊桥互通，AstrBot 插件，Python）
 >
+> **模板版本**：v0.1.16（2026-11-19） —— 本行标记本文件对应的 `astrbot-plugin` 模板版本。回填项目内容时**不要改动本行**；只有从上游合并到新版本时才把它更新为合并到的版本。
 > **来源**：本文件基于 [XTsat/agent-templates](https://github.com/XTsat/agent-templates) 的 `templates/astrbot-plugin/AGENTS.md`，最新版见该仓库 `main` 分支；已回填本项目的插件名、命令前缀、目录结构与特有约定。
-> 用户说「更新 AGENTS」时按此流程：① 拉取来源模板最新版 → ② 与本地逐节比对 → ③ 合并（保留本项目已回填的内容）→ ④ 展示 diff 与改动清单，等用户确认后再落盘。**禁止整文件覆盖**。
+> 用户说「更新 AGENTS」时按此流程：① 比对头部「模板版本」与上游是否一致——一致说明已是最新，直接结束，不必拉取逐节比对 → ② 不一致才拉取来源模板最新版 → ③ 与本地逐节比对 → ④ 合并（保留本项目已回填的插件名、命令前缀、目录结构与项目特有约定）→ ⑤ 展示 diff 与改动清单，等用户确认后再落盘，并把头部「模板版本」同步改为合并到的版本。**禁止整文件覆盖**。
 >
-> 与模板的已回填差异：采用分层多文件架构（`core/` + `services/` + `handlers/`，非单文件）；日志使用二级前缀 `[{PLUGIN_NAME}][{server_name}]`；WebUI 页面在 `pages/dashboard/`（原生 JS）；另含模板未覆盖的项目专题——鹊桥协议与连接层（6.4）、指令通道超时语义（6.5）、AI 触发（6.6）、前端持久化（5.5）。
+> 与模板的已回填差异：采用分层多文件架构（`core/` + `services/` + `handlers/`，非单文件）；日志使用二级前缀 `[{PLUGIN_NAME}][{server_name}]`；WebUI 页面在 `pages/dashboard/`（原生 JS，未迁 `views/`）；另含模板未覆盖的项目专题——鹊桥协议与连接层（6.4）、指令通道超时语义（6.5）、AI 触发（6.6）、前端持久化（5.5）。
 
 ---
 
@@ -72,34 +73,12 @@
 ```
 astrbot_plugin_minecraft_queqiao/
 ├── main.py                 # 插件入口：注册、命令组、生命周期、事件编排
-├── core/                   # 核心层：配置模型 + 协议模型 + 连接管理
-│   ├── constants.py        #   常量（协议标识/默认值/重连参数）—— 零内部依赖
-│   ├── models.py           #   鹊桥事件与实体模型（防御式 from_dict）
-│   ├── models_config.py    #   ServerConfig（对齐 _conf_schema.json）
-│   ├── queqiao_client.py   #   WS 客户端：正/反向、握手、echo 关联、重连
-│   ├── rcon_client.py      #   直连 RCON 兜底（惰性 import aiomcrcon）
-│   └── server_manager.py   #   多服务器实例与指令执行（鹊桥优先/RCON 兜底）
-├── services/               # 服务层
-│   ├── ai_session.py       #   游戏内 AI 的 UMO 归属、上下文读写与重置
-│   ├── binding.py          #   账号↔游戏ID 绑定（原子写）
-│   ├── message_bridge.py   #   双向转发 + 回环抑制 + 富文本剥离
-│   ├── image_host.py       #   内置图片 HTTP 服务（/img/<token>）
-│   ├── image_bed.py        #   图片转存条目（内置 HTTP + 第三方图床统一接口）
-│   ├── renderer.py         #   状态/玩家列表图片渲染（不可用时回退文本）
-│   ├── translator.py       #   本地翻译（翻译键 / 英文 → 中文）
-│   ├── panel_prefs.py      #   面板偏好落盘（panel_prefs.json，替代 localStorage）
-│   ├── terminal_log.py     #   互通终端日志按天分片持久化
-│   ├── metrics.py          #   运行指标 + 事件环形队列 + SSE 发布
-│   ├── monitor.py          #   TPS / 延迟采样、聚合与落盘
-│   ├── slp_ping.py         #   Minecraft SLP 直连延迟测量（零第三方依赖）
-│   ├── host_mem.py         #   宿主机物理内存读取与鹊桥口径修正
-│   └── web_api.py          #   面板后端 API（HTTP + SSE）与配置/偏好读写
-├── handlers/
-│   └── commands.py         #   命令业务逻辑 + 自定义指令 + 多服务器选择
-├── pages/dashboard/        #   WebUI 仪表盘（原生 JS/CSS，无框架）
-├── translations/           #   本地翻译数据（死亡/成就/实体，随插件分发）
-├── tests_offline.py        # 离线逻辑自检（桩替代 astrbot/websockets）
-├── metadata.yaml / _conf_schema.json / README.md / README_en.md / CHANGELOG.md / LICENSE
+├── core/                   # 常量 / 协议模型 / 配置模型 / 连接层（最底层，零内部依赖）
+├── services/               # AI 会话、绑定、转发、图床、渲染、翻译、日志、监控、指标、Web API
+├── handlers/commands.py    # 命令业务逻辑 + 自定义指令 + 多服务器选择
+├── pages/dashboard/        # WebUI 仪表盘（原生 JS/CSS，无构建）
+├── translations/           # 本地翻译数据
+└── tests_offline.py        # 离线逻辑自检（桩替代 astrbot/websockets）
 ```
 
 ### 2.2 架构风格：分层多文件
@@ -281,16 +260,12 @@ class MinecraftQueQiaoPlugin(Star):
 | `Plain` / `Image` / `Reply` | `astrbot.api.message_components` | |
 | `error_response` / `json_response` / `stream_response` | `astrbot.api.web` | Web API 响应工具 |
 
-> 已知踩坑：曾写成 `from astrbot.api import Context`，导致
-> `cannot import name 'Context' from 'astrbot.api'` 插件加载失败。
+> 已知踩坑：曾写成 `from astrbot.api import Context` → `cannot import name 'Context'`
+> 插件加载失败。`tests_offline.py` 的桩**必须忠实反映真实 API**（`astrbot.api` 不得
+> 提供 `Context`），否则会掩盖此类错误——第 16 组断言专门守卫。
 >
-> `tests_offline.py` 的桩**必须忠实反映真实 API**（尤其 `astrbot.api` 不得提供
-> `Context`），否则桩会掩盖此类错误——第 16 组断言专门守卫这一点。
->
-> 另注：`LLMResponse.completion_text` 已被官方标记「过时，推荐 `result_chain`」，
-> 目前仍可用；若未来移除需改 `_ask_llm()`。
->
-> 核实方式：真实 AstrBot 源码在 `/vol2/@appdata/deepseek.harness/home/astrbot/astrbot/`，
+> 另注：`LLMResponse.completion_text` 已标记「过时，推荐 `result_chain`」，目前可用；
+> 移除时需改 `_ask_llm()`。核实源码在 `/vol2/@appdata/deepseek.harness/home/astrbot/astrbot/`，
 > 兄弟插件在 `/vol2/@appdata/deepseek.harness/home/astrbot_plugin/`。
 
 ---
@@ -301,9 +276,9 @@ class MinecraftQueQiaoPlugin(Star):
 
 - 本项目 Schema 是**真实扁平结构**（不是模板示意里的 `schemaVersion/fields`）
 - 顶层键：`enabled`（总开关）、`mc_servers`（`template_list` 服务器条目）、`image_upload`（图片转存分组：`enabled` 总开关 / `timeout` 上传超时 / `services` 图床条目 `template_list`）；旧的根级 `enable_image_upload` / `image_upload_timeout` / `image_upload_services` 仅作为隐藏的迁移来源保留（`invisible: true`），读取一律走 `core.models_config.image_upload_settings()`
-- 新增配置项 → **先在 `_conf_schema.json` 补 schema**（type/hint/default/options），再在代码中实现读写；`hint` 用中文，作为文档里的「中文名」
+- 新增配置项 → **先在 `_conf_schema.json` 补 schema**（type/description/hint/default/options）再写代码；`description` 是配置名，`hint` 是问号提示
 - 多服务器配置一律落在 `mc_servers` 条目内，不要新增平级「服务器名」字段
-- 配置项在文档（README 配置表、CHANGELOG）中引用时，**中文名在前、英文 key 在后**：统一写成「中文名（`key`）」形式，例如「超时时间（`image_upload.timeout`）」；中文名取自 `_conf_schema.json` 的 `hint` 字段，`key` 用反引号包裹
+- 配置项在文档（README 配置表、CHANGELOG）中引用时写成「中文名（`key`）」，如「超时时间（`image_upload.timeout`）」；中文名取 `_conf_schema.json` 的 **`description`**（`hint` 是问号提示，不能当配置名），`key` 用反引号
 
 ### 5.2 新增配置项流程
 
@@ -471,13 +446,10 @@ async def cmd_sub(
 
 游戏内 AI **仅由聊天前缀触发**（`PlayerChatEvent` + `ai_chat_prefix`，默认 `#`），全端可用。
 
-> **明确不做斜杠触发**：本插件运行在 AstrBot 侧，无法向 Minecraft 注册真实指令。
-> 且斜杠输入在游戏内属于**指令**而非聊天：Fabric 侧 `onChatMessage` 直接
-> `if (message.startsWith("/")) return;`，Spigot 侧走 `PlayerCommandPreprocessEvent`
-> 而不进 `AsyncPlayerChatEvent`。因此 `/ai 你好` **既不会触发 AI，也不会转发到群**
-> ——它压根不会进入聊天事件。玩家只会看到原版 `Unknown command` 报错。
-> 不要再引入 `ai_command_*` 配置或 `PlayerCommandEvent` 触发路径；
-> 若确实需要原生指令，应由服务端侧插件提供。
+> **明确不做斜杠触发**：斜杠在游戏内是**指令**而非聊天（Fabric `onChatMessage` 直接
+> `if (message.startsWith("/")) return;`，Spigot 走 `PlayerCommandPreprocessEvent`），
+> `/ai 你好` 既不会触发 AI 也不会转发到群，玩家只看到 `Unknown command`。
+> 不要再引入 `ai_command_*` 配置或 `PlayerCommandEvent` 触发路径；需要原生指令应由服务端插件提供。
 
 前缀语义：
 
@@ -569,32 +541,26 @@ async def cmd_sub(
 
 - 日常改动先记在 `## [Unreleased]` 段（顶部固定）。**发版时**再把内容移动到带版本号的新段。
 - **先记后合**：记录阶段同一工作周期内的改动各自独立记入 `[Unreleased]`（同一功能的多处调整也先各记一条，避免遗漏）；提交或发版前的整理阶段统一过一遍 `[Unreleased]`，把描述同一件事的多条合并成一条，不相关改动保持独立（判断标准：用户会不会把它当成同一件事，细则见下方「写作视角」）。
+- **「上一版」= 上一次发布**：本文件所说的「上一版」指 `CHANGELOG.md` 中最新的 `## vX.Y.Z` 段，即用户当前实际在用的版本；**不是上一个 commit、也不是 HEAD**。条目只需回答「这个版本和上一版比变了什么」，与中间经历过几次提交无关。
+- **发版前被撤销的改动不留痕**：某改动只在 `[Unreleased]` 里记过、发版前又被移除时，整理阶段**删掉对应条目**即可，不写「新增后又移除」「已取消」「原计划作废」这类叙述——那是开发过程，不是用户能感知的差异。`### 移除` 只用于删除**上一版已发布**过的功能（该情形属破坏性变更，按 SemVer 升 major/minor）。想在中间过程留痕就写 commit message（如 `revert: 移除 X`）和 PR 描述，CHANGELOG 不是 git log。
 - **发版日期**：版本段日期 `(YYYY-MM-DD)` 填**当前日期**（以发版当天的系统时间为准，例如 `2026-09-22`）。
+- **老版本折叠**：每次发版把 `[Unreleased]` 落成新版本段后，顺手把掉出「最近 3 个」的那个版本段折成独立的 `<details>`（规则与形态见下方「老版本折叠」），这是发版动作的一部分，不是可选项。
 
 #### 格式
 
 统一使用 **分组式**（与 scaffold 的 `CHANGELOG.md.template` 一致）：按分类用 `###` 子标题分组，条目用「标题 + 冒号 + 说明」，**仅重点条目/重点内容才加粗**：
 
 ```markdown
-# Changelog
-
 ## [Unreleased]
 
 > 一句话总结这个版本（可选）
 
 ### 新增
 - 功能 A：说明
-- **功能 B**：说明
+- **功能 B**：说明（只加粗重点改动）
 
 ### 修复
 - 问题 C：说明
-
-## v0.3.0 (2026-07-06)
-
-> 一句话总结这个版本（可选）
-
-### 新增
-- 功能 D：说明
 ```
 
 分组子标题分类：`新增` / `修复` / `变更` / `移除` / `性能`（只保留本次有内容的分类，无内容的分类不写空标题）
@@ -602,6 +568,48 @@ async def cmd_sub(
 **加粗规则**：条目默认不加粗；写 changelog 时先识别本次改动中的**重点改动**（核心新功能、重要修复、破坏性变更等），只对重点改动用 `**加粗**` 标题强调，其余条目一律不加粗。
 
 **版本总结**：版本标题（`## [Unreleased]` / `## vX.Y.Z (YYYY-MM-DD)`）与分类子标题之间，可加一行 `> 引用` 形式的一句话总结（概括该版本/该批改动的主旨），可选，不强制。
+
+**破坏性变更标记**：含不兼容改动的版本段（删了上一版已有的功能、配置项改名、行为变更导致用户必须重配或迁移），在版本标题下紧接一行 `> ⚠️ 破坏性变更：<一句话说明改了什么、用户要做什么>`。这行标记不是装饰——它决定该版本段**永不折叠**（见下方「老版本折叠」），也是用户判断「要不要仔细看这一版」的入口。
+
+**老版本折叠（按版本段数量，不按日期）**：CHANGELOG 整篇渲染，版本段攒多了用户要滚很久才看到「上一版」的差异。阈值按**数量**而非日期——按日期会让停更项目永远全展开、高频发版的项目把刚发的版本也折掉；按数量则每次发版只多折一个段，动作固定、结果可预测。
+
+- **展开区**：`## [Unreleased]` 与**最近 3 个**已发布版本段（用户回查的几乎都是近几个月的差异）。
+- **第 4 个起，每个版本段各自一个 `<details>`**——**不是**全塞进同一个块（那样 summary 只剩一个标题，找具体版本还得逐层展开，等于把折叠做成藏起来）。
+- **与展开区之间加一次 `---` + 一行说明**（见下方形态），让人一眼看出「上面近期、下面历史」；分隔只加一次，不在版本段之间重复。
+- **破坏性变更的版本永不折叠、整段完整**：带 `> ⚠️ 破坏性变更`（或含 `### 移除`）的段无论多老都保持 `##` 展开，标题下带 `⚠️`。**整段展开**而非只挑那几条——用户判断的是「这一版整体要不要小心」，破坏性条目常与旁边条目联动（改名 + 迁移提示），拆开还要每次主观判断「哪几条算破坏性」，规则会执行不一致。位置仍按版本号倒序，折叠区里夹一个展开的破坏性版本是刻意的。
+- **`<summary>` 自解释**：`<summary>v0.2.0 (2026-05-01) — 支持消息转发</summary>`，不写「点击展开」这类废话。
+- **折叠是发版动作**：落新版本段时顺手折；日常提交不动折叠结构。
+- **只折叠不删改**：不删版本段、不改条目文字；也不要把 `[Unreleased]`、最近 3 个或破坏性变更版本折起来图省事。
+
+形态（`---` + 说明行只出现一次，之后每个历史版本各自一个 `<details>`；破坏性版本保持展开）：
+
+```markdown
+## v0.4.0 (2026-08-01)      ← 最近 3 个：展开
+...
+## v0.2.0 (2026-06-01)
+...
+
+---                        ← 分隔只出现一次
+
+**以下为更早的历史版本（点击展开）**
+
+<details>
+<summary>v0.1.1 (2026-05-15) — 一句话总结</summary>
+
+### 修复
+- 条目原样保留
+
+</details>
+
+## v0.0.9 (2026-04-10)      ← 带破坏性标记：永不折叠
+
+> ⚠️ 破坏性变更：`forward_to` 改名为 `forward_targets`，升级后需重新配置
+
+### 变更
+- 条目原样保留
+```
+
+> **折叠在 WebUI 会降级**：与 README 配置表的折叠同一套渲染（见 7.2.3），AstrBot 插件详情页内嵌渲染会过滤 `details` / `summary`，折叠块在那里变成普通文字、版本段照常显示——所以折叠只是缩短首屏，不能当成隐藏信息的手段；破坏性变更永不折叠也正是为了在这种降级场景下不漏掉大改动。
 
 #### 写作视角（面向用户）
 
@@ -667,36 +675,15 @@ README 的读者是**插件使用者**（服务器管理员、群成员），不
 
 本项目维护 **两个** README（中文 `README.md` + 英文 `README_en.md`），**中文版为权威版本（源）**，任何修改先落中文版、再同步到英文版（方向规则见 7.2.5）。表头格式如下（**元素间不留空行**）：
 
-**中文版（`README.md`）：**
+**首行固定放图标**：`<img src="logo.png" alt="插件名" width="160" />`，与 README 同目录相对路径，`alt` 必填（中文版 `display_name`、英文版英文插件名），宽度固定 160，中英两版都要有；其余元素包在 `<div align="center">` 里且**元素间不留空行**。
 
-```html
-<div align="center">
-<h1>Minecraft 鹊桥互通</h1>
-<p><strong>通过鹊桥模组连接 Minecraft 服务器，实现消息互通、图片互通、服务器管理与 AI 聊天</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-vX.Y.Z-blue"></p>
-<p><sub>Minecraft &nbsp;&nbsp; 我的世界 &nbsp;&nbsp; 鹊桥 &nbsp;&nbsp; 消息互联 &nbsp;&nbsp; 图片互通 &nbsp;&nbsp; AI聊天</sub></p>
-<p><strong>中文</strong> &nbsp;/&nbsp; <a href="README_en.md">English</a></p>
-</div>
-```
-
-**英文版（`README_en.md`）：**
-
-```html
-<div align="center">
-<h1>Minecraft Queqiao</h1>
-<p><strong>Connect Minecraft servers to AstrBot via the QueQiao mod for message and image bridging, server management and AI chat</strong></p>
-<p><img alt="version" src="https://img.shields.io/badge/version-vX.Y.Z-blue"></p>
-<p><sub>Minecraft &nbsp;&nbsp; QueQiao &nbsp;&nbsp; Message Bridge &nbsp;&nbsp; Image Bridge &nbsp;&nbsp; AI Chat</sub></p>
-<p><a href="README.md">中文</a> &nbsp;/&nbsp; <strong>English</strong></p>
-</div>
-```
+**tags 与头部 `<sub>`**：`tags` 是市场检索用的全量关键词，按项目习惯写即可（不必强行拆成单概念）；README 头部 `<sub>` 只挑重点功能，不虚构能力。
 
 命名规则：
 
 - **中文版 h1**：取 `metadata.yaml` 的 `display_name`（Minecraft 鹊桥互通）
 - **英文版 h1**：取插件名 `astrbot_plugin_xxx` 的 `xxx` 拆分后首字母大写；本项目沿用现有标题 `Minecraft Queqiao`（Queqiao 视为专名，不再拆分）
 - **desc**：中文版用 `metadata.yaml` 的 `desc`；英文版做地道翻译
-- **标签（tags）**：取自 `metadata.yaml` 的 `tags`（中文标签用 `&nbsp;&nbsp;` 分隔；英文版用英文标签）
 - **版本徽章**：本项目在 desc 与 tags 之间保留 version badge，发版时同步更新
 
 #### 7.2.3 README 四大结构
@@ -707,14 +694,38 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 |------|------|------|
 | **一、功能/介绍** | 功能介绍、特性列表、用户使用场景、截图/演示 | 独立板块 |
 | **二、指令** | 命令表格（命令、权限、说明）、使用示例 | 独立板块 |
-| **三、配置** | 配置项表格（配置项、类型、默认值、说明）、`_conf_schema.json` 说明 | 独立板块 |
-| **四、其它** | 安装、快速开始、运行环境与依赖要求、贡献指南、常见问题、许可证、鸣谢等 | 剩余所有内容放这里 |
+| **三、配置** | 配置项表格（配置项、类型、默认值、说明）、`_conf_schema.json` 说明；配置项多时按类别分小节、长尾表折叠（见下方「配置板块怎么写」） | 独立板块 |
+| **四、其它** | 依赖要求、常见问题、贡献指南、鸣谢等；确有需要提前告知的限制（某功能要求更高版本、只支持某些协议端）才补「前提」 | 剩余所有内容放这里 |
 
 注意点：
 
-- 板块 4 是兜底区域，不强制子标题顺序，但**安装/快速开始**建议放在最前。
+- 板块 4 是兜底区域，不强制子标题顺序。**默认不写分步「安装/快速开始」**：插件从插件市场或 WebUI 安装页装完即用，依赖由 AstrBot 自动安装，AstrBot 版本由 `metadata.yaml` 的 `astrbot_version` 在安装/加载时拦截，把「克隆到某目录 → 重启 → 重载」三步抄进 README 只是噪音。确实需要手动安装时才补安装步骤（例如插件未上架插件市场）。
+- **版本与协议端都不是必写项**：能由 `metadata.yaml` 的 `astrbot_version` 表达的最低版本要求，不在 README 重复一遍；只有 metadata 表达不了的**明确限制**才写（某功能需要更高版本、只支持某几个协议端、需要特定部署方式），一两句说完。没有这类限制就不建「前提」小节，也不为凑结构写「需要 AstrBot 4.x」这种空话。**`astrbot_version` 本身也只在能明确最低支持版本时才填**——说不准就不填（保持注释状态），不要写估算范围，更不要为了让字段不空而填。
 - **板块一/板块四只写用户视角**：写「运行环境与依赖要求」而非框架选型理由、架构分层、模块职责；实现原理一律不进 README（写作视角见 7.2.1）。
 - 更新后通读一遍 README，确保与新行为一致（示例：默认值、超时说明、数据目录等）。
+- **「常见问题」是可选子标题**：只有真的出现用户会踩的排障问题才补，默认不建空标题（见 7.2.1）。
+- **不写许可证章节**：README 不放许可证小节（含「License」小节、许可证徽章、许可证名标注），即使项目已有 `LICENSE` 文件也不写；新增时若骨架里有这类小节直接删掉。
+
+**配置板块怎么写（板块三）**：
+
+- **配置表是备查资料，不是配置入口**：用户在 WebUI 里改配置、即时生效，很少翻 README——阈值放低（能折叠就折叠），说明列写短，只讲「这一项控制什么」。
+- **≤ 4 项**直接一张表，不为了对称硬拆小节；更多则按类别分组（每类一个 `###` + 一张表），顺序按上手顺序（基础/常用在前，进阶/排障在后），分类要与 `_conf_schema.json` 的真实结构对得上（顶层 key 与 `object` 分组），不写 WebUI 里不存在的分组。
+- **单类 ≥ 4 项就折叠**（不必等到单类 > 10 行），或属于纯参考内容（逐字段明细、平台对照表、模板变量）时，把该类整表包进 `<details>` 折叠，`<summary>` 自解释（类别名 + 项数）：
+
+```markdown
+<details>
+<summary>高级设置（12 项）</summary>
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| 并发上限（`max_concurrency`） | int | 3 | 同时处理的任务数量上限，超出后排队 |
+
+</details>
+```
+
+- **关键配置不进折叠**：首次使用必须填的（API Key、必填地址、功能总开关）留在外面；折叠只装「不读也能用」的参考内容。
+- **折叠在 WebUI 会降级**：AstrBot 插件详情页内嵌的 README 会过滤 `details`/`summary` 标签（README 弹窗与 GitHub 正常折叠），折叠块在那里变成普通文字、表格照常显示——因此折叠内容必须自洽可读，不能靠折叠藏必要信息。
+- 表格列固定「配置项 / 类型 / 默认值 / 说明」；配置项写「中文名（`key`）」（见 5.1），类型全篇统一（写 schema 的 `type`，或写 WebUI 里的中文类型），不要一张表里混用两种写法。
 
 #### 7.2.4 何时必须更新 README
 
@@ -723,8 +734,9 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 | 功能新增/删除 | 一、功能/介绍 |
 | 使用方式/命令变化 | 二、指令 |
 | 配置项变化 | 三、配置 |
-| 依赖/版本要求变化 | 四、其它（安装/依赖部分） |
-| 已知问题/行为变化 | 四、其它（常见问题部分） |
+| 依赖/版本要求变化 | 四、其它（确有限制需要提前告知时才补「前提」），能明确最低版本时同步改 `metadata.yaml` 的 `astrbot_version` |
+| 已知问题/行为变化（用户会踩到时） | 四、其它（常见问题部分，按需新增） |
+| 视图页面新增/改名/删除 | 一、功能/介绍（说明入口位置），并同步 `.astrbot-plugin/i18n` 的 `views.*` 标题 |
 
 **何时不需要更新 README：**
 
@@ -732,12 +744,9 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 
 #### 7.2.5 双语文档同步
 
-- 中文版用 `README.md`，英文版用 `README_en.md`。
-- **中文为主（单向同步）**：中文版是**权威版本（源）**，英文版跟随中文版。所有改动**先落中文版，再从中文同步到英文版**；**禁止反向**——不得先改英文版再回填中文，不得用英文版覆盖中文版。
-- 章节结构必须保持一致，新增章节两个文件都要加。
-- 中文版使用自然中文，英文版使用地道英文，**禁止**逐字机翻、禁止留下半翻译的句子。
-- 头部的语言切换链接互相指向对方文件。
-- 修改时逐条 diff，确保无内容遗漏或错位。
+- 中文版 `README.md` 是**权威源**：所有改动**先落中文，再同步英文**，禁止反向回填或用英文覆盖中文。
+- 章节结构保持一致（新增章节两边都加），语言切换链接互指；英文要地道，禁止逐字机翻与半翻译句子。
+- 修改后逐条 diff，确认无遗漏或错位。
 
 #### 7.2.6 格式与多会话约束
 
@@ -746,10 +755,8 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 
 ### 7.3 注释规范
 
-- **注释只写 non-obvious reason**：解释「为什么这么做」，而不是「做了什么」（代码本身应自文档化）
-  - 坏：`# 设置超时时间为30秒`（代码已写 `timeout = 30`）
-  - 好：`# 30秒超时，因为上游API的SLA承诺P99为25秒`
-- **禁止残留 intermediate attempts**：不保留被注释掉的旧代码、TODO 但未完成的方案、调试输出
+- **注释只写 non-obvious reason**（为什么，而非做了什么）：`# 30秒超时，因为上游API的SLA承诺P99为25秒` ✅ / `# 设置超时时间为30秒` ❌
+- **禁止残留 intermediate attempts**：不留被注释掉的旧代码、未完成的 TODO、调试输出
 - 方法级 docstring 用中文说明用途/参数/返回（仅对 `_` 开头私有方法可省略，如果用途足够明显）
 - 代码分区用 `# ---- 分区名 ----` 分隔条
 
@@ -763,17 +770,72 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 
 ## 8. 提交与发布流程
 
-### 8.1 提交规范
+### 8.1 提交信息标准（Conventional Commits）
 
-- 提交信息遵循 **Conventional Commits**：`<type>(<scope>): <中文短句式 subject>`（如 `feat: 开放颜色配置项`、`fix: 失败发送通知补重试`、`docs: 补充配置说明`）
-- **禁止**将未完成的功能、多轮迭代的中间状态、被废弃的方案写进提交信息
+格式是 `<type>(<scope>): <subject>` + 可选正文 + 可选 footer。**格式只规定「长什么样」，本节规定「写什么」**——每个字段都有内容标准，不靠临场发挥。
+
+#### type：按「使用者得到什么」选，不按改了哪些文件
+
+| type | 用在哪（反例即「不要用在哪」） |
+|---|---|
+| `feat` | 用户可感知的能力、配置项、指令、视图（不是内部重构、补测试） |
+| `fix` | 用户可感知的错误行为（不是风格、笔误） |
+| `docs` | README / CHANGELOG / AGENTS / 注释等纯文档（不含行为改动） |
+| `refactor` | 不改外部行为的结构调整（顺手加了能力就用 `feat`） |
+| `perf` | 可测量的性能改善（不是「感觉更快」） |
+| `test` | 只增删改测试（不是为过测试改产品代码） |
+| `build` / `ci` | 依赖打包构建 / 流水线（不是运行时逻辑、本地脚本） |
+| `chore` | 版本号、脚手架、杂务（上表能装下的都不用它） |
+| `style` | 仅格式（有语义变化就不算） |
+| `revert` | 回滚既有提交，正文写被回滚的 hash（换新方案用 `refactor`/`feat`） |
+
+#### scope：一个词，取模块名
+
+- 小写单词，取受影响模块或目录名：`config`、`views`、`i18n`、`log`、`docs`、`deps`。
+- 全项目同性质、无明确模块的改动**省略 scope**，不要硬凑。
+- 禁止 `misc`、`update`、`all`、`various`、`fix` 这类无信息量的 scope，也不要把文件名当 scope（写 `views` 而不是 `app.js`）。
+
+#### subject：一句话说清做了什么
+
+- 中文动宾短句，开头用 `新增` / `修复` / `调整` / `移除` / `重命名` 等动词；不加句号、不加 `[标签]`、不写版本号与日期。
+- 只写**做了什么**；为什么这么改（确有取舍要交代时）放进可选正文，不塞进 subject。
+- 整行宽度 ≤ **72 字符**（ASCII 记 1、中文记 2），subject 本身 ≤ **28 个汉字**；超了先删修饰词，仍超就把细节移进正文。
+- 一条只讲**一件事**：出现「、」「并」「同时」「以及」连接两个互不依赖的改动，就拆成两个提交。
+- 禁用空话：`优化`、`完善`、`调整一下`、`更新代码`、`修复若干问题`、`杂项`、`提交`、`更新文档`。
+
+#### 正文与 footer：可选，只写 diff 看不出来的
+
+- **正文不是必填项**：没有值得交代的内容就不写正文，`subject` 一行就是完整提交信息，不要为凑格式硬写。
+- 需要写的情形：① 有取舍或副作用必须交代；② 用户需要动手迁移/重配；③ 破坏性变更。除此之外不必写。
+- 要写就空行后每行以 `- ` 开头，一句一条，**最多 5 条**，只讲与本次改动直接相关的事，不复述改了什么（diff 已经说明）。
+- **禁止写与本次改动无关的内容**：验证/自测过程、影响面盘点（影响谁、波及哪些模块）、版本号递增流水、后续计划与 TODO、过程叙述（「先试了 A 又改成 B」「调试半天」）、情绪。
+- footer 按需：`BREAKING CHANGE: <不兼容点与迁移方式>`、`Refs: #123`、`Co-authored-by: ...`。issue / PR 编号只进 footer，不进 subject。
+- 破坏性变更同时支持 `type!:` 写法；`!` 与 footer 二选一即可，不要两处都写。
+
+#### 粒度：一个提交一件事
+
+- 一个提交 = 一个能单独描述、单独回滚、单独 review 的完整变更；不提交半成品与多轮迭代的中间态。
+- 文档与对应代码**同一提交**（不单独拆「补文档」提交）。
+- **禁止**把未完成的功能、被废弃的方案写进提交信息；版本号不随提交（见 8.2）。
+- 推荐顺序：完成功能代码 → 跑通验证 → 更新 CHANGELOG 与 README → 提交。
+
+#### 正反例
+
+```
+✅ feat(config): 新增超时配置项
+❌ feat: 新增超时配置项并重构配置加载逻辑，顺便修了日志格式   # 多件事挤一条且超长
+❌ update: 一些优化                                          # 无 type + 空话
+```
+
+自查：`git log --oneline -10` 读一遍，不看你写的 diff 也能知道每个提交做了什么，且相邻提交没有重复描述同一件事。
+
+#### 提交前展示与授权
+
 - **提交前必须先向用户展示，等用户确认后再执行 commit**，展示内容缺一不可：
   - 待提交文件清单
   - 改动概要（如 `git diff --stat`）
   - **提交标题，尽量给 2–3 个候选**（同一改动的不同侧重点：做了什么 / 为什么改 / 是否带 scope），逐条注明侧重供用户挑选并标出推荐项；确实只有一种合理写法时才只给一个
   - 用户选定标题（或自拟）后才 commit；涉及推送时另附提交 hash、提交信息、目标分支与改动概要
-- 推荐顺序：完成功能代码 → 跑通验证 → 更新 CHANGELOG 与 README → 提交
-- 文档更新与代码改动**在同一提交中完成**（不单独拆「补文档」提交）
 - 只有用户明确要求时才 commit / push
 - **授权一次性，不延续**（「上一轮说过推送」≠ 本轮可以提交）：
   - 用户的确认**只对当次动作生效**；下一次改动必须重新展示改动内容与提交标题，重新确认
@@ -790,9 +852,8 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 
 ### 8.3 测试与验证
 
-- 改动纯逻辑后运行 `python3 tests_offline.py`（55 组断言，覆盖配置解析、事件模型、转发/回声抑制、自定义指令、绑定持久化、AI 触发方式与前缀互斥语义、端到端事件流、main 导入、AstrBot 导入路径校验、显示名称与格式默认值、conf 模板↔代码默认值一致性守卫、API 超时语义「未知 ≠ 失败，禁止重发」、图床与内置图片 HTTP、SLP ping 与监控采样、面板偏好与终端日志、本地翻译、回复游戏消息反解玩家名）
-- 语法自检：`python3 -m py_compile main.py core/*.py services/*.py handlers/*.py` 无语法错误（本项目是包结构，`import main` 相对导入不可用）
-- 格式检查：`python -m ruff format .`（如果项目历史有 ruff 提交）
+- 测试：`python3 tests_offline.py`（离线自检，覆盖配置解析、事件模型、转发与回声抑制、自定义指令、绑定、AI 触发与前缀互斥、事件流、导入路径、conf↔代码一致性、API 超时语义、图床、SLP/监控、面板偏好、本地翻译、AI 会话；不写死组数，避免数字随增删漂移）
+- 静态：`ruff check main.py core services handlers`（默认规则；未启用全仓 `ruff format`——仓库从没跑过，重排只会产生与业务无关的大 diff）；`python3 -m py_compile main.py core/*.py services/*.py handlers/*.py` 无语法错误（本包相对导入，不能 `import main`）
 - 命令有新增/删除时：同步更新 `README.md` 命令表与本文件 6.2 节
 
 ---
@@ -805,12 +866,15 @@ README 正文严格按以下 4 大板块组织，但不强制使用 `##` 标题�
 - [ ] 日志：`logger.info/warning/error` 带 `[{PLUGIN_NAME}][{server_name}]` 前缀，异常分类记录，无空 `except: pass`
 - [ ] 事件/API：名称走 `core/constants.py` 常量，未硬编码
 - [ ] 连接层改动：已考虑反向模式共享 Server 与 `echo` 关联时序
-- [ ] CHANGELOG：`[Unreleased]` 已追加分组式条目，**只写相对上一版的变化**、同一变化已合并为一条（无重复条目），条目面向用户（无内部实现细节、无复杂形容即可看懂），保留了他人的既有记录
-- [ ] README：涉及用户可见变更时已同步更新（中英双语、四大板块），且面向用户书写（无实现原理与内部细节）
+- [ ] CHANGELOG：`[Unreleased]` 已同步（新增则追加、同一变化则合并、发版前被撤销则删除对应条目，不残留相对上一版不成立的内容），**只写相对上一版（上一次发布）的变化**、同一变化已合并为一条（无重复条目），条目面向用户（无内部实现细节、无复杂形容即可看懂），保留了他人的既有记录
+- [ ] CHANGELOG 折叠：`[Unreleased]` 与最近 3 个版本段保持展开，第 4 个起**每个版本段各自一个** `<details><summary>版本号 (日期) — 一句话总结</summary>`（不是全塞进一个块），首个折叠版本段之前有 `---` 分隔 + 一行说明；带 `> ⚠️ 破坏性变更`（或含 `### 移除`）的版本**无论多老都不折叠、整段保持完整**（不拆成「破坏性条目展开 + 其余折叠」）；发版时顺手折，日常提交不动折叠结构，折叠不删条目、不改文字
+- [ ] README：涉及用户可见变更时已同步更新，且面向用户书写（无实现原理与内部细节）
+- [ ] README 配置板块：> 4 项时已按类别分组，单类 ≥ 4 项已用 `<details>` 折叠且 summary 自解释，首次必填的关键配置没被藏进折叠（配置表是备查资料，宁折叠勿铺长）
 - [ ] 版本号：日常任务不递增；仅发版任务改 `metadata.yaml` 的 `version`（与 CHANGELOG 新版本段、tag 一致），并把 `@register`、README 徽章等辅助位置同步到同一版本号
 - [ ] 配置：新增配置项已在 `_conf_schema.json` 与 `core/models_config.py` 同步，文档写成「中文名（`key`）」
 - [ ] 命令：新增/修改命令已同步 `README.md` 命令表与本文件 6.2 表
-- [ ] 提交信息：Conventional Commits 格式（`type: 中文短句式`），只描述最终行为
+- [ ] 提交信息：Conventional Commits 格式 + 8.1 内容标准——type 按「使用者得到什么」选（不是按改了哪些文件）、scope 是一个模块词或无、subject ≤ 28 汉字且只讲一件事、正文只在确有 diff 看不出来的内容时才写（无则留空）且不含无关内容、footer 按需已补、空话与过程描述已删
+- [ ] 提交粒度：一个提交只做一件事，文档与代码同提交，无半成品 / 中间态 / 被废弃方案
 - [ ] 提交前展示：已给出待提交文件清单、`git diff --stat`、2–3 个候选提交标题（逐条注明侧重并标出推荐项），并取得用户对本次改动的明确确认（一次性授权，未沿用上一轮）
 - [ ] 本地测试：`python3 tests_offline.py` 通过
 

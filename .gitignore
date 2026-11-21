@@ -13,3 +13,4 @@ venv/
 
 .runs/
 RUN_REPORT.md
+RUN_LOG.md
